@@ -25,32 +25,61 @@ I built this for **my** machine, and it's only been run there:
 - **Claude Code inside WSL2** (Ubuntu)
 - **WezTerm** as the terminal
 
-The panel and the Learn window are Windows PowerShell 5.1 + WPF windows. They find the chat's WezTerm window and sit over it, and they reach into WSL through `\\wsl.localhost`. On any other setup, parts of this work and parts don't. The next section says which, and how to close the gap.
+The panel and the Learn window are Windows PowerShell 5.1 + WPF windows. They find the chat's WezTerm window and sit over it, and they reach into WSL through `\\wsl.localhost`. On any other setup most of it doesn't show yet. The next sections say what works, and how your own Claude can build the rest in your fork.
 
 ## What works where
 
 | Your setup | Works today | Missing |
 |---|---|---|
 | **Windows + WSL2 + WezTerm** | Everything. | – |
-| **Windows + WSL2 + another terminal** (Windows Terminal, VS Code) | The phases tool and test tracking, written to a state file. The Learn window and the games, opened with one command (below). | The floating panel. It looks for WezTerm. |
+| **Windows + WSL2 + another terminal** (Windows Terminal, VS Code) | The Learn window and the games, opened with one command (below). | The floating panel, which looks for WezTerm. With no panel, phases and test runs show nowhere. |
 | **Windows, Claude Code in PowerShell** (no WSL) | The plugin loads and stays out of the way. | The panel, Learn and the games: they all go through WSL. |
-| **macOS** | The phases tool and test tracking (test tracking needs `bash` as your `$SHELL`). Learn's helper from the command line: it builds courses into `~/.claude/learn`. | Any window: no panel, no Learn reader, no games. |
-| **Linux / plain bash** | Same as macOS. | Same as macOS. |
+| **macOS** | Learn's helper from the command line: it builds courses into `~/.claude/learn`. | Everything you'd see: the panel, the Learn reader and the games. Test tracking also needs bash, and macOS defaults to zsh. |
+| **Linux / plain bash** | Same as macOS, and test tracking runs under bash, but nothing shows it yet. | Same as macOS. |
 
-The missing pieces are front ends; the core is shared. Claude writes everything the panel shows to one JSON file, and Learn runs behind a small JSON-lines helper. A new panel or a new Learn window for your setup only has to read that file or talk to that helper. [CLAUDE.md](CLAUDE.md) spells out both contracts and has a recipe for each platform. That's what your Claude reads when you ask it to port.
+The missing pieces are front ends; the core is shared:
+- Claude's phases and test runs live in the plugin, which can write them to one JSON file.
+- Learn runs behind a small JSON-lines helper in plain Node.
 
-## Let your Claude set it up (any setup)
+So a port only adds front ends. [docs/PORTING.md](docs/PORTING.md) is the step-by-step guide, written for your Claude to follow:
+- **the panel** becomes a pane inside Claude Code itself, so it works in any terminal;
+- **Learn and the games** become a small local web app in your browser, running on the same helper;
+- also covered: test tracking under zsh, and native Windows.
 
-Paste this into Claude Code:
+## Bring it to your setup (macOS, Linux, other terminals)
 
-> Read the GitHub repo **YousifAbuzuhaira/claude-panel**: its README.md and CLAUDE.md. Check my OS, terminal and shell. Install the plugin if it fits my setup, tell me which parts will work for me, and offer to build the missing parts for my setup following CLAUDE.md's porting recipes.
+Build the missing parts in **your own fork**, with your own Claude:
 
-How your Claude reads the repo:
+1. **Fork** `YousifAbuzuhaira/claude-panel` on GitHub.
+   - The repo is **private**. Ask me (Yousif) to add you as a collaborator first.
+   - A fork of a private repo stays private.
+2. **Clone your fork** and open Claude Code in it:
 
-- **With a GitHub MCP connected** (for example [github-mcp-server](https://github.com/github/github-mcp-server)), it reads the files directly.
-- **Without one**, it clones the repo with `gh repo clone YousifAbuzuhaira/claude-panel`, or `git clone`.
+   ```bash
+   gh repo clone <you>/claude-panel && cd claude-panel && claude
+   ```
+3. **Paste the prompt** for your setup:
 
-The repo is **private**. Ask me (Yousif) to add you as a collaborator, then sign in with `gh auth login`.
+   - **macOS:**
+     > Read CLAUDE.md and docs/PORTING.md. I'm on macOS with zsh. Build steps 1–6 one at a time, in order, checking each before the next. Keep the Windows + WSL + WezTerm path as it is.
+   - **Linux / bash:**
+     > Read CLAUDE.md and docs/PORTING.md. I'm on Linux with bash. Build steps 1 and 3–6 one at a time, in order, checking each before the next. Keep the Windows + WSL + WezTerm path as it is.
+   - **Windows + WSL with another terminal:** the Linux prompt, but only steps 1 and 3. You already have Learn and the games.
+   - **Windows, no WSL:** the Linux prompt with your setup named, steps 1 and 3–7.
+
+   Learn and the games are big (steps 5 and 6). Do them in separate sessions if you like: the guide is written so each step stands alone.
+4. **Install from your fork**, and update it whenever you push. Bump `version` in `progress/.claude-plugin/plugin.json` each time:
+
+   ```bash
+   claude plugin marketplace add <you>/claude-panel
+   claude plugin install progress@claude-panel
+   ```
+
+If something you build would help others, open a PR back to this repo.
+
+Only want to see what works first? Ask your Claude to *"read the repo YousifAbuzuhaira/claude-panel (README.md and CLAUDE.md), check my OS, terminal and shell, and tell me what works for me as it stands"*.
+- With a GitHub MCP connected (for example [github-mcp-server](https://github.com/github/github-mcp-server)), it reads the files directly.
+- Otherwise it clones the repo with `gh repo clone` after `gh auth login`.
 
 ## Install (Windows + WSL2 + WezTerm)
 
@@ -71,31 +100,36 @@ Then in a Claude Code session: `/reload-plugins`, then `/phases`. The panel open
   - **Claude Code logged in** (`claude` on your PATH);
   - optionally `python3`, which lets Learn use the small yt-dlp build.
 
-**Update:** `claude plugin marketplace update claude-panel`, then `/reload-plugins`.
+**Update:** `claude plugin marketplace update claude-panel && claude plugin update progress@claude-panel`, then restart Claude Code.
+
+The plugin's files end up in `~/.claude/plugins/cache/claude-panel/progress/<version>/`. The commands below call that folder `$P`:
+
+```bash
+P=$(ls -d ~/.claude/plugins/cache/claude-panel/progress/*/ | tail -1)
+```
 
 ### Windows + WSL2 with another terminal
 
-Install the same way. The panel won't appear, because it looks for WezTerm, but you can open Learn and the games yourself. First, find where the plugin lives:
+Install the same way. The panel won't appear, because it looks for WezTerm, but you can open Learn and the games yourself:
 
 ```bash
-claude plugin list            # note the "Read from:" path of progress@claude-panel
-P=<that path>
+P=$(ls -d ~/.claude/plugins/cache/claude-panel/progress/*/ | tail -1)
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$P/widget/Learn.ps1")"
 ```
 
 Swap `Learn.ps1` for `ChessPuzzles.ps1`, `Sudoku.ps1`, `Game2048.ps1` or `TypeTest.ps1` for a game.
 
-### macOS / Linux
+### macOS / Linux, as it stands
 
-Install with the two commands above. Claude gets the phases tool, and the state file at `/tmp/claude-progress/<session>/phases.json` fills as it works. Learn's helper runs on its own:
+Installed as above, from this repo, the plugin loads and gives Claude its phases tool. Nothing shows yet: the panel is the WezTerm-on-WSL window. Learn's helper already runs on its own (it needs Node 22+ and `claude` on your PATH):
 
 ```bash
-P=<the "Read from:" path from claude plugin list>
+P=$(ls -d ~/.claude/plugins/cache/claude-panel/progress/*/ | tail -1)
 bash "$P/learn/learn.sh" build start --topic "Kubernetes deployments" --category DevOps --mode auto
 bash "$P/learn/learn.sh" build list
 ```
 
-Courses land in `~/.claude/learn/courses/<id>/pages/*.json`, with the lesson in each page's `markdown` field. A reader window is the thing to build: see CLAUDE.md.
+Courses land in `~/.claude/learn/courses/<id>/pages/*.json`, with the lesson in each page's `markdown` field. To get everything else, follow [Bring it to your setup](#bring-it-to-your-setup-macos-linux-other-terminals). Your Claude builds the pane, the web Learn and the games in your fork, from [docs/PORTING.md](docs/PORTING.md).
 
 ## Using it
 
@@ -107,11 +141,11 @@ Courses land in `~/.claude/learn/courses/<id>/pages/*.json`, with the lesson in 
   - **Course:** contents, the lesson, and a chat that knows the page. ▶ times jump to that moment in the video, and *(added)* marks what Claude added beyond the sources. Answer the check questions in the chat. Nothing becomes *Learned* unless you mark it.
   - **Editing a course:** rename, reorder, rewrite (with a note) or remove a page; *+ Add a page* on any topic.
   - **Before a new course:** it shows what you've already learned, what you've only read, and what's new, and offers to skip pages.
-  - **Learned:** every concept, by category. Add, rename, edit, nest, merge or remove concepts; *Tidy concepts* finds duplicates.
+  - **Learned:** every concept, by category. Add, rename, edit, nest, merge, or remove (✕) concepts; *Tidy concepts* finds duplicates. Removing a course takes the concepts only it taught with it.
   - **Ask:** "what should I learn next?" Add your work folders in Settings and it suggests topics from the stack you really use, each with a *Build this* button.
   - **Settings:** the library folder, which Claude model builds courses and which one chats, and text size.
   - **Cost:** Learn runs on **your own Claude subscription** through `claude -p`, so it counts toward the same limits as your work. Settings shows the latest reading.
-- **Games.** ▦ in the panel's header. Each game is its own window and saves after every move.
+- **Games.** ▦ in the panel's header. Each game is its own window. Sudoku, 2048 and Chess save the game in progress after every move; Typing keeps your theme and best score.
 
 Where things are kept:
 

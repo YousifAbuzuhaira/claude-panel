@@ -149,6 +149,16 @@ function New-CategoryHeader([string]$Id, [string]$Text, [scriptblock]$Reload, $C
   return @{ head = $head; label = $label }
 }
 
+# A remove needs a second click: the first turns the link into a red "remove?" right where it is.
+function Test-ArmedHere($Sender, [string]$Key, [string]$Prompt = 'remove?') {
+  if (Test-Armed $Key) { return $true }
+  if ($Sender -is [System.Windows.Controls.TextBlock]) {
+    $Sender.Text = $Prompt
+    $Sender.Foreground = $red
+  }
+  return $false
+}
+
 function Get-CategoryName([string]$Id) {
   $categories = if ($script:library) { $script:library.categories } elseif ($script:concepts) { $script:concepts.categories } else { @() }
   foreach ($category in $categories) { if ([string]$category.id -eq $Id) { return [string]$category.name } }
@@ -559,11 +569,13 @@ function New-CourseRow($Course) {
         'rename' { $script:renamingCourse = $Data.id; Show-Courses }
         'summary' { $script:editingSummary = $Data.id; Show-Courses }
         'remove' {
-          if (Test-Armed "course:$($Data.id)") {
+          if (Test-ArmedHere $Sender "course:$($Data.id)" 'remove? click again') {
             Invoke-Helper 'course.remove' @{ id = $Data.id } {
               param($Result, $Context)
-              if ($script:courseId -eq $Context) { $script:courseId = $null }
-              Show-Toast 'Course removed. Its concepts stay in your Learned list.'
+              if ($script:courseId -eq $Context) { $script:courseId = $null; $script:courseData = $null; $script:pageData = $null }
+              $count = [int]$Result.removedConcepts
+              Show-Toast $(if ($count -eq 1) { 'Course removed, with the 1 concept only it taught.' } else { "Course removed, with the $count concepts only it taught." })
+              $script:concepts = $null
               Update-Library
             } $Data.id
           }
@@ -1802,7 +1814,7 @@ function New-ConceptRow($Concept, [int]$Depth) {
   $keys = if ($script:mergeFrom -and $script:mergeFrom -ne $id) { @('into') }
     elseif ($script:nestFrom -and $script:nestFrom -ne $id) { @('under') }
     elseif ($script:nestFrom -eq $id) { @('top level', 'cancel') }
-    else { @('rename', 'edit', 'nest', 'move', 'merge', 'remove') }
+    else { @('rename', 'edit', 'nest', 'move', 'merge') }
   $isTarget = $keys[0] -eq 'into' -or $keys[0] -eq 'under' -or $keys[0] -eq 'top level'
   # The actions show while the pointer is on the row (always, while picking a merge or nest target).
   $tools = New-Object System.Windows.Controls.StackPanel
@@ -1812,10 +1824,17 @@ function New-ConceptRow($Concept, [int]$Depth) {
     $press = New-Pressable $key $null $(if ($isTarget -and $key -ne 'cancel') { $accent } else { $faint })
     $press.FontSize = 11
     $press.Padding = New-Gap 3 0 3 0
-    Set-Click $press { param($Data, $Sender) Invoke-ConceptAction $Data.key $Data.id } @{ key = $key; id = $id }
+    Set-Click $press { param($Data, $Sender) Invoke-ConceptAction $Data.key $Data.id $Sender } @{ key = $key; id = $id }
     [void]$tools.Children.Add($press)
   }
   [void]$actions.Children.Add($tools)
+  if (-not $isTarget) {
+    # Always there, so removing never depends on finding the hover actions.
+    $removeMark = New-SmallAction $GLYPH_CLOSE { param($Data, $Sender) Invoke-ConceptAction 'remove' $Data $Sender } $id
+    $removeMark.ToolTip = 'Remove this concept'
+    $removeMark.Margin = New-Gap 6 0 0 0
+    [void]$actions.Children.Add($removeMark)
+  }
   if (-not $isTarget) {
     $row.Tag = $tools
     $row.Add_MouseEnter({ param($sender, $e) $sender.Tag.Visibility = 'Visible' })
@@ -1869,7 +1888,7 @@ function New-ConceptRow($Concept, [int]$Depth) {
   return $row
 }
 
-function Invoke-ConceptAction([string]$Key, [string]$Id) {
+function Invoke-ConceptAction([string]$Key, [string]$Id, $Sender = $null) {
   switch ($Key) {
     'rename' { $script:renamingConcept = $Id; $script:movingConcept = $null; $script:editingDefinition = $null; Show-Learned }
     'edit' { $script:editingDefinition = $Id; $script:renamingConcept = $null; $script:movingConcept = $null; Show-Learned }
@@ -1889,8 +1908,8 @@ function Invoke-ConceptAction([string]$Key, [string]$Id) {
       Invoke-Helper 'concept.merge' @{ keep = $Id; drop = $drop } { param($Result, $Context) Show-Toast "Merged into $($Result.name)"; Update-Learned }
     }
     'remove' {
-      if (Test-Armed "concept:$Id") {
-        Invoke-Helper 'concept.remove' @{ id = $Id } { param($Result, $Context) Update-Learned }
+      if (Test-ArmedHere $Sender "concept:$Id") {
+        Invoke-Helper 'concept.remove' @{ id = $Id } { param($Result, $Context) Show-Toast "Removed: $Context"; Update-Learned } (Get-LearnedName $Id)
       }
     }
   }

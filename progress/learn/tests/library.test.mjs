@@ -13,7 +13,8 @@ process.env.LEARN_CONFIG_DIR = join(root, 'config');
 after(() => rmSync(root, { recursive: true, force: true }));
 
 const { createJob, createPageJob, readJob, runJob, tidyCandidates, cleanOutline } = await import('../build.mjs');
-const { movePage, openLibrary, readCatalogue, readCourse, readPage, readStatus, removePage, renamePage } = await import('../library.mjs');
+const { listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCourse, readPage, readStatus, removeCourse, removePage, renamePage, updateCatalogue } = await import('../library.mjs');
+const { addConcept, ensureCategory } = await import('../catalogue.mjs');
 const { createServer } = await import('../serve.mjs');
 const { withLock, writeJson, readJson } = await import('../store.mjs');
 
@@ -182,6 +183,31 @@ describe('editing a course', () => {
     assert.ok(io.calls.prompts.at(-1).includes('Write page 2 of 4'));
     assert.ok(readCatalogue(lib).concepts.some(concept => concept.name === 'Compose profiles'));
     assert.match(readJob(lib, add.id).message, /^Added: Profiles/);
+  });
+});
+
+describe('removing a course', () => {
+  test('takes the concepts only it taught; keeps ones another course teaches and ones added by hand', async () => {
+    const lib = openLibrary();
+    // Courses from the tests above teach the same fake concepts: start from none.
+    for (const course of listCourses(lib)) removeCourse(lib, course.id);
+    const first = createJob(lib, { topic: 'First', category: 'DevOps', mode: 'auto' });
+    await runJob(lib, first.id, fakeIo().io);
+    const second = createJob(lib, { topic: 'Second', category: 'DevOps', mode: 'auto' });
+    await runJob(lib, second.id, fakeIo().io);
+    const firstId = readJob(lib, first.id).courseId;
+    const secondId = readJob(lib, second.id).courseId;
+    // The fake outline gives both courses the same concepts: all are shared.
+    const shared = readCourse(lib, firstId).pages.flatMap(page => page.concepts);
+    updateCatalogue(lib, catalogue => addConcept(catalogue, { name: 'Git rebase', category: ensureCategory(catalogue, 'DevOps').id, by: 'user' }));
+    assert.equal(removeCourse(lib, firstId), 0, 'every concept is still taught by the second course');
+    assert.ok(shared.every(id => readCatalogue(lib).concepts.some(concept => concept.id === id)));
+    const removed = removeCourse(lib, secondId);
+    assert.ok(removed >= 3);
+    const left = readCatalogue(lib).concepts;
+    assert.ok(left.some(concept => concept.name === 'Git rebase'), 'added by hand: stays');
+    assert.ok(shared.every(id => !left.some(concept => concept.id === id)));
+    assert.equal(pruneConcepts(lib), 0, 'nothing left over');
   });
 });
 

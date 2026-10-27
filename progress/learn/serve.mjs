@@ -13,7 +13,7 @@ import { chatKey, clearChat, readChat, sendChat } from './chat.mjs';
 import { cancelJob, createJob, createPageJob, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon } from './build.mjs';
 import { ensureYtDlp, installedYtDlp } from './deps.mjs';
 import {
-  courseSummary, listCourses, movePage, openLibrary, readCatalogue, readCourse, readPage, readStatus, recordUsage,
+  courseSummary, listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCourse, readPage, readStatus, recordUsage,
   removeCourse, removePage, renamePage, rewriteConceptIds, updateCatalogue, updateCourse, writeStatus,
 } from './library.mjs';
 import { markdownToBlocks } from './markdown.mjs';
@@ -98,10 +98,12 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       return courseSummary(course, readCatalogue(lib));
     }),
     'course.remove': ({ id }) => {
-      removeCourse(lib, id);
+      const removedConcepts = removeCourse(lib, id);
       if (readStatus().course?.id === id) writeStatus({ course: null });
-      return true;
+      return { removedConcepts };
     },
+    // Concepts left behind by courses removed before removing took them along.
+    'concept.prune': () => ({ removedConcepts: pruneConcepts(lib) }),
 
     'page.get': ({ courseId, n }) => {
       const course = readCourse(lib, courseId);

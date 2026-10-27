@@ -37,7 +37,7 @@ Learn window ─ JSON lines ─ learn/learn.sh serve   ← contract 2
       <library>/ (default ~/.claude/learn)  +  ~/.config/claude-learn/{settings,status}.json
 ```
 
-`register.tsx` starts the panel only when `TERM_PROGRAM=WezTerm` and `WSL_DISTRO_NAME` are set (`panelDistro`). Elsewhere it shows one toast and keeps writing the state file.
+`register.tsx` starts the panel only when `TERM_PROGRAM=WezTerm` and `WSL_DISTRO_NAME` are set (`panelDistro`). Elsewhere it shows one toast and returns **before** writing the state file, so today `phases.json` exists only on WezTerm-on-WSL. Step 1 of [docs/PORTING.md](docs/PORTING.md) moves the write ahead of that check.
 
 ## Contract 1: the panel state file
 
@@ -81,9 +81,9 @@ Start it with `bash learn/learn.sh serve`, which finds Node 22 and `claude` even
 | settings | `settings.get`, `settings.set {change}` (`library`, `models.build`, `models.chat`, `workFolders`) |
 | library | `library.get` → `{categories, courses, jobs, status}` |
 | categories | `category.add {name}`, `category.rename {id, name}`, `category.remove {id, moveTo}` |
-| courses | `course.get {id}`, `course.update {id, title?, summary?}`, `course.setCategory {id, category}`, `course.remove {id}` |
+| courses | `course.get {id}`, `course.update {id, title?, summary?}`, `course.setCategory {id, category}`, `course.remove {id}` (also removes the concepts only that course taught; not ones added by hand) |
 | pages | `page.get {courseId, n}` (also marks its concepts Seen), `page.rename {courseId, n, title}`, `page.move {courseId, n, delta}`, `page.remove {courseId, n}`, `page.skip {courseId, n, skip}`, `page.rewrite {courseId, n, note}`, `page.add {courseId, topic, after}`, `progress.set {courseId, n, scroll}` |
-| concepts | `concept.list`, `concept.learn {id, learned, courseId?, n?}`, `concept.add {text, category}`, `concept.update {id, name?, definition?, parent?}`, `concept.move {id, category}`, `concept.merge {keep, drop}`, `concept.remove {id}`, `concept.tidy` |
+| concepts | `concept.list`, `concept.learn {id, learned, courseId?, n?}`, `concept.add {text, category}`, `concept.update {id, name?, definition?, parent?}`, `concept.move {id, category}`, `concept.merge {keep, drop}`, `concept.remove {id}`, `concept.tidy`, `concept.prune` (concepts no course teaches) |
 | overlap | `overlap.get {courseId}`, `overlap.apply {courseId, skip}` |
 | chats | `chat.get {courseId, n \| advisor:true}`, `chat.send {…, text}` (answers `{key}`, then streams events), `chat.stop {key}`, `chat.clear {…}` |
 | builds | `build.start {topic \| link, category, mode: pick\|auto}`, `build.pick {jobId, picks}`, `build.resume {jobId}`, `build.cancel {jobId}`, `build.dismiss {jobId}`, `jobs.list` |
@@ -95,7 +95,7 @@ Start it with `bash learn/learn.sh serve`, which finds Node 22 and `claude` even
 - **Learned** is set only by the person's own action: a tick, or the *Mark learned* button. Never mark anything learned automatically.
 - A chat reply's `offers` (concept ids) become a *Mark learned* button, and its `builds` (`{topic, category}`) become *Build this* buttons.
 
-The helper also works as a CLI (`learn.sh build start|list|run|pick|resume|cancel`, `settings`, `deps`, `library`, `status`, `transcript <url>`, `ping`), which is enough for macOS and Linux today.
+The helper also works as a CLI (`learn.sh build start|list|run|pick|resume|cancel`, `settings`, `deps`, `library`, `status`, `transcript <url>`, `ping`). On macOS and Linux that's all of Learn that runs today.
 
 **Every Claude call Learn makes** runs:
 
@@ -108,25 +108,17 @@ claude -p --safe-mode --restricted --strict-mcp-config --permission-mode dontAsk
 - `--bare` can't be used: it only accepts `ANTHROPIC_API_KEY`, not a subscription login.
 - `CLAUDE_PROGRESS_OFF=1` makes this plugin step aside inside those runs.
 
-## Porting recipes
+## Porting to another setup
 
-Keep the contracts. Replace only the front end, and the line in `register.tsx` that starts it.
+**[docs/PORTING.md](docs/PORTING.md) is the guide: follow it step by step.** In short:
 
-**macOS**
-
-- **Panel:** a small always-on-top window that polls the state file every ~500 ms. A SwiftUI app, a menu-bar app (SwiftBar/xbar reading the JSON), or a Python/Tk window all work. Start it from `register.tsx`, where `widgetArgv` builds the PowerShell argv (gate on `process.platform`/env instead of `panelDistro`). Print `{"event":"ready"}` and `{"event":"closed"}` on stdout.
-- **Learn:** a window (or a local web page served by a tiny Node script) that spawns `bash learn/learn.sh serve` and speaks contract 2. Start with Library, then a reader for page `blocks` (`learn/markdown.mjs` documents the block shapes), then the chat.
-- **Test tracking:** it wraps commands only when `$SHELL` is bash (`tool.call` in `register.tsx`). Adding zsh means extending `wrap.ts`.
-
-**Linux / plain bash.** The same as macOS. A tmux pane (`tmux split-window`) running a small TUI over the state file is the simplest panel.
-
-**Windows, Claude Code in PowerShell (no WSL)**
-
-- The hooks run under Windows: the state file path and the `powershell.exe` argv need Windows forms, so look at `STATE_ROOT`, `windowsPath` and `widgetArgv` in `hooks/widget.ts`.
-- `Learn.ps1` starts the helper with `wsl.exe -d <distro> -e bash …/learn.sh serve` (`Start-Helper`). Make it start `node <path>\learn\learn.mjs serve` instead. The helper is plain Node and runs on Windows apart from `learn.sh`, which is a bash wrapper.
-- Both windows find their owner by walking up to WezTerm. Without an owner they open centred and show in the taskbar, which works fine.
-
-**Windows + WSL with another terminal.** Today Learn and the games open by command (README). For the panel, let `panelDistro` accept other terminals and let `PhasesWidget.ps1` run unowned and topmost when no WezTerm window is found.
+- **Keep the contracts.** Add front ends beside the PowerShell ones, gated so WezTerm-on-WSL keeps its windows.
+- **Panel:** a Claude Code pane drawn by `register.tsx` itself (`$.ui.open` plus a `ui.render` hook on `Pane`), in any terminal on any OS. Load Claude Code's built-in `plugin-authoring` skill first.
+- **Learn and the games:** a dependency-free local web app. A Node `http` server bridges HTTP + Server-Sent Events to `learn.sh serve` and serves plain HTML/JS.
+  - It listens on 127.0.0.1 only, needs a per-launch token on every request, and refuses foreign Origins.
+  - A pane can't do this job: the plugin writes a child's stdin only once, and `$.http.fetch` doesn't stream.
+- **Test tracking under zsh:** `wrap.ts` reads `${PIPESTATUS[0]}`, which is bash-only.
+- **Native Windows:** POSIX paths and `rm` in the hooks; `/`-only paths and `:`-split PATH in `learn/settings.mjs`.
 
 ## Rules that bite
 
@@ -144,6 +136,11 @@ Keep the contracts. Replace only the front end, and the line in `register.tsx` t
 - **C# in the widgets** is compiled by the legacy C# 5 compiler: no `$"…"`, no `?.`, no `out var`. No PowerShell may run on a background thread, so C# threads fill fields that a `DispatcherTimer` drains.
 - **WPF FlowDocument:** clickable things inside a document must be real `Button`s. The text selection takes the mouse on press, so a `Border` with `MouseLeftButtonUp` never fires.
 - **From WSL,** `powershell.exe` sometimes fails with `UtilAcceptVsock accept4 failed 110`. Retry it.
+
+## Shipping a change
+
+- Installs from GitHub are cached per version in `~/.claude/plugins/cache/claude-panel/progress/<version>/`. **Bump `version` in `progress/.claude-plugin/plugin.json` with every change you push**, so `claude plugin update progress@claude-panel` picks it up.
+- The author works in `~/.claude/mods` (this repo), which is installed from that folder, so edits show after `/reload-plugins` there.
 
 ## Checks before you share a change
 

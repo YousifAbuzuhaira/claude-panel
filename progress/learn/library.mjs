@@ -3,7 +3,7 @@
 import { readdirSync, rmSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname } from 'node:path';
-import { emptyCatalogue, stateOf } from './catalogue.mjs';
+import { emptyCatalogue, removeConcept, stateOf } from './catalogue.mjs';
 import { CONFIG_DIR, STATUS_FILE, readSettings } from './settings.mjs';
 import { libraryPaths, readJson, withLock, writeJson } from './store.mjs';
 
@@ -81,8 +81,29 @@ export function courseSummary(course, catalogue) {
   };
 }
 
+/**
+ * Removes a course and the concepts only it taught. A concept another course still
+ * teaches stays, and so does one the person added by hand. Returns how many went.
+ */
 export function removeCourse(lib, id) {
-  withLock(lib.root, () => rmSync(dirname(lib.paths.course(id)), { recursive: true, force: true }));
+  return withLock(lib.root, () => {
+    const course = readCourse(lib, id);
+    const taught = new Set((course?.pages || []).flatMap(page => page.concepts || []));
+    rmSync(dirname(lib.paths.course(id)), { recursive: true, force: true });
+    return pruneConcepts(lib, taught);
+  });
+}
+
+/** Concepts no course teaches any more (of `among`, when given), except ones added by hand. */
+export function pruneConcepts(lib, among = null) {
+  return withLock(lib.root, () => {
+    const used = new Set(listCourses(lib).flatMap(course => course.pages.flatMap(page => page.concepts || [])));
+    return updateCatalogue(lib, catalogue => {
+      const gone = catalogue.concepts.filter(concept => !used.has(concept.id) && concept.by !== 'user' && (!among || among.has(concept.id)));
+      for (const concept of gone) removeConcept(catalogue, concept.id);
+      return gone.length;
+    });
+  });
 }
 
 // --- Pages ------------------------------------------------------------------------------
