@@ -1,0 +1,10 @@
+{
+  "name": "progress",
+  "version": "0.1.0",
+  "description": "A floating progress panel over the chat window (Phases, Tests and Learn tabs, plus a few games). Learn builds courses from free videos and docs with your own Claude. The panel needs Windows with WSL2 and WezTerm.",
+  "author": {
+    "name": "Yousif Abuzuhaira"
+  },
+  "repository": "https://github.com/YousifAbuzuhaira/claude-panel",
+  "types": "./types/index.d.ts"
+}

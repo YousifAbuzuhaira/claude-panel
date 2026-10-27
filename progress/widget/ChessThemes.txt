@@ -1,0 +1,77 @@
+# Puzzle theme glossary for ChessPuzzles.ps1, in our own words.
+# key|group|title|line
+# Keys are the Lichess puzzle theme tags. Groups: tactics, mates, phases, length, special, meta.
+# meta tags only say how much the line wins; the picker hides them.
+fork|tactics|Fork|One piece attacks two or more enemy pieces at once, and only one of them can be saved.
+pin|tactics|Pin|A piece can't move, or shouldn't, because a more valuable piece (often the king) stands behind it on the same line.
+skewer|tactics|Skewer|A valuable piece is attacked along a line; when it steps aside, the piece behind it falls.
+discoveredAttack|tactics|Discovered attack|One piece moves out of the way and uncovers an attack by the piece behind it.
+discoveredCheck|tactics|Discovered check|Moving one piece uncovers a check from another, so the moved piece is free to do damage elsewhere.
+doubleCheck|tactics|Double check|Two pieces give check at once; blocking or capturing can't stop both, so the king must move.
+hangingPiece|tactics|Hanging piece|An enemy piece is left undefended, or defended too few times, and can simply be taken.
+trappedPiece|tactics|Trapped piece|A piece has no safe square left to run to and will be won.
+deflection|tactics|Deflection|Force a defender away from its job, such as guarding a square or another piece, then exploit what it left behind.
+attraction|tactics|Attraction|Lure an enemy piece, often the king, onto a square where a follow-up tactic hits it.
+capturingDefender|tactics|Capture the defender|Take the piece that guards something, so the thing it guarded can be won next.
+clearance|tactics|Clearance|Move a piece off a square, file or diagonal, usually with a threat, to open it for another piece.
+interference|tactics|Interference|Put a piece between two enemy pieces so that one of them stops defending the other.
+intermezzo|tactics|Intermezzo|Before making the expected move, slip in a forcing move the opponent must answer first.
+xRayAttack|tactics|X-ray|A piece attacks or defends a square through an enemy piece standing in its line.
+sacrifice|tactics|Sacrifice|Give up material on purpose to get something bigger back.
+quietMove|tactics|Quiet move|No check and no capture, yet the move sets up a threat the opponent can't meet.
+zugzwang|tactics|Zugzwang|The opponent would like to pass; every move they have makes their position worse.
+defensiveMove|tactics|Defensive move|Find the one precise move that holds the position and avoids losing material.
+advancedPawn|tactics|Advanced pawn|A pawn deep in enemy territory is close to promoting and ties the opponent down.
+promotion|tactics|Promotion|A pawn reaches the last rank and becomes a new piece, usually a queen.
+underPromotion|tactics|Underpromotion|Promote to a knight, rook or bishop because a queen would fail, for example by giving stalemate.
+enPassant|tactics|En passant|A pawn that just moved two squares is captured as if it had moved only one.
+castling|tactics|Castling|Castling is the key move: the king goes to safety and the rook joins the fight in one move.
+collinearMove|tactics|Collinear move|Two pieces face each other on a line, and one slides along that line without capturing.
+exposedKing|tactics|Exposed king|The enemy king has few defenders around it, so attacks against it hit hard.
+kingsideAttack|tactics|Kingside attack|An attack aimed at a king that castled on the kingside.
+queensideAttack|tactics|Queenside attack|An attack aimed at a king that castled on the queenside.
+attackingF2F7|tactics|Attack on f2/f7|An attack on the pawn next to the king that only the king defends at the start.
+mate|mates|Any mate|Find the checkmate.
+mateIn1|mates|Mate in 1|Checkmate in a single move.
+mateIn2|mates|Mate in 2|Checkmate in two of your moves, whatever the opponent does.
+mateIn3|mates|Mate in 3|Checkmate in three of your moves, whatever the opponent does.
+mateIn4|mates|Mate in 4|Checkmate in four of your moves, whatever the opponent does.
+mateIn5|mates|Mate in 5+|A long forced mate of five or more moves.
+backRankMate|mates|Back-rank mate|A rook or queen mates on the back rank, where the king is boxed in by its own pawns.
+smotheredMate|mates|Smothered mate|A knight mates a king that is completely surrounded by its own pieces.
+anastasiaMate|mates|Anastasia's mate|A knight and a rook or queen trap the king on the edge of the board, with one of its own pieces in the way.
+arabianMate|mates|Arabian mate|A knight and a rook mate the king in a corner; the knight guards the rook and covers an escape square.
+bodenMate|mates|Boden's mate|Two bishops on crossing diagonals mate a king hemmed in by its own pieces.
+doubleBishopMate|mates|Double bishop mate|Two bishops on neighbouring diagonals mate a king hemmed in by its own pieces.
+dovetailMate|mates|Dovetail mate|The queen mates a king next to it, whose last two escape squares are blocked by its own pieces.
+epauletteMate|mates|Epaulette mate|The king is mated with its own pieces sitting on both sides of it, like shoulder pads.
+hookMate|mates|Hook mate|A rook, knight and pawn work together: the pawn guards the knight, the knight guards the rook, the rook mates.
+killBoxMate|mates|Kill box mate|A rook next to the king, backed by a queen that also covers the escape squares, traps it in a 3 by 3 box.
+cornerMate|mates|Corner mate|A rook or queen pins the king in the corner and a knight delivers the mate.
+morphysMate|mates|Morphy's mate|A bishop gives the mate to a cornered king while a rook cuts off its escape.
+pillsburysMate|mates|Pillsbury's mate|A rook gives the mate to a cornered king while a bishop covers its escape along the long diagonal.
+operaMate|mates|Opera mate|A rook mates on the back rank, protected by a bishop from a distance.
+balestraMate|mates|Balestra mate|A bishop gives the mate from a distance while the queen covers every escape square.
+blindSwineMate|mates|Blind swine mate|Two rooks team up, usually on the seventh rank, and mate the king inside a 2 by 2 area.
+swallowstailMate|mates|Swallow's tail mate|The queen mates head on, and the king's two diagonal retreats are blocked by its own pieces in a V shape.
+triangleMate|mates|Triangle mate|Queen and rook, one square apart on the same line next to the king, form a triangle that mates it.
+vukovicMate|mates|Vukovic mate|A rook mates with the help of a supporting piece while a knight blocks the escape squares.
+opening|phases|Opening|A tactic in the first phase of the game.
+middlegame|phases|Middlegame|A tactic in the middle of the game, with most pieces still on the board.
+endgame|phases|Endgame|A tactic in the final phase, with few pieces left.
+pawnEndgame|phases|Pawn endgame|Only kings and pawns are left.
+rookEndgame|phases|Rook endgame|Only kings, rooks and pawns are left.
+bishopEndgame|phases|Bishop endgame|Only kings, bishops and pawns are left.
+knightEndgame|phases|Knight endgame|Only kings, knights and pawns are left.
+queenEndgame|phases|Queen endgame|Only kings, queens and pawns are left.
+queenRookEndgame|phases|Queen and rook endgame|Only kings, queens, rooks and pawns are left.
+oneMove|length|One move|The whole puzzle is a single move.
+short|length|Short|Two moves to win.
+long|length|Long|Three moves to win.
+veryLong|length|Very long|Four moves or more to win.
+master|special|Master games|Taken from games played by titled players.
+masterVsMaster|special|Master vs master|Taken from games between two titled players.
+superGM|special|Super GM games|Taken from games played by the world's very best.
+advantage|meta|Advantage|The line wins a clear advantage, about two to six pawns' worth.
+crushing|meta|Crushing|The line wins a crushing advantage, more than six pawns' worth.
+equality|meta|Equality|From a worse position, the line holds the balance or a draw.

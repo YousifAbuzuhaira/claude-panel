@@ -1,0 +1,11 @@
+{
+  "name": "claude-panel",
+  "owner": { "name": "Yousif Abuzuhaira" },
+  "plugins": [
+    {
+      "name": "progress",
+      "source": "./progress",
+      "description": "A floating panel over the chat (Phases, Tests and Learn tabs, plus games). Built for Windows + WSL2 + WezTerm; see the README for other setups."
+    }
+  ]
+}
