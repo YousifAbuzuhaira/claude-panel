@@ -379,15 +379,55 @@ $faint = $T.faint
 $green = $T.green
 $red = $T.red
 $accent = $T.accent
-# The board's own lines and fills: tints of the scheme, so they follow it.
-$thinLine = $T.rule
-$boxLine = New-ThemeTint 'ink' 0.45
+# The board's own fills: tints of the scheme, so they follow it, and see-through with the card.
 $selectedFill = New-ThemeTint 'accent' 0.30
 $noteSelectFill = New-ThemeTint 'blue' 0.36
 $peerFill = New-ThemeTint 'ink' 0.07
 $sameFill = $T.selected
-$lostLife = $T.rule
 $noFill = [System.Windows.Media.Brushes]::Transparent
+
+# The board's lines and the lost heart are solid: the text colour mixed toward the background,
+# and nearer the text as the background clears (Theme.ps1 moves secondary text the same way),
+# so the grid stays as plain as the digits over whatever shows through. Update-GameLook paints them.
+$thinLine = New-Object System.Windows.Media.SolidColorBrush
+$boxLine = New-Object System.Windows.Media.SolidColorBrush
+$lostLife = New-Object System.Windows.Media.SolidColorBrush
+$GAME_LINES = @(
+  @{ brush = $thinLine; share = 0.85 },
+  @{ brush = $boxLine; share = 0.55 },
+  @{ brush = $lostLife; share = 0.80 }
+)
+# The header and footer bars: clear at the usual see-through, but with the card under them never
+# clearer than this, so the title, the marks and the hints stay legible over any backdrop.
+$BAR_MIN_OPACITY = 0.8
+$barFill = New-Object System.Windows.Media.SolidColorBrush
+
+# How far a line sits from the text toward the background, for a card this opaque.
+function Get-LineShare([double]$Share, [double]$CardAlpha) {
+  $clear = [Math]::Max(0.35, [Math]::Min(1.0, ($CardAlpha - 0.15) / 0.65))
+  return $Share * $clear
+}
+
+# A bar's own alpha, so the bar over the card adds up to $BAR_MIN_OPACITY (none above it).
+function Get-BarAlpha([double]$CardAlpha) {
+  if ($CardAlpha -ge $BAR_MIN_OPACITY) { return 0.0 }
+  return 1.0 - (1.0 - $BAR_MIN_OPACITY) / (1.0 - $CardAlpha)
+}
+
+# Repaints the lines and the bars from the scheme in use; again after every scheme change.
+function Update-GameLook {
+  $fillColor = ConvertTo-ThemeMediaColor $script:THEME.palette.cardFill
+  $inkColor = ConvertTo-ThemeMediaColor $script:THEME.palette.ink
+  $cardAlpha = [double]$fillColor.A / 255.0
+  $bgRgb = @([int]$fillColor.R, [int]$fillColor.G, [int]$fillColor.B)
+  $inkRgb = @([int]$inkColor.R, [int]$inkColor.G, [int]$inkColor.B)
+  foreach ($line in $GAME_LINES) {
+    $rgb = Get-ThemeMix $inkRgb $bgRgb (Get-LineShare $line.share $cardAlpha)
+    $line.brush.Color = [System.Windows.Media.Color]::FromArgb(255, $rgb[0], $rgb[1], $rgb[2])
+  }
+  $barFill.Color = [System.Windows.Media.Color]::FromArgb((Get-ThemeByte ((Get-BarAlpha $cardAlpha) * 255)), $bgRgb[0], $bgRgb[1], $bgRgb[2])
+}
+Update-GameLook
 
 # Cell px, value and note font size, by board size. The smallest board is the narrowest
 # thing the card holds, so its cells are big enough for the controls row to fit under it.
@@ -488,14 +528,15 @@ $card.BorderBrush = $T.edge
 $card.BorderThickness = New-Object System.Windows.Thickness(1)
 
 # Header: the name, the lives, the other windows (games mark) and the close mark, all centred on
-# one line. Dragging it moves the window.
+# one line. Dragging the top bar it sits in moves the window.
 $header = New-Object System.Windows.Controls.DockPanel
-$header.Cursor = [System.Windows.Input.Cursors]::SizeAll
 $header.Background = $noFill
 $titleText = New-UiTitle 'Sudoku'
 [System.Windows.Controls.DockPanel]::SetDock($titleText, 'Left')
 $closeText = New-UiMark $UI_GLYPHS.close 'Close'
-$closeText.Margin = New-Gap 4 0 0 0
+# The glyph sits centred in its box; the box reaches past the edge by that inset, so the glyph
+# itself ends flush with the board, as the title starts flush with it.
+$closeText.Margin = New-Gap 4 0 -5 0
 [System.Windows.Controls.DockPanel]::SetDock($closeText, 'Right')
 $gamesMark = New-UiMark $UI_GLYPHS.games 'Learn and the other games'
 $gamesMark.Margin = New-Gap 8 0 0 0
@@ -522,24 +563,25 @@ for ($k = 0; $k -lt $MAX_LIVES; $k++) {
 [void]$header.Children.Add($gamesMark)
 [void]$header.Children.Add($heartsText)
 
-# Under the games mark: Learn and the other games, a click away. Its right edge is the close
-# mark's, so the last chip gives up its trailing gap.
+# Under the games mark: Learn and the other games, a click away; a pick closes the row and
+# switches the mark off (its Tag names the mark).
 $switcher = New-UiSwitcherRow 'sudoku' $OwnerHwnd $SessionId
 $switcher.Margin = New-Gap 0 8 0 0
 $switcher.HorizontalAlignment = 'Right'
 $switcher.Visibility = 'Collapsed'
-if ($switcher.Children.Count -gt 0) { $switcher.Children[$switcher.Children.Count - 1].Margin = New-Gap 0 0 0 0 }
+$switcher.Tag = @{ mark = $gamesMark }
 
 $rule = New-Object System.Windows.Controls.Border
 $rule.Height = 1
 $rule.Background = $T.rule
-$rule.Margin = New-Gap 0 8 0 12
+$rule.Margin = New-Gap 0 8 0 0
 
-# The board sits in a frame that draws its outer edge.
+# The board sits in a frame that draws its outer edge, 12 under the rule.
 $boardFrame = New-Object System.Windows.Controls.Border
 $boardFrame.BorderBrush = $boxLine
 $boardFrame.BorderThickness = New-Object System.Windows.Thickness($FRAME_PX)
 $boardFrame.HorizontalAlignment = 'Center'
+$boardFrame.Margin = New-Gap 16 12 16 0
 
 # The status line is exactly the board's width (Build-Board sets it) and trims, so a longer or
 # shorter message never moves the card's edge.
@@ -597,25 +639,43 @@ foreach ($side in 4, 6, 9) {
 [void]$controls.Children.Add($newButton)
 [void]$controls.Children.Add($sizes)
 
-# Footer: the keys worth knowing; the tooltip has the rest.
-$keysText = New-Text "N notes $GLYPH_DOT Esc clear $GLYPH_DOT $GLYPH_ERASE erase" $faint
-$keysText.FontSize = 11
+# Footer: the keys worth knowing (the hints' one role, as in 2048); the tooltip has the rest.
+$keysText = New-UiText "N mode $GLYPH_DOT Esc clear $GLYPH_DOT $GLYPH_ERASE erase" 'dim' 11 -Mono
 $keysText.Margin = New-Gap 0 8 0 0
 $keysText.HorizontalAlignment = 'Center'
 $keysText.ToolTip = "Digits answer; Shift or Ctrl + digit notes`nSpace or N: Answer / Notes`nArrows move; Shift or Ctrl + arrows select more`nEsc: clear the selection`nBackspace, Delete or 0: erase`nCtrl+Z: undo"
 
+# The card: a top bar (header, the games row, the rule), the board, and a bottom bar (status, pad,
+# controls, keys). The bars reach the card's edges and wear $barFill, which is clear unless the
+# card is very see-through; padding 16 12 16 12 all round.
+$topStack = New-Object System.Windows.Controls.StackPanel
+[void]$topStack.Children.Add($header)
+[void]$topStack.Children.Add($switcher)
+[void]$topStack.Children.Add($rule)
+$topBar = New-Object System.Windows.Controls.Border
+$topBar.Background = $barFill
+$topBar.CornerRadius = New-Object System.Windows.CornerRadius(($UI_CARD_RADIUS - 1), ($UI_CARD_RADIUS - 1), 0, 0)
+$topBar.Padding = New-Gap 16 12 16 0
+$topBar.Cursor = [System.Windows.Input.Cursors]::SizeAll
+$topBar.Child = $topStack
+
+$bottomStack = New-Object System.Windows.Controls.StackPanel
+[void]$bottomStack.Children.Add($statusText)
+[void]$bottomStack.Children.Add($pad)
+[void]$bottomStack.Children.Add($controls)
+[void]$bottomStack.Children.Add($keysText)
+$bottomBar = New-Object System.Windows.Controls.Border
+$bottomBar.Background = $barFill
+$bottomBar.CornerRadius = New-Object System.Windows.CornerRadius(0, 0, ($UI_CARD_RADIUS - 1), ($UI_CARD_RADIUS - 1))
+$bottomBar.Padding = New-Gap 16 0 16 12
+$bottomBar.Child = $bottomStack
+
 $stack = New-Object System.Windows.Controls.StackPanel
-$stack.Margin = New-Gap 16 12 16 14
 # The controls row's outer columns share one width (SharedSizeGroup) inside this scope.
 [System.Windows.Controls.Grid]::SetIsSharedSizeScope($stack, $true)
-[void]$stack.Children.Add($header)
-[void]$stack.Children.Add($switcher)
-[void]$stack.Children.Add($rule)
+[void]$stack.Children.Add($topBar)
 [void]$stack.Children.Add($boardFrame)
-[void]$stack.Children.Add($statusText)
-[void]$stack.Children.Add($pad)
-[void]$stack.Children.Add($controls)
-[void]$stack.Children.Add($keysText)
+[void]$stack.Children.Add($bottomBar)
 
 # The resize grip sits in the card's bottom-right corner, so it scales with the card. The
 # window is pinned by its top-left corner, so pulling the grip out (right or down) grows it.
@@ -883,13 +943,14 @@ function Update-Chrome {
     if ([int]$placed[$d] -ge $side) { $label.Foreground = $faint } else { $label.Foreground = $ink }
   }
 
-  # Short enough for the smallest board; how to switch is in the footer.
+  # Something that just happened, or else what Shift does now: the mode itself is shown in the
+  # controls row, and how to switch it in the footer. Short enough for the smallest board.
   $text = $script:status
   $brush = $script:statusBrush
   if (-not $text) {
     $brush = $dim
-    if ($script:mode -eq 'notes') { $text = "Notes $GLYPH_DOT Shift+digit answers" }
-    else { $text = "Answer $GLYPH_DOT Shift+digit notes" }
+    if ($script:mode -eq 'notes') { $text = 'Shift+digit answers' }
+    else { $text = 'Shift+digit notes' }
   }
   $statusText.Text = $text
   $statusText.Foreground = $brush
@@ -1186,7 +1247,7 @@ function Set-Place {
   [void][SudokuWin32]::SetWindowPos($script:me, [IntPtr]::Zero, $x, $y, 0, 0, 0x15)
 }
 
-$header.Add_MouseLeftButtonDown({
+$topBar.Add_MouseLeftButtonDown({
   param($sender, $e)
   $script:dragging = $true
   try { $win.DragMove() } catch {}
@@ -1302,8 +1363,9 @@ $win.Add_ContentRendered({
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(150)
 $timer.Add_Tick({
-  # A colour scheme or see-through change made in another window: the brushes repaint themselves.
-  [void](Update-Theme)
+  # A colour scheme or see-through change made in another window: the brushes repaint themselves,
+  # and the lines and bars are worked out again.
+  if (Update-Theme) { Update-GameLook }
   if (-not $hasOwner) { return }
   if (-not [SudokuWin32]::IsWindow($owner)) { $win.Close(); return }
   if ($script:dragging -or $script:resizing -or [SudokuWin32]::IsIconic($owner)) { return }
@@ -1422,6 +1484,19 @@ function Test-Rules {
   $sides = $controls.ColumnDefinitions
   $checks.controlsSidesShared = $sides.Count -eq 3 -and $sides[0].SharedSizeGroup -and $sides[0].SharedSizeGroup -eq $sides[2].SharedSizeGroup -and $sides[1].Width.IsStar -and [System.Windows.Controls.Grid]::GetIsSharedSizeScope($stack)
   $checks.choicesShowState = $answerMode.Tag.on -and -not $notesMode.Tag.on -and $sizeButtons[$side].Tag.on -and @($sizeButtons.Keys | Where-Object { $_ -ne $side -and $sizeButtons[$_].Tag.on }).Count -eq 0
+
+  # With nothing to report, the status line says what Shift does in this mode, not the mode.
+  Set-Status '' $dim
+  Update-Chrome
+  $checks.idleStatusIsShiftHint = $statusText.Text -eq 'Shift+digit notes'
+
+  # See-through: the bars are clear at the usual see-through and, over a clearer card, add up
+  # to $BAR_MIN_OPACITY with it; the lines are solid and move toward the text as the card clears.
+  $checks.barsClearByDefault = (Get-BarAlpha 0.95) -eq 0 -and (Get-BarAlpha $BAR_MIN_OPACITY) -eq 0
+  $checks.barsMakeUpOpacity = [Math]::Abs((1 - 0.6 * (1 - (Get-BarAlpha 0.4))) - $BAR_MIN_OPACITY) -lt 0.001 -and [Math]::Abs((1 - 0.85 * (1 - (Get-BarAlpha 0.15))) - $BAR_MIN_OPACITY) -lt 0.001
+  $checks.linesNearerTextWhenClear = (Get-LineShare 0.85 0.95) -eq 0.85 -and (Get-LineShare 0.85 0.4) -lt (Get-LineShare 0.85 0.7)
+  $checks.linesSolid = $thinLine.Color.A -eq 255 -and $boxLine.Color.A -eq 255 -and $lostLife.Color.A -eq 255
+  $checks.switcherNamesItsMark = $switcher.Tag.mark -eq $gamesMark
 
   $ok = $true
   foreach ($key in @($checks.Keys)) { if ($checks[$key] -is [bool] -and -not $checks[$key]) { $ok = $false } }

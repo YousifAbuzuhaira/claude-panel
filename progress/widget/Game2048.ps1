@@ -20,7 +20,11 @@ param(
   # Testing aids: check the rules and exit, or draw the window to a PNG and exit.
   [switch]$SelfTest,
   [string]$SnapshotPath = '',
-  [switch]$SnapshotDemo
+  [switch]$SnapshotDemo,
+  # With -SnapshotPath: the row of other windows open, as the games mark opens it; and the board
+  # as it is when the game is won or over, with its message over it.
+  [switch]$SnapshotSwitcher,
+  [ValidateSet('', 'win', 'over')][string]$SnapshotLook = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -233,8 +237,6 @@ if (-not $isOwner -and -not $SnapshotPath) {
 $owner = [IntPtr]$OwnerHwnd
 $hasOwner = $owner -ne [IntPtr]::Zero -and [G2048Win32]::IsWindow($owner)
 
-$GLYPH_CLOSE = [string][char]0x2715
-$GLYPH_GRIP = [string][char]0x25E2
 $GLYPH_DOT = [string][char]0x00B7
 $MIN_SCALE = 0.7
 $MAX_SCALE = 2.5
@@ -277,14 +279,11 @@ function Save-Prefs {
 
 # --- The window ---------------------------------------------------------------
 
-function Brush([string]$Hex) { return [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex) }
-
 # The colour scheme and see-through every window shares (appearance.json), and the shared pieces.
 . (Join-Path $PSScriptRoot 'Theme.ps1')
 $T = Initialize-Theme 'games'
 . (Join-Path $PSScriptRoot 'Chrome.ps1')
 $ink = $T.ink
-$dim = $T.dim
 $accent = $T.accent
 $noFill = [System.Windows.Media.Brushes]::Transparent
 $font = New-Object System.Windows.Media.FontFamily('Cascadia Mono, Consolas')
@@ -298,6 +297,60 @@ $TILE_LOOKS = @{
   1024 = @('#EEB521', '#26231C'); 2048 = @('#F5C400', '#26231C'); 4096 = @('#8E5BD6', '#F4F0FB')
   8192 = @('#6F55D9', '#F4F0FB'); 16384 = @('#4F63D6', '#F0F3FC'); 32768 = @('#3687D1', '#EFF6FC')
   65536 = @('#2AA3A8', '#EEFAFA'); 131072 = @('#3FAF7A', '#EEFAF3')
+}
+# Their brushes, made once and frozen: a redraw only picks them.
+$TILE_BRUSHES = @{}
+foreach ($tileValue in @($TILE_LOOKS.Keys)) {
+  $tileFill = New-Object System.Windows.Media.SolidColorBrush((ConvertTo-ThemeMediaColor $TILE_LOOKS[$tileValue][0]))
+  $tileInk = New-Object System.Windows.Media.SolidColorBrush((ConvertTo-ThemeMediaColor $TILE_LOOKS[$tileValue][1]))
+  $tileFill.Freeze()
+  $tileInk.Freeze()
+  $TILE_BRUSHES[$tileValue] = @($tileFill, $tileInk)
+}
+# On a light scheme the 2 and the 4 are the quietest tiles, as on the original's light board: a
+# solid step of the text toward the background, past the empty slot's, with the text on them.
+$LIGHT_TILES = @{
+  2 = @((New-ThemeTint 'ink' 1.0 'cardFill' 0.80), $T.ink)
+  4 = @((New-ThemeTint 'ink' 1.0 'cardFill' 0.70), $T.ink)
+}
+$script:glows = @{}
+$script:isLightScheme = $false
+
+# The header and footer bars: clear at the usual see-through, but with the card under them never
+# clearer than this, so the title, the scores, the marks and the hint stay legible over any backdrop.
+$BAR_MIN_OPACITY = 0.8
+$barFill = New-Object System.Windows.Media.SolidColorBrush
+
+# A bar's own alpha, so the bar over the card adds up to $BAR_MIN_OPACITY (none above it).
+function Get-BarAlpha([double]$CardAlpha) {
+  if ($CardAlpha -ge $BAR_MIN_OPACITY) { return 0.0 }
+  return 1.0 - (1.0 - $BAR_MIN_OPACITY) / (1.0 - $CardAlpha)
+}
+
+# Works out the bars and whether the scheme is light, from the scheme in use; again after every
+# scheme change. Light or dark the way Theme.ps1 decides it: which of black and white reads better.
+function Update-GameLook {
+  $fillColor = ConvertTo-ThemeMediaColor $script:THEME.palette.cardFill
+  $bgRgb = @([int]$fillColor.R, [int]$fillColor.G, [int]$fillColor.B)
+  $script:isLightScheme = (Get-ThemeContrast $bgRgb @(255, 255, 255)) -lt (Get-ThemeContrast $bgRgb @(0, 0, 0))
+  $barAlpha = Get-BarAlpha ([double]$fillColor.A / 255.0)
+  $barFill.Color = [System.Windows.Media.Color]::FromArgb((Get-ThemeByte ($barAlpha * 255)), $bgRgb[0], $bgRgb[1], $bgRgb[2])
+}
+Update-GameLook
+
+# 2048 and past it glow in their own colour; softer on a light card, where a wide glow smudges.
+# One frozen effect per colour and scheme lightness, shared by every tile that wears it.
+function Get-Glow($Fill) {
+  $key = '{0}:{1}' -f $Fill.Color, $script:isLightScheme
+  if (-not $script:glows.ContainsKey($key)) {
+    $glow = New-Object System.Windows.Media.Effects.DropShadowEffect
+    $glow.Color = $Fill.Color
+    $glow.ShadowDepth = 0
+    if ($script:isLightScheme) { $glow.BlurRadius = 10; $glow.Opacity = 0.35 } else { $glow.BlurRadius = 18; $glow.Opacity = 0.7 }
+    $glow.Freeze()
+    $script:glows[$key] = $glow
+  }
+  return $script:glows[$key]
 }
 
 function New-Text([string]$Text, $Foreground) {
@@ -358,14 +411,15 @@ function New-ScoreBox([string]$Label) {
 }
 
 # Header: the name, the score and best, the other windows (games mark) and the close mark.
-# Dragging it moves the window.
+# Dragging the top bar it sits in moves the window.
 $header = New-Object System.Windows.Controls.DockPanel
-$header.Cursor = [System.Windows.Input.Cursors]::SizeAll
 $header.Background = $noFill
 $titleText = New-UiTitle '2048'
 [System.Windows.Controls.DockPanel]::SetDock($titleText, 'Left')
 $closeText = New-UiMark $UI_GLYPHS.close 'Close'
-$closeText.Margin = New-Gap 4 0 0 0
+# The glyph sits centred in its box; the box reaches past the edge by that inset, so the glyph
+# itself ends flush with the board, as the title starts flush with it.
+$closeText.Margin = New-Gap 4 0 -5 0
 [System.Windows.Controls.DockPanel]::SetDock($closeText, 'Right')
 $gamesMark = New-UiMark $UI_GLYPHS.games 'Learn and the other games'
 $gamesMark.Margin = New-Gap 8 0 0 0
@@ -379,11 +433,19 @@ $scoreBox = New-ScoreBox 'SCORE'
 [void]$header.Children.Add($scoreBox.box)
 [void]$header.Children.Add((New-Object System.Windows.Controls.Border))
 
-# Under the games mark: Learn and the other games, a click away.
+# Under the games mark: Learn and the other games, a click away; a pick closes the row and
+# switches the mark off (its Tag names the mark).
 $switcher = New-UiSwitcherRow '2048' $OwnerHwnd $SessionId
-$switcher.Margin = New-Gap 0 10 0 0
+$switcher.Margin = New-Gap 0 8 0 0
 $switcher.HorizontalAlignment = 'Right'
 $switcher.Visibility = 'Collapsed'
+$switcher.Tag = @{ mark = $gamesMark }
+
+# The rule under the header, as in Sudoku; the board starts 12 under it.
+$rule = New-Object System.Windows.Controls.Border
+$rule.Height = 1
+$rule.Background = $T.rule
+$rule.Margin = New-Gap 0 8 0 0
 
 # The board: empty cells drawn once, tiles on a layer above them, and the
 # win / game-over message over both.
@@ -392,7 +454,7 @@ $boardBack.Background = $T.well
 $boardBack.CornerRadius = New-Object System.Windows.CornerRadius(8)
 $boardBack.Width = $BOARD_PX
 $boardBack.Height = $BOARD_PX
-$boardBack.Margin = New-Gap 0 12 0 0
+$boardBack.Margin = New-Gap 16 12 16 0
 $boardBack.HorizontalAlignment = 'Center'
 $boardLayers = New-Object System.Windows.Controls.Grid
 $cellLayer = New-Object System.Windows.Controls.Canvas
@@ -429,10 +491,12 @@ $overlayButtons.Orientation = 'Horizontal'
 $overlayButtons.HorizontalAlignment = 'Center'
 $overlayButtons.Margin = New-Gap 0 14 0 0
 
-# "Keep going" wears the 2048 tile's gold, the game's own colour; "Try again" is a plain button.
+# "Keep going" wears the scheme's gold, as "You win!" above it does, with the background's own
+# colour for its text (the gold is light on a dark scheme and dark on a light one); "Try again"
+# is a plain button.
 $keepButton = New-UiButton 'Keep going' 'primary' -Mono
-$keepButton.Background = Brush '#F5C400'
-$keepButton.Tag.label.Foreground = Brush '#26231C'
+$keepButton.Background = $T.gold
+$keepButton.Tag.label.Foreground = New-ThemeTint 'cardFill' 1.0
 $keepButton.Margin = New-Gap 5 0 5 0
 $againButton = New-UiButton 'Try again' 'secondary' -Mono
 $againButton.Tag.label.FontWeight = 'Bold'
@@ -448,22 +512,41 @@ $overlay.Child = $overlayStack
 [void]$boardLayers.Children.Add($overlay)
 $boardBack.Child = $boardLayers
 
-# Footer: how to play, and a new game.
+# Footer: how to play (the hints' one role, as in Sudoku), and a new game. It stands 4 off the
+# card's padding so the button clears the resize grip in the corner below it.
 $footer = New-Object System.Windows.Controls.DockPanel
-$footer.Margin = New-Gap 0 12 0 0
+$footer.Margin = New-Gap 0 12 0 4
 $newButton = New-UiButton 'New game' 'secondary' -Mono -Tip 'Start over (R)'
 [System.Windows.Controls.DockPanel]::SetDock($newButton, 'Right')
-$hintText = New-Text "Arrows, WASD or HJKL $GLYPH_DOT R restarts" $dim
+$hintText = New-UiText "Arrows, WASD or HJKL $GLYPH_DOT R restarts" 'dim' 11 -Mono
 $hintText.VerticalAlignment = 'Center'
 [void]$footer.Children.Add($newButton)
 [void]$footer.Children.Add($hintText)
 
+# The card: a top bar (header, the games row, the rule), the board, and a bottom bar (the
+# footer). The bars reach the card's edges and wear $barFill, which is clear unless the card is
+# very see-through; padding 16 12 16 12 all round.
+$topStack = New-Object System.Windows.Controls.StackPanel
+[void]$topStack.Children.Add($header)
+[void]$topStack.Children.Add($switcher)
+[void]$topStack.Children.Add($rule)
+$topBar = New-Object System.Windows.Controls.Border
+$topBar.Background = $barFill
+$topBar.CornerRadius = New-Object System.Windows.CornerRadius(($UI_CARD_RADIUS - 1), ($UI_CARD_RADIUS - 1), 0, 0)
+$topBar.Padding = New-Gap 16 12 16 0
+$topBar.Cursor = [System.Windows.Input.Cursors]::SizeAll
+$topBar.Child = $topStack
+
+$bottomBar = New-Object System.Windows.Controls.Border
+$bottomBar.Background = $barFill
+$bottomBar.CornerRadius = New-Object System.Windows.CornerRadius(0, 0, ($UI_CARD_RADIUS - 1), ($UI_CARD_RADIUS - 1))
+$bottomBar.Padding = New-Gap 16 0 16 12
+$bottomBar.Child = $footer
+
 $stack = New-Object System.Windows.Controls.StackPanel
-$stack.Margin = New-Gap 16 12 16 14
-[void]$stack.Children.Add($header)
-[void]$stack.Children.Add($switcher)
+[void]$stack.Children.Add($topBar)
 [void]$stack.Children.Add($boardBack)
-[void]$stack.Children.Add($footer)
+[void]$stack.Children.Add($bottomBar)
 
 # The resize grip sits in the card's bottom-right corner, so it scales with the card. The
 # window is pinned by its top-left corner, so pulling the grip out (right or down) grows it.
@@ -496,30 +579,23 @@ $script:isSliding = $false
 $script:afterSlide = $null
 
 function New-Tile([int]$Value, [int]$Index) {
-  $look = $TILE_LOOKS[$Value]
-  if (-not $look) { $look = $TILE_LOOKS[131072] }
+  $look = $TILE_BRUSHES[$Value]
+  if (-not $look) { $look = $TILE_BRUSHES[131072] }
+  if ($script:isLightScheme -and $LIGHT_TILES.ContainsKey($Value)) { $look = $LIGHT_TILES[$Value] }
   $piece = New-Object System.Windows.Controls.Border
   $piece.Width = $TILE_PX
   $piece.Height = $TILE_PX
   $piece.CornerRadius = New-Object System.Windows.CornerRadius(6)
-  $piece.Background = Brush $look[0]
+  $piece.Background = $look[0]
   $digits = ([string]$Value).Length
-  $text = New-Text ([string]$Value) (Brush $look[1])
+  $text = New-Text ([string]$Value) $look[1]
   $text.FontWeight = 'Bold'
   $text.FontSize = @{ 1 = 32; 2 = 30; 3 = 25; 4 = 20; 5 = 16 }[[Math]::Min(5, $digits)]
   if ($digits -gt 5) { $text.FontSize = 13 }
   $text.HorizontalAlignment = 'Center'
   $text.VerticalAlignment = 'Center'
   $piece.Child = $text
-  # 2048 and past it glow.
-  if ($Value -ge 2048) {
-    $glow = New-Object System.Windows.Media.Effects.DropShadowEffect
-    $glow.Color = ([System.Windows.Media.SolidColorBrush](Brush $look[0])).Color
-    $glow.BlurRadius = 18
-    $glow.ShadowDepth = 0
-    $glow.Opacity = 0.7
-    $piece.Effect = $glow
-  }
+  if ($Value -ge 2048) { $piece.Effect = Get-Glow $look[0] }
   $piece.RenderTransformOrigin = New-Object System.Windows.Point(0.5, 0.5)
   $piece.RenderTransform = New-Object System.Windows.Media.ScaleTransform(1, 1)
   [System.Windows.Controls.Canvas]::SetLeft($piece, (Get-CellX $Index))
@@ -656,9 +732,6 @@ $win.Add_PreviewKeyDown({
   if ($name -eq 'R') { New-Game; $e.Handled = $true }
 })
 
-foreach ($button in @($keepButton, $againButton, $newButton, $closeText)) {
-  $button.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
-}
 $keepButton.Add_MouseLeftButtonUp({
   param($sender, $e)
   $e.Handled = $true
@@ -716,7 +789,7 @@ function Set-Place {
   [void][G2048Win32]::SetWindowPos($script:me, [IntPtr]::Zero, $x, $y, 0, 0, 0x15)
 }
 
-$header.Add_MouseLeftButtonDown({
+$topBar.Add_MouseLeftButtonDown({
   param($sender, $e)
   $script:dragging = $true
   try { $win.DragMove() } catch {}
@@ -777,8 +850,26 @@ function Show-Demo {
   Show-Board
 }
 
+# The two messages over the board: a 2048 reached (with Keep going), and a full board.
+function Show-SnapshotLook {
+  if ($SnapshotLook -eq 'win') {
+    $script:board = [int[]]@(2, 4, 8, 16, 4, 32, 64, 2, 128, 256, 2048, 4, 2, 8, 16, 2)
+    $script:score = 21544
+    $script:hasWon = $true
+    $script:keepPlaying = $false
+  } elseif ($SnapshotLook -eq 'over') {
+    $script:board = [int[]]@(2, 4, 2, 4, 4, 8, 16, 2, 2, 32, 64, 8, 4, 2, 128, 4)
+    $script:score = 2932
+    $script:isOver = $true
+  }
+  if ($script:score -gt $script:best) { $script:best = $script:score }
+  Show-Board
+}
+
 function Save-Snapshot {
   if ($SnapshotDemo) { Show-Demo }
+  if ($SnapshotLook) { Show-SnapshotLook }
+  if ($SnapshotSwitcher) { $switcher.Visibility = 'Visible'; Set-UiMarkOn $gamesMark $true }
   $win.UpdateLayout()
   $dpi = 96.0
   if ($script:me -ne [IntPtr]::Zero) { $dpi = [double][G2048Win32]::GetDpiForWindow($script:me) }
@@ -806,8 +897,13 @@ $win.Add_ContentRendered({
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(150)
 $timer.Add_Tick({
-  # A colour scheme or see-through change made in another window: the brushes repaint themselves.
-  [void](Update-Theme)
+  # A colour scheme or see-through change made in another window: the brushes repaint themselves,
+  # and the bars and tiles are worked out again (a light scheme has its own 2 and 4). A slide
+  # in progress draws the board itself when it ends.
+  if (Update-Theme) {
+    Update-GameLook
+    if (-not $script:isSliding) { Show-Board }
+  }
   if (-not $hasOwner) { return }
   if (-not [G2048Win32]::IsWindow($owner)) { $win.Close(); return }
   if ($script:dragging -or $script:resizing -or [G2048Win32]::IsIconic($owner)) { return }
