@@ -4,19 +4,21 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { PhasePlan, TestRun } from '../types'
 import { isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus } from './learn'
 import type { LearnStatus } from './learn'
+import { GAMES, isGame, openingText, windowScript } from './pages'
 import {
-  bar, buildColor, buildRatio, collapsedLine, fitReleases, frontTab, GAMES, isGame, learnLabel, PANE_ID, pageLabel, phasesLabel,
-  runMark, statusLine, testsFooter, testsLabel, wrappedRows,
+  bar, buildColor, buildRatio, collapsedLine, fitReleases, fitRuns, fitTabs, frontTab, MARK_CELLS, PANE_ID, runMark,
+  shortTabLabels, statusLine, TAB_GAP, tabLabels, testsFooter, wrappedRows,
 } from './pane'
-import type { Tab } from './pane'
+import type { LiveTab, Tab } from './pane'
 import { runCount, runRatio } from './format'
 import { emptyProgress, feed, hasFailed } from './parse'
 import { describePlan, PHASES_GUIDE, PHASES_TOOL_SCHEMA, readPhasesInput } from './phases'
-import { isReleaseUnseen, readPluginVersion, readReleases, releaseLine, releasesLabel, SEEN_RELEASE_KEY } from './releases'
-import type { Release } from './releases'
 import {
-  macPanelArgv, panelState, readAppPath, readEvents, readOwnerHwnd, widgetArgv, widgetStatePath, WINDOW_SCRIPTS, windowArgv,
-} from './widget'
+  isReleaseNew, isReleaseUnseen, lacksReleaseNote, laterVersion, newestRelease, readPluginVersion, readReleases, releaseLine,
+  releasesLabel, releasesName, SEEN_RELEASE_KEY,
+} from './releases'
+import type { Release } from './releases'
+import { macPanelArgv, panelState, readAppPath, readEvents, readOwnerHwnd, widgetArgv, widgetStatePath, windowArgv } from './widget'
 import type { WidgetEvent } from './widget'
 import { isTestCommand, runKey, shortLabel, wrapCommand } from './wrap'
 
@@ -36,6 +38,9 @@ const TOTALS_KEPT = 100
 const LEARN_POLL_MS = 3_000
 // The body rows the pane asks for inline (a request: the layout may give it fewer).
 const PANE_ROWS = 12
+// The body columns it asks for docked (a request: at most 45% of the terminal): the tab
+// row's full labels fit, and a release note wraps once at most.
+const PANE_COLUMNS = 56
 
 const testRuns = atom({ plugin: 'progress', key: 'testRuns' } as const, [])
 const phases = atom({ plugin: 'progress', key: 'phases' } as const, null)
@@ -83,9 +88,12 @@ let isPaneOpen = false
 let lastPlanTitle: string | null = null
 // The WezTerm window the WPF panel follows (its `ready`): /learn and /games windows follow it too.
 let ownerHwnd: number | null = null
-// releases.json and plugin.json, read once (session.start or the first draw).
+// releases.json and plugin.json, read once (session.start or the first draw), and the
+// newest version the person had opened before they last opened the Releases tab: the
+// entries after it wear the new mark.
 let releases: Release[] = []
 let pluginVersion: string | null = null
+let seenBefore: string | null = null
 let releasesRead: Promise<void> | null = null
 // macOS: whether this is a Mac that can draw the floating panel (else the pane).
 let isMacHost: Promise<boolean> | null = null
@@ -230,7 +238,7 @@ async function syncPane($: EngineInterface, plan: PhasePlan | null, runs: readon
   if (isDismissed && !isPinned) return
   if (!isPaneOpen) {
     isPaneOpen = true
-    await $.ui.open({ id: PANE_ID, title: 'Progress', rows: PANE_ROWS }).catch(() => {
+    await $.ui.open({ id: PANE_ID, title: 'Progress', rows: PANE_ROWS, columns: PANE_COLUMNS }).catch(() => {
       isPaneOpen = false
     })
   }
@@ -238,22 +246,26 @@ async function syncPane($: EngineInterface, plan: PhasePlan | null, runs: readon
 }
 
 /**
- * Opens Learn (at one of its views), a game, or the games page: its WPF window on WSL
- * (any terminal; owned by the WezTerm window once the panel has named it), else the
- * page from web/server.mjs, in its own window on macOS or the browser.
+ * Opens Learn (at one of its views, or a course), a game, or the games page: its WPF
+ * window on WSL (any terminal; owned by the WezTerm window once the panel has named it),
+ * else the page from web/server.mjs, in its own window on macOS or the browser.
+ * `courseTitle` only names the course in the message.
  */
-async function openPage($: EngineInterface, page: string, deep: { view?: string; courseId?: string } = {}): Promise<string> {
+async function openPage(
+  $: EngineInterface,
+  page: string,
+  deep: { view?: string; courseId?: string; courseTitle?: string } = {},
+): Promise<string> {
   const { view, courseId } = deep
   const distro = await $.env.get('WSL_DISTRO_NAME').catch(() => undefined)
-  const script = WINDOW_SCRIPTS[page]
-  const at = view ? ` (${view})` : ''
+  const script = windowScript(page)
   if (distro && script) {
     try {
       const sessionId = await $.session.id()
       const argv = windowArgv({ distro, pluginRoot: $.plugin.root, script, sessionId, ownerHwnd, view, courseId })
       // Detached: the window stays when the session ends, as the panel's own launches do.
       await $.process.run(['bash', '-c', 'nohup "$@" >/dev/null 2>&1 &', 'open-window', ...argv])
-      return `Opening ${pageLabel(page)}${at}.`
+      return openingText(page, deep, false)
     } catch (error) {
       return `Couldn't open it: ${error instanceof Error ? error.message : String(error)}`
     }
@@ -265,7 +277,7 @@ async function openPage($: EngineInterface, page: string, deep: { view?: string;
     const toView = [...(view ? ['--view', view] : []), ...(courseId ? ['--course', courseId] : [])]
     const ran = await $.process.run(['bash', `${$.plugin.root}/web/web.sh`, 'open', page, ...toView, ...follow])
     const answer = JSON.parse(ran.stdout.trim().split('\n').at(-1) ?? '{}') as { ok?: boolean; url?: string; error?: string; shown?: string }
-    if (answer.ok && answer.shown === 'window') return `Opened ${pageLabel(page)}${at} in its own window.`
+    if (answer.ok && answer.shown === 'window') return openingText(page, deep, true)
     if (answer.ok && answer.url) return `Opened ${answer.url} in your browser.`
     return `Couldn't open it: ${answer.error ?? (ran.stderr.trim() || 'no answer')}`
   } catch (error) {
@@ -296,17 +308,34 @@ async function macPanelBinary($: EngineInterface): Promise<string | null> {
   }
 }
 
-/** Reads releases.json and the plugin's version once; a missing or broken file leaves the tab empty. */
+/**
+ * Reads releases.json, the plugin's version and what the person had seen once; a
+ * missing or broken file leaves the tab empty.
+ */
 function loadReleases($: EngineInterface): Promise<void> {
   releasesRead ??= (async () => {
-    const [list, manifest] = await Promise.all([
+    const [list, manifest, seen] = await Promise.all([
       $.fs.read(`${$.plugin.root}/releases.json`).catch(() => ''),
       $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).catch(() => ''),
+      $.store.get(SEEN_RELEASE_KEY).catch(() => undefined),
     ])
     releases = readReleases(list)
     pluginVersion = readPluginVersion(manifest) ?? releases[0]?.version ?? null
+    seenBefore = typeof seen === 'string' && seen !== '' ? seen : null
   })().catch(() => undefined)
   return releasesRead
+}
+
+/**
+ * The person opened the Releases tab: the entries newer than what they had seen
+ * before keep the new mark while it shows, and the newest is remembered as seen
+ * (never an older one, so going back to an older copy brings no dot back).
+ */
+async function markReleasesSeen($: EngineInterface) {
+  const seen = await $.store.get(SEEN_RELEASE_KEY).catch(() => undefined)
+  seenBefore = typeof seen === 'string' && seen !== '' ? seen : null
+  const later = laterVersion(seen, newestRelease(releases, pluginVersion))
+  if (later && later !== seen) await $.store.set(SEEN_RELEASE_KEY, later).catch(() => undefined)
 }
 
 /** Picks up Learn's status file; a change redraws the panel's Learn tab. */
@@ -609,7 +638,7 @@ export const register: Register = on => {
     if ((await panelDistro($)) === null && panel === null) {
       // No floating panel here (or it failed): the pane, opened from the person's own command, seats at any width.
       isPaneOpen = true
-      const opened = await $.ui.open({ id: PANE_ID, title: 'Progress', rows: PANE_ROWS })
+      const opened = await $.ui.open({ id: PANE_ID, title: 'Progress', rows: PANE_ROWS, columns: PANE_COLUMNS })
       if (!opened.isPlaced) return { text: `The progress pane is open but not drawn yet (${opened.reason}).` }
     } else if (panel === null) return { text: 'The floating panel could not start. /phases tries again.' }
     const plan = await read($, phases)
@@ -622,6 +651,12 @@ export const register: Register = on => {
   on('command.run', { command: 'learn' }, async ($, e) => {
     const view = e.args.trim().toLowerCase()
     if (view && !isLearnView(view)) return { text: `Learn has no view called "${view}". Views: ${LEARN_VIEWS.join(', ')}.` }
+    if (view === 'course') {
+      // The course in front, as Carry on reading opens it; with none yet, the Library, which lists them.
+      const course = learn?.course
+      if (!course) return { text: `No course open yet. ${await openPage($, 'learn', { view: 'library' })}` }
+      return { text: await openPage($, 'learn', { view, courseId: course.id, courseTitle: course.title || undefined }) }
+    }
     return { text: await openPage($, 'learn', { view: view || undefined }) }
   })
 
@@ -652,81 +687,127 @@ export const register: Register = on => {
     await loadReleases($)
     const plan = await read($, phases)
     const runs = await read($, testRuns)
-    // Read while drawing, so the write a press of the Releases tab makes draws the label again.
+    // Read while drawing, so the write a press of the Releases tab makes draws the tab again.
     const seenRelease = await $.store.get(SEEN_RELEASE_KEY).catch(() => undefined)
+    const isUnseen = isReleaseUnseen(newestRelease(releases, pluginVersion), seenRelease)
+    const versionText = releasesLabel(pluginVersion)
     const isInline = e.props.placement === 'inline'
+    // The labels the row has room for: the counts give way before the row wraps.
+    const fitted = fitTabs(tabLabels(plan, runs, learn), shortTabLabels(runs, learn), `${versionText}${isUnseen ? ' ●' : ''}`, e.props.bodyColumns)
     // Inline, the rows the layout gave the body: less the tab row and the gap under it, what a tab may draw.
-    const room = Math.max(1, (e.props.scroll?.bodyRows ?? PANE_ROWS) - 2)
-    // A click puts the tab in front and keeps it there until a new run or a new plan.
+    const room = Math.max(1, (e.props.scroll?.bodyRows ?? PANE_ROWS) - fitted.rows - 1)
+    // A click puts the tab in front and keeps it there until a new run or a new plan
+    // (Releases stays through both, until another tab is picked).
     const show = (tab: Tab) => async () => {
+      if (tab === 'releases' && paneTab !== 'releases') await markReleasesSeen($)
       paneTab = tab
       manualTab = tab
-      if (tab === 'releases' && pluginVersion) await $.store.set(SEEN_RELEASE_KEY, pluginVersion).catch(() => undefined)
       $.ui.invalidate('ui.render')
     }
-    const open = (page: string, deep?: { view?: string; courseId?: string }) => () => {
+    const open = (page: string, deep?: { view?: string; courseId?: string; courseTitle?: string }) => () => {
       void openPage($, page, deep).then(text => $.ui.toast(text))
     }
-    // The tab in front is the accented one; the others dim until hovered.
-    const tabLook = (tab: Tab) =>
-      paneTab === tab ? { variant: 'primary' as const } : { plain: true as const, dimColor: true }
-    const versionLabel = releasesLabel(pluginVersion, seenRelease)
-    const isUnseen = isReleaseUnseen(pluginVersion, seenRelease)
+    // Every tab is drawn plain, so none changes width when it comes to the front: the
+    // one in front bold, the others dim until hovered.
+    const liveTab = (tab: LiveTab) => {
+      const label = fitted.labels[tab]
+      return paneTab === tab ? (
+        <Button key={`tab:${tab}`} plain label={label} onPress={show(tab)}>
+          <Text bold>{label}</Text>
+        </Button>
+      ) : (
+        <Button key={`tab:${tab}`} plain dimColor label={label} onPress={show(tab)}>
+          {label}
+        </Button>
+      )
+    }
+    // The version is the Releases tab. Its accent ● says there are notes not opened yet;
+    // the version beside it dims on its own, so the dot keeps its colour.
+    const versionLook = paneTab === 'releases' ? <Text bold>{versionText}</Text> : isUnseen ? <Text dimColor>{versionText}</Text> : versionText
+    const releasesTab = (
+      <Button
+        key="tab:releases"
+        plain
+        dimColor={paneTab !== 'releases' && !isUnseen}
+        label={releasesName(pluginVersion, isUnseen)}
+        onPress={show('releases')}
+      >
+        {versionLook}
+        {isUnseen && <Text color="claude"> ●</Text>}
+      </Button>
+    )
 
     // The three live tabs on the left; the version, which is the Releases tab, at the right.
     const tabs = (
-      <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" columnGap={2}>
-        <Box flexDirection="row" gap={1}>
-          <Button key="tab:phases" {...tabLook('phases')} onPress={show('phases')}>
-            {phasesLabel(plan)}
-          </Button>
-          <Button key="tab:tests" {...tabLook('tests')} onPress={show('tests')}>
-            {testsLabel(runs)}
-          </Button>
-          <Button key="tab:learn" {...tabLook('learn')} onPress={show('learn')}>
-            {learnLabel(learn)}
-          </Button>
+      <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" columnGap={TAB_GAP}>
+        <Box flexDirection="row" columnGap={TAB_GAP}>
+          {liveTab('phases')}
+          {liveTab('tests')}
+          {liveTab('learn')}
         </Box>
-        <Button key="tab:releases" label={versionLabel} {...tabLook('releases')} onPress={show('releases')}>
-          {versionLabel.replace(/ ●$/, '')}
-          {isUnseen && <Text color="claude"> ●</Text>}
-        </Button>
+        {releasesTab}
       </Box>
     )
 
     let body
     if (paneTab === 'releases') {
+      const isMissing = lacksReleaseNote(pluginVersion, releases)
       // Docked, the body scrolls; inline, the frame is cut at its rows, so only what fits is drawn.
-      const shown = isInline ? fitReleases(releases, room, e.props.bodyColumns) : releases
+      const shown = isInline ? fitReleases(releases, room - (isMissing ? 1 : 0), e.props.bodyColumns) : releases
       const earlier = releases.length - shown.length
       // A gap between two releases; the "+N earlier" line sits right under the last one shown.
       body = (
         <Box flexDirection="column">
+          {isMissing && (
+            <Text color="error" wrap="truncate-end">
+              v{pluginVersion} has no release note yet
+            </Text>
+          )}
           {releases.length === 0 && <Text dimColor>No releases listed.</Text>}
           <Box flexDirection="column" gap={1}>
-            {shown.map(release => (
+            {shown.map((release, index) => (
               <Box key={`release:${release.version}`} flexDirection="column">
-                <Text>
-                  <Text bold>{release.version}</Text>
-                  <Text dimColor>{releaseLine(release).slice(release.version.length)}</Text>
-                </Text>
+                {/* One row: the new mark's column, then the version and, dim, when and who. */}
+                <Box flexDirection="row">
+                  <Box width={MARK_CELLS} flexShrink={0}>
+                    {isReleaseNew(release.version, seenBefore, index) && <Text color="claude">●</Text>}
+                  </Box>
+                  <Box flexShrink={1}>
+                    <Text wrap="truncate-end">
+                      <Text bold>{release.version}</Text>
+                      <Text dimColor>{releaseLine(release).slice(release.version.length)}</Text>
+                    </Text>
+                  </Box>
+                </Box>
+                {/* Each note under the heading's text, after a dim ·: a wrapped line goes on under the note's text. */}
                 {release.notes.map((note, i) => (
-                  <Box key={`note:${release.version}:${i}`} paddingLeft={2}>
-                    <Text>{note}</Text>
+                  <Box key={`note:${release.version}:${i}`} flexDirection="row" paddingLeft={MARK_CELLS}>
+                    <Box width={2} flexShrink={0}>
+                      <Text dimColor>·</Text>
+                    </Box>
+                    <Box flexShrink={1}>
+                      <Text>{note}</Text>
+                    </Box>
                   </Box>
                 ))}
               </Box>
             ))}
           </Box>
-          {earlier > 0 && <Text dimColor>+{earlier} earlier</Text>}
+          {earlier > 0 && (
+            <Box paddingLeft={MARK_CELLS}>
+              <Text dimColor>+{earlier} earlier</Text>
+            </Box>
+          )}
         </Box>
       )
     } else if (paneTab === 'tests') {
       const newest = [...runs].reverse()
+      // Inline, the newest runs the room holds (two rows each), the totals line under them when it fits too.
+      const fit = isInline ? fitRuns(newest.length, room) : { shown: newest.length, hasFooter: true }
       body = (
         <Box flexDirection="column">
           {newest.length === 0 && <Text dimColor>No test runs yet.</Text>}
-          {newest.slice(0, isInline ? 2 : newest.length).map(run => {
+          {newest.slice(0, fit.shown).map(run => {
             const mark = runMark(run)
             return (
               <Box key={`run:${run.id}`} flexDirection="column">
@@ -741,7 +822,7 @@ export const register: Register = on => {
               </Box>
             )
           })}
-          {runs.length > 0 && <Text dimColor>{testsFooter(runs)}</Text>}
+          {runs.length > 0 && fit.hasFooter && <Text dimColor>{testsFooter(runs)}</Text>}
         </Box>
       )
     } else if (paneTab === 'learn') {
@@ -782,16 +863,22 @@ export const register: Register = on => {
           )}
           {!build && !course && <Text dimColor>Courses from free videos and docs, written by your own Claude.</Text>}
           <Box flexDirection="row" marginTop={1}>
-            <Button key="open:learn" variant="primary" onPress={course ? open('learn', { view: 'course', courseId: course.id }) : open('learn')}>
+            <Button
+              key="open:learn"
+              variant="primary"
+              onPress={course ? open('learn', { view: 'course', courseId: course.id, courseTitle: course.title || undefined }) : open('learn')}
+            >
               {course ? 'Carry on reading' : 'Open Learn'}
             </Button>
           </Box>
-          {/* The games on their own row, which wraps rather than clips in a narrow pane. */}
-          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1}>
+          {/* The games on their own row, which wraps rather than clips in a narrow pane: under the first game, not the label. */}
+          <Box flexDirection="row" columnGap={1}>
             <Text dimColor>Games</Text>
-            {GAMES.map(game => (
-              <Button key={`game:${game.id}`} onPress={open(`games/${game.id}`)}>{game.label}</Button>
-            ))}
+            <Box flexDirection="row" flexWrap="wrap" flexShrink={1} columnGap={1}>
+              {GAMES.map(game => (
+                <Button key={`game:${game.id}`} onPress={open(`games/${game.id}`)}>{game.label}</Button>
+              ))}
+            </Box>
           </Box>
         </Box>
       )

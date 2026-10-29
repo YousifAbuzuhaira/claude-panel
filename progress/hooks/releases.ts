@@ -55,14 +55,56 @@ export function readPluginVersion(raw: string): string | null {
   }
 }
 
-/** The tab's label: the version, with a dot until the person has seen this version's entry. */
-export function releasesLabel(version: string | null, seen: unknown): string {
-  if (!version) return 'Releases'
-  return seen === version ? `v${version}` : `v${version} ●`
+/**
+ * -1, 0 or 1 by version number ("0.10.0" after "0.9.1"), as the WPF and Mac panels
+ * compare them; a part that isn't a number counts as 0.
+ */
+export function compareVersion(a: string, b: string): number {
+  const parts = (version: string) => version.split('.').map(part => Number.parseInt(part, 10) || 0)
+  const left = parts(a)
+  const right = parts(b)
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const step = (left[i] ?? 0) - (right[i] ?? 0)
+    if (step !== 0) return Math.sign(step)
+  }
+  return 0
 }
 
-/** Whether the tab's label carries the not-yet-seen dot. */
-export const isReleaseUnseen = (version: string | null, seen: unknown) => version !== null && version !== '' && seen !== version
+/** The newest version with notes: the first entry of releases.json, else the plugin's own. */
+export const newestRelease = (releases: readonly Release[], pluginVersion: string | null): string | null =>
+  releases[0]?.version || pluginVersion || null
+
+/**
+ * Whether the tab carries the not-yet-seen dot: the newest entry is newer than the
+ * newest the person has opened. Going back to an older copy brings no dot back.
+ */
+export const isReleaseUnseen = (newest: string | null, seen: unknown): boolean =>
+  !!newest && (typeof seen !== 'string' || seen === '' || compareVersion(newest, seen) > 0)
+
+/** What opening the tab remembers: the later of what was seen and the newest entry. */
+export function laterVersion(seen: unknown, newest: string | null): string | null {
+  const before = typeof seen === 'string' && seen !== '' ? seen : null
+  if (!newest) return before
+  return before && compareVersion(before, newest) >= 0 ? before : newest
+}
+
+/**
+ * Whether an entry wears the new mark: newer than what had been seen when the tab
+ * was opened; with nothing seen before, the newest alone.
+ */
+export const isReleaseNew = (version: string, seenBefore: string | null, index: number): boolean =>
+  seenBefore ? compareVersion(version, seenBefore) > 0 : index === 0
+
+/** The plugin is newer than its newest entry: a version shipped without its release note. */
+export const lacksReleaseNote = (pluginVersion: string | null, releases: readonly Release[]): boolean =>
+  !!pluginVersion && !!releases[0] && compareVersion(pluginVersion, releases[0].version) > 0
+
+/** The tab's text: the plugin's version, or Releases while none is known. */
+export const releasesLabel = (version: string | null): string => (version ? `v${version}` : 'Releases')
+
+/** The tab's name for a screen reader: its text, and that it holds something new. */
+export const releasesName = (version: string | null, isUnseen: boolean): string =>
+  `${releasesLabel(version)}${isUnseen ? ', new' : ''}`
 
 /** `2026-10-29` as `29 Oct`; anything else as it came. */
 export function shortDate(date: string): string {

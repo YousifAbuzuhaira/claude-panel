@@ -14,24 +14,20 @@ export const BAR_CELLS = 18
 
 export type Tab = 'phases' | 'tests' | 'learn' | 'releases'
 
-export const GAMES = [
-  { id: 'sudoku', label: 'Sudoku' },
-  { id: '2048', label: '2048' },
-  { id: 'typing', label: 'Typing' },
-  { id: 'chess', label: 'Chess' },
-] as const
+/** The tabs that show live state, left of the version (the Releases tab). */
+export type LiveTab = Exclude<Tab, 'releases'>
 
-export type GameId = (typeof GAMES)[number]['id']
+export type TabLabels = Record<LiveTab, string>
 
-export const isGame = (name: string): name is GameId => GAMES.some(game => game.id === name)
+/** Cells between two tabs, and between the live tabs and the version. */
+export const TAB_GAP = 2
+/** The glyph column before a release's heading (its new mark): its text starts past it. */
+export const MARK_CELLS = 2
+/** Where a release's notes wrap to: under the heading's text, past their own `· `. */
+export const NOTE_INDENT = MARK_CELLS + 2
 
-/** What a page is called in a message: `learn`, `games` (the games page) or `games/<id>`. */
-export function pageLabel(page: string): string {
-  if (page === 'learn') return 'Learn'
-  if (page === 'games') return 'the games'
-  const game = GAMES.find(one => `games/${one.id}` === page)
-  return game ? game.label : page
-}
+// Which tab gives up its count first when the tabs don't fit: a live test count goes last.
+const SHORTEN_ORDER: readonly LiveTab[] = ['learn', 'phases', 'tests']
 
 /** An 18-cell bar of █ and ░; all ░ while the ratio is unknown. */
 export function bar(ratio: number | null, cells = BAR_CELLS): string {
@@ -61,6 +57,41 @@ export function learnLabel(learn: LearnStatus | null): string {
   return 'Learn'
 }
 
+/** The three live tabs' labels in full: with their counts. */
+export const tabLabels = (plan: PhasePlan | null, runs: readonly TestRun[], learn: LearnStatus | null): TabLabels => ({
+  phases: phasesLabel(plan),
+  tests: testsLabel(runs),
+  learn: learnLabel(learn),
+})
+
+/** The same labels with their counts left out, as the WPF panel shortens them: a live run or build keeps its ●. */
+export function shortTabLabels(runs: readonly TestRun[], learn: LearnStatus | null): TabLabels {
+  const isRunning = runs.some(run => run.status === 'running')
+  return {
+    phases: 'Phases',
+    tests: isRunning ? 'Tests ●' : testsLabel(runs),
+    learn: learn?.build?.state === 'running' ? 'Learn ●' : 'Learn',
+  }
+}
+
+/**
+ * The labels the tab row has room for in `columns` cells, with the version (`version`,
+ * its new mark included) at the right: the full ones while they fit, else one tab at a
+ * time gives up its count (Learn, then Phases, then Tests). `rows` is 2 when even the
+ * short ones don't fit and the version drops to a row of its own; 1 while the width is
+ * unknown.
+ */
+export function fitTabs(full: TabLabels, short: TabLabels, version: string, columns: number): { labels: TabLabels; rows: number } {
+  const width = (labels: TabLabels) => labels.phases.length + labels.tests.length + labels.learn.length + 3 * TAB_GAP + version.length
+  let labels: TabLabels = { ...full }
+  if (!(columns > 0)) return { labels, rows: 1 }
+  for (const tab of SHORTEN_ORDER) {
+    if (width(labels) <= columns) return { labels, rows: 1 }
+    labels = { ...labels, [tab]: short[tab] }
+  }
+  return { labels, rows: width(labels) <= columns ? 1 : 2 }
+}
+
 /** The run's mark: ● while running (red once anything failed), ✓ passed, ✗ failed. */
 export function runMark(run: TestRun): { glyph: string; color: 'success' | 'error' | undefined } {
   if (run.status === 'running') return { glyph: '●', color: run.failed > 0 ? 'error' : undefined }
@@ -85,9 +116,10 @@ export const buildRatio = (build: LearnBuild) => (build.total > 0 ? build.done /
 /**
  * Which tab comes to the front after a change, as the WPF and Mac panels pick it.
  * A tab the person clicked (`manual`) stays in front until a new newest run (it
- * brings Tests forward) or a new plan title (Phases) clears it. Without one: no
- * plan but some runs, Tests; no runs while Tests is in front, back to Phases; only
- * a Learn build going, Learn. Releases is never picked for the person.
+ * brings Tests forward) or a new plan title (Phases) clears it; Releases, once
+ * opened, stays through both, until the person picks another tab. Without a click:
+ * no plan but some runs, Tests; no runs while Tests is in front, back to Phases;
+ * only a Learn build going, Learn. Releases is never picked for the person.
  */
 export function frontTab(options: {
   current: Tab
@@ -102,6 +134,7 @@ export function frontTab(options: {
   const focus = runs.at(-1)?.id ?? null
   const planTitle = hasPlan(plan) ? plan.title : null
   const isBuilding = learn?.build !== null && learn?.build !== undefined
+  if (manual === 'releases') return { tab: 'releases', manual }
   if (focus !== null && focus !== lastFocus) return { tab: 'tests', manual: null }
   if (planTitle !== null && planTitle !== lastPlanTitle) return { tab: 'phases', manual: null }
   if (manual !== null) return { tab: manual, manual }
@@ -134,14 +167,24 @@ export function wrappedRows(text: string, width: number): number {
 }
 
 /**
+ * The newest runs an inline pane has room for in `rows`, two rows each, and whether
+ * the totals line under them fits too: at least one run always shows.
+ */
+export function fitRuns(count: number, rows: number): { shown: number; hasFooter: boolean } {
+  if (count <= 0) return { shown: 0, hasFooter: false }
+  const hasFooter = rows >= 3
+  return { shown: Math.min(count, Math.max(1, Math.floor((rows - (hasFooter ? 1 : 0)) / 2))), hasFooter }
+}
+
+/**
  * The releases an inline pane has room for in `rows`, newest first: each takes its
- * heading and its notes (indented by two, wrapped at `columns` when known), with a
- * blank row between two. When some are left out, their "+N earlier" line under the
- * last one shown takes a row. The newest always shows.
+ * heading (one row, cut to fit) and its notes (`· note`, wrapped under the note's own
+ * text at `columns` when known), with a blank row between two. When some are left
+ * out, their "+N earlier" line under the last one shown takes a row. The newest
+ * always shows.
  */
 export function fitReleases(releases: readonly Release[], rows: number, columns = 0): Release[] {
-  const height = (release: Release) =>
-    release.notes.reduce((sum, note) => sum + wrappedRows(note, columns - 2), wrappedRows(releaseLine(release), columns))
+  const height = (release: Release) => release.notes.reduce((sum, note) => sum + wrappedRows(note, columns - NOTE_INDENT), 1)
   const fit = (room: number) => {
     const shown: Release[] = []
     let used = 0
@@ -168,7 +211,7 @@ export function collapsedLine(
   if (tab === 'releases') {
     const newest = releases[0]
     if (!newest) return 'No releases listed.'
-    return newest.notes[0] ? `${releaseLine(newest)}: ${newest.notes[0]}` : releaseLine(newest)
+    return newest.notes[0] ? `v${newest.version} · ${newest.notes[0]}` : releaseLine(newest)
   }
   if (tab === 'tests') {
     const run = runs.at(-1)

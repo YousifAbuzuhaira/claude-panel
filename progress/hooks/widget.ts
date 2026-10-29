@@ -7,6 +7,7 @@
 import type { PhasePlan, TestRun } from '../types'
 import { runCount, runRatio, runTotals } from './format'
 import type { LearnStatus } from './learn'
+import { LEARN_SCRIPT } from './pages'
 import { phaseCounts } from './phases'
 
 const POWERSHELL = '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
@@ -83,15 +84,6 @@ export function widgetArgv(options: {
   return argv
 }
 
-// The WPF window behind each of /learn and /games <name> on WSL, as the panel opens them.
-export const WINDOW_SCRIPTS: Record<string, string> = {
-  learn: 'Learn.ps1',
-  'games/sudoku': 'Sudoku.ps1',
-  'games/2048': 'Game2048.ps1',
-  'games/typing': 'TypeTest.ps1',
-  'games/chess': 'ChessPuzzles.ps1',
-}
-
 // A course id as Learn's helper writes it: safe to pass through bash and on to Windows unquoted.
 const COURSE_ID = /^[\w.-]{1,80}$/
 
@@ -118,7 +110,7 @@ export function windowArgv(options: {
   ]
   if (typeof ownerHwnd === 'number' && Number.isSafeInteger(ownerHwnd) && ownerHwnd > 0) argv.push('-OwnerHwnd', String(ownerHwnd))
   // Only Learn takes a view and a course: a game would refuse the unknown parameter and not open.
-  if (script === WINDOW_SCRIPTS.learn) {
+  if (script === LEARN_SCRIPT) {
     if (view) argv.push('-View', view)
     if (courseId && COURSE_ID.test(courseId)) argv.push('-CourseId', courseId)
   }
