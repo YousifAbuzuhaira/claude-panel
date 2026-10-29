@@ -177,10 +177,14 @@ function readBody(req) {
   });
 }
 
-const sameToken = (given, token) => {
-  if (typeof given !== 'string' || given.length !== token.length) return false;
-  return timingSafeEqual(Buffer.from(given), Buffer.from(token));
-};
+// Only 64 hex digits are ever compared: anything else (other bytes, another length) can't throw.
+const sameToken = (given, token) => typeof given === 'string' && /^[0-9a-f]{64}$/.test(given) && timingSafeEqual(Buffer.from(given), Buffer.from(token));
+
+// One-time addresses for the browser: the token never goes on a command line, where any user
+// on the machine can read it. `open` asks for one, the browser opens /launch/<nonce>, and the
+// server answers once, within a minute, with a redirect to the page and its token in the #hash.
+const LAUNCH_MS = 60_000;
+const launches = new Map();
 
 function serve() {
   const token = randomBytes(32).toString('hex');
@@ -192,7 +196,16 @@ function serve() {
   };
   const helper = startHelper(broadcast);
 
-  const server = createServer(async (req, res) => {
+  const server = createServer((req, res) => {
+    // One bad request answers 400 or 500; it never takes the server down.
+    handle(req, res).catch(error => {
+      const isBad = error instanceof URIError || error instanceof SyntaxError;
+      if (!res.headersSent) res.writeHead(isBad ? 400 : 500, { 'Content-Type': 'text/plain' });
+      res.end(isBad ? 'bad request' : 'server error');
+    });
+  });
+
+  const handle = async (req, res) => {
     lastActive = Date.now();
     const { port } = server.address();
     const self = `127.0.0.1:${port}`;
@@ -214,6 +227,14 @@ function serve() {
       if (!sameToken(given, token)) return send(401, { error: 'missing or wrong token' });
 
       if (path === '/api/ping') return send(200, { ok: true, pid: process.pid });
+
+      if (path === '/api/launch' && req.method === 'POST') {
+        const page = String(JSON.parse((await readBody(req)) || '{}').page || '');
+        if (!/^(learn|games\/(sudoku|2048|typing|chess))\/$/.test(page)) return send(400, { error: 'no such page' });
+        const nonce = randomBytes(16).toString('hex');
+        launches.set(nonce, { page, until: Date.now() + LAUNCH_MS });
+        return send(200, { nonce });
+      }
 
       if (path === '/api/events' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
@@ -265,6 +286,14 @@ function serve() {
 
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, { error: 'GET only' });
 
+    const launch = /^\/launch\/([0-9a-f]{32})$/.exec(path);
+    if (launch) {
+      const target = launches.get(launch[1]);
+      launches.delete(launch[1]);
+      if (!target || Date.now() > target.until) return send(403, 'This link has expired: run /learn again.', 'text/plain');
+      return send(302, '', 'text/plain', { Location: `/${target.page}#token=${token}` });
+    }
+
     const engine = /^\/engine\/([\w.-]+)$/.exec(path);
     if (engine) {
       if (!STOCKFISH[engine[1]]) return send(404, 'not found', 'text/plain');
@@ -289,7 +318,7 @@ function serve() {
     // Pages run only their own scripts: a link or text from a course can never run code.
     const policy = extname(file) === '.html' ? { 'Content-Security-Policy': CSP } : {};
     return send(200, readFileSync(file), TYPES[extname(file)] || 'application/octet-stream', policy);
-  });
+  };
 
   server.listen(0, '127.0.0.1', () => {
     const { port } = server.address();
@@ -314,6 +343,7 @@ function serve() {
     }
     process.exit(0);
   };
+  process.on('unhandledRejection', error => process.stderr.write(`claude-panel: ${error?.stack || error}\n`));
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 }
@@ -327,6 +357,33 @@ function readRecord() {
   } catch {
     return null;
   }
+}
+
+/** A one-time /launch/<nonce> address for `page`, from the running server. */
+function launchNonce(record, page) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ page });
+    const req = httpRequest(
+      { host: '127.0.0.1', port: record.port, path: '/api/launch', method: 'POST', timeout: 3000,
+        headers: { 'X-Learn-Token': record.token, Host: `127.0.0.1:${record.port}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+      res => {
+        let text = '';
+        res.on('data', chunk => { text += chunk; });
+        res.on('end', () => {
+          try {
+            const { nonce } = JSON.parse(text);
+            if (typeof nonce === 'string') resolve(nonce);
+            else reject(new Error('the server gave no launch link'));
+          } catch (error) {
+            reject(error);
+          }
+        });
+      },
+    );
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('the server did not answer')));
+    req.end(body);
+  });
 }
 
 function ping(record) {
@@ -429,7 +486,9 @@ async function open(page, terminal = {}) {
       window.unref();
       shown = 'window';
     } else {
-      const [command, args] = browserArgv(url);
+      // A one-time link, so the token never sits on the browser's command line.
+      const nonce = await launchNonce(record, target);
+      const [command, args] = browserArgv(`http://127.0.0.1:${record.port}/launch/${nonce}`);
       spawn(command, args, { detached: true, stdio: 'ignore' }).unref();
     }
   }
