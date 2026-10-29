@@ -71,6 +71,9 @@ html.native { --titlebar: 28px; }
 .ui-mark:hover { background: var(--hover); color: var(--ink); }
 .ui-mark:active { background: var(--pressed); }
 .ui-mark.on { color: var(--accent); }
+/* An icon drawn in a mark (the games controller): a line drawing in the mark's colour. */
+.ui-mark .ui-icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.ui-mark .ui-icon .dot { fill: currentColor; stroke: none; }
 
 /* Buttons: primary (accent), secondary (a surface), plain (text). */
 .ui-btn {

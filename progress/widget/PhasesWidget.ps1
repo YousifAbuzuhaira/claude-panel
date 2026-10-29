@@ -588,18 +588,30 @@ function Update-LookStrip {
 Update-LookStrip
 
 # Under the games mark: Learn and the games, each a click away (brought forward when already open).
-$gamesStrip = New-Object System.Windows.Controls.WrapPanel
+$gamesStrip = New-Object System.Windows.Controls.StackPanel
 $gamesStrip.Margin = New-Gap 0 $GROUP_GAP 0 $GROUP_GAP
 $gamesStrip.Visibility = 'Collapsed'
+$gameChipRow = New-Object System.Windows.Controls.WrapPanel
+[void]$gamesStrip.Children.Add($gameChipRow)
 $gameChips = @()
 foreach ($sibling in $UI_SIBLINGS) {
   $chip = New-UiChip $sibling.label $false ('Open ' + $sibling.label) -Mono
   # Learn is not a game: a wider gap after it.
   if ($sibling.id -eq 'learn') { $chip.Margin = New-Gap 0 0 12 0 } else { $chip.Margin = New-Gap 0 0 6 0 }
   $chip.Tag.sibling = $sibling.id
-  [void]$gamesStrip.Children.Add($chip)
+  [void]$gameChipRow.Children.Add($chip)
   $gameChips += $chip
 }
+# And the same in the browser (the web version, served from WSL).
+$browserLink = New-Text ("In the browser " + [string][char]0x2197) $blue
+$browserLink.Cursor = [System.Windows.Input.Cursors]::Hand
+$browserLink.ToolTip = 'Open Learn and the games in your web browser'
+$browserLink.HorizontalAlignment = 'Left'
+$browserLink.Margin = New-Gap 0 8 0 0
+$browserLink.Add_MouseEnter({ param($sender, $e) $sender.TextDecorations = [System.Windows.TextDecorations]::Underline })
+$browserLink.Add_MouseLeave({ param($sender, $e) $sender.TextDecorations = $null })
+$browserLink.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
+[void]$gamesStrip.Children.Add($browserLink)
 
 $rule = New-Object System.Windows.Controls.Border
 $rule.Height = 1
@@ -1274,6 +1286,13 @@ foreach ($chip in $gameChips) {
     Open-PanelSibling $sender.Tag.sibling ''
   })
 }
+$browserLink.Add_MouseLeftButtonUp({
+  param($sender, $e)
+  $e.Handled = $true
+  Set-Strip ''
+  Update-Panel
+  Open-InBrowser 'learn'
+})
 $customLink.Add_MouseLeftButtonUp({
   param($sender, $e)
   $e.Handled = $true

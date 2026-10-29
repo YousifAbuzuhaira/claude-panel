@@ -37,7 +37,22 @@ const WEB_FILE = join(CONFIG_DIR, 'web.json');
 const PREFS_FILE = join(CONFIG_DIR, 'web-prefs.json');
 const SAVES_DIR = process.env.CLAUDE_PANEL_SAVES || join(homedir(), '.config', 'claude-panel', 'games');
 // The colour scheme and see-through every window shares (the shape is in shared/theme.js).
-const APPEARANCE_FILE = process.env.CLAUDE_PANEL_APPEARANCE || join(homedir(), '.config', 'claude-panel', 'appearance.json');
+// Inside WSL it is the Windows windows' own file (%LOCALAPPDATA%\ClaudePhases), so the browser
+// pages and the PowerShell windows wear one scheme.
+const APPEARANCE_FILE = process.env.CLAUDE_PANEL_APPEARANCE || windowsAppearanceFile() || join(homedir(), '.config', 'claude-panel', 'appearance.json');
+
+/** On WSL, %LOCALAPPDATA%\ClaudePhases\appearance.json as a WSL path; null anywhere else. */
+function windowsAppearanceFile() {
+  if (!process.env.WSL_DISTRO_NAME) return null;
+  try {
+    const local = spawnSync('cmd.exe', ['/d', '/c', 'echo %LOCALAPPDATA%'], { cwd: '/mnt/c', encoding: 'utf8', timeout: 5000 }).stdout.trim();
+    if (!/^[A-Za-z]:\\/.test(local)) return null;
+    const path = spawnSync('wslpath', ['-u', local], { encoding: 'utf8', timeout: 5000 }).stdout.trim();
+    return path && existsSync(path) ? join(path, 'ClaudePhases', 'appearance.json') : null;
+  } catch {
+    return null;
+  }
+}
 const RELEASES_FILE = join(HERE, '..', 'releases.json');
 const PLUGIN_FILE = join(HERE, '..', '.claude-plugin', 'plugin.json');
 const STOCKFISH_DIR = join(homedir(), '.cache', 'claude-learn', 'stockfish');

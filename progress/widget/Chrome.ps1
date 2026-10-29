@@ -16,7 +16,8 @@ $UI_CARD_RADIUS = 10
 $UI_MARK_SIZE = 22
 $UI_GLYPHS = @{
   close = [string][char]0x2715
-  games = [string][char]0x25A6
+  # A game controller: Segoe MDL2 Assets' Game icon (New-UiMark draws it in that font).
+  games = [string][char]0xE7FC
   look = [string][char]0x25D0
   collapse = [string][char]0x25BC
   expand = [string][char]0x25B6
@@ -28,6 +29,9 @@ $UI_GLYPHS = @{
   middot = [string][char]0x00B7
   arrow = [string][char]0x2192
 }
+
+# Glyphs drawn from an icon font rather than the text font.
+$UI_GLYPH_FONTS = @{ ([string][char]0xE7FC) = (New-Object System.Windows.Media.FontFamily('Segoe MDL2 Assets')) }
 
 # Every window the panel can open: one list, so each window can open the others.
 # Learn is one per machine; a game is one per chat (its window title ends in :<session>).
@@ -93,6 +97,7 @@ function New-UiMark([string]$Glyph, [string]$Tip, [double]$Size = 0, [double]$Gl
   $glyphText.Text = $Glyph
   $glyphText.FontSize = $GlyphSize
   $glyphText.FontFamily = $UI_SANS
+  if ($UI_GLYPH_FONTS.ContainsKey($Glyph)) { $glyphText.FontFamily = $UI_GLYPH_FONTS[$Glyph] }
   $glyphText.Foreground = Get-UiBrush 'dim'
   $glyphText.HorizontalAlignment = 'Center'
   $glyphText.VerticalAlignment = 'Center'
@@ -570,6 +575,25 @@ function Open-Sibling([string]$Id, [int64]$OwnerHwnd, [string]$SessionId, [strin
     $start.WorkingDirectory = $env:TEMP
     $child = [System.Diagnostics.Process]::Start($start)
     if ($child) { [void][ClaudeUiWin32]::AllowSetForegroundWindow($child.Id) }
+  } catch {}
+}
+
+# Opens a page of the web version ('learn', 'games' or 'games/<name>') in the browser: the
+# plugin's web server runs inside WSL, started (or found) by web/web.sh, which opens the page.
+# These windows run from \\wsl.localhost\<distro>\...\widget, which names the distro and the path.
+function Open-InBrowser([string]$Page = 'learn') {
+  try {
+    $match = [regex]::Match([string]$PSScriptRoot, '^\\\\wsl(?:\.localhost|\$)\\([^\\]+)(\\.*)$', 'IgnoreCase')
+    if (-not $match.Success) { return }
+    $distro = $match.Groups[1].Value
+    $webScript = ($match.Groups[2].Value -replace '\\', '/') -replace '/widget$', '/web/web.sh'
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = 'wsl.exe'
+    $start.Arguments = "-d $distro -e bash `"$webScript`" open $Page"
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.WorkingDirectory = $env:TEMP
+    [void][System.Diagnostics.Process]::Start($start)
   } catch {}
 }
 
