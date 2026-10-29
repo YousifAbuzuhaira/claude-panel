@@ -164,15 +164,18 @@ describe('the tab in front', () => {
     const short = shortTabLabels([live], learn)
     expect(full).toEqual({ phases: 'Phases 12/14', tests: 'Tests ● 1234/5678', learn: 'Learn 12/40' })
     expect(short).toEqual({ phases: 'Phases', tests: 'Tests ●', learn: 'Learn ●' })
-    // 12 + 17 + 11, three gaps of 2 and 'v0.3.0 ●': 54 cells.
-    expect(fitTabs(full, short, 'v0.3.0 ●', 54)).toEqual({ labels: full, rows: 1 })
-    expect(fitTabs(full, short, 'v0.3.0 ●', 53)).toEqual({ labels: { ...full, learn: 'Learn ●' }, rows: 1 })
-    expect(fitTabs(full, short, 'v0.3.0 ●', 46)).toEqual({ labels: { ...full, phases: 'Phases', learn: 'Learn ●' }, rows: 1 })
-    expect(fitTabs(full, short, 'v0.3.0 ●', 34)).toEqual({ labels: short, rows: 1 })
+    // 12 + 17 + 11, three gaps of 2 and 'v0.3.0' with room for its ' ●': 54 cells.
+    expect(fitTabs(full, short, 'v0.3.0', 54)).toEqual({ labels: full, rows: 1 })
+    expect(fitTabs(full, short, 'v0.3.0', 53)).toEqual({ labels: { ...full, learn: 'Learn ●' }, rows: 1 })
+    // 52 holds the full labels and the bare version, but the dot's room is kept whether it
+    // shows or not, so clearing it never brings a count back.
+    expect(fitTabs(full, short, 'v0.3.0', 52)).toEqual({ labels: { ...full, learn: 'Learn ●' }, rows: 1 })
+    expect(fitTabs(full, short, 'v0.3.0', 46)).toEqual({ labels: { ...full, phases: 'Phases', learn: 'Learn ●' }, rows: 1 })
+    expect(fitTabs(full, short, 'v0.3.0', 34)).toEqual({ labels: short, rows: 1 })
     // Narrower still, the version goes to a row of its own.
-    expect(fitTabs(full, short, 'v0.3.0 ●', 30)).toEqual({ labels: short, rows: 2 })
+    expect(fitTabs(full, short, 'v0.3.0', 30)).toEqual({ labels: short, rows: 2 })
     // The width unknown: the full labels on one row.
-    expect(fitTabs(full, short, 'v0.3.0 ●', 0)).toEqual({ labels: full, rows: 1 })
+    expect(fitTabs(full, short, 'v0.3.0', 0)).toEqual({ labels: full, rows: 1 })
     // A finished run keeps its mark when short.
     expect(shortTabLabels([{ ...RUN('r1'), status: 'failed' }], null)).toEqual({ phases: 'Phases', tests: 'Tests ✗', learn: 'Learn' })
   })
@@ -293,10 +296,33 @@ describe('the pane', () => {
     expect((await wide.find({ key: 'tab:tests' }))?.props.dimColor).toBe(true)
     await wide.unmount()
 
-    // 'Phases 1/3', 'Tests', 'Learn' and 'v0.2.0' with their gaps take 32 cells: in 30, Phases gives up its count.
+    // 'Phases 1/3', 'Tests', 'Learn' and 'v0.2.0' with their gaps and room for its dot take 34 cells: in 30, Phases gives up its count.
     const narrow = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 30 } })
     expect((await narrow.find({ key: 'tab:phases' }))?.props.label).toBe('Phases')
     await narrow.unmount()
+  })
+
+  test('opening Releases clears the dot without re-fitting the tab row', async ($, on) => {
+    const { clock } = answerHost(on, { panel: 'comes-up', terminal: 'iTerm.app' })
+    await $.tool.call({ tool: 'mcp__progress__phases_write', title: 'Ship it', phases: PLAN })
+    // 33 cells: 'Phases 1/3', 'Tests', 'Learn' and 'v0.2.0' take 32, but with the dot's room 34,
+    // so Phases gives up its count while the dot shows, and keeps it given up once it clears.
+    const tight = { ...PANE, surface: 'terminal' as const, props: { ...PANE.props, bodyColumns: 33 } }
+    const before = await $.ui.mount(tight)
+    expect((await before.find({ key: 'tab:releases' }))?.props.label).toBe('v0.2.0, new')
+    expect(await before.find({ type: 'Text', text: /^ ●$/ })).toBeDefined()
+    expect((await before.find({ key: 'tab:phases' }))?.props.label).toBe('Phases')
+    await before.press({ key: 'tab:releases' })
+    await clock.settle()
+    await before.unmount()
+
+    const after = await $.ui.mount(tight)
+    expect((await after.find({ key: 'tab:releases' }))?.props.label).toBe('v0.2.0')
+    expect(await after.find({ type: 'Text', text: /^ ●$/ })).toBeUndefined()
+    expect((await after.find({ key: 'tab:phases' }))?.props.label).toBe('Phases')
+    expect((await after.find({ key: 'tab:tests' }))?.props.label).toBe('Tests')
+    expect((await after.find({ key: 'tab:learn' }))?.props.label).toBe('Learn')
+    await after.unmount()
   })
 
   test('a version seen in an earlier session shows no dot', async ($, on) => {
@@ -466,6 +492,9 @@ describe('the pane', () => {
     expect((await learnTab.find({ key: 'open:learn' }))?.text).toBe('Open Learn')
     const keys = (await learnTab.findAll({ type: 'Button' })).map(button => button.key ?? '')
     expect(keys.filter(key => key.startsWith('game:'))).toEqual(['game:sudoku', 'game:2048', 'game:typing', 'game:chess'])
+    // The label never shrinks, so a games row that wraps can't break it into 'Game' / 's'.
+    expect((await learnTab.find({ key: 'games:label' }))?.props.flexShrink).toBe(0)
+    expect(await learnTab.find({ type: 'Text', text: 'Games' })).toMatchObject({ props: { dimColor: true } })
     await learnTab.press({ key: 'game:chess' })
     // The window opens in the background of the press.
     await clock.settle()

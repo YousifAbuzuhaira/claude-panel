@@ -21,6 +21,8 @@ export type TabLabels = Record<LiveTab, string>
 
 /** Cells between two tabs, and between the live tabs and the version. */
 export const TAB_GAP = 2
+/** The accent mark after the version while there are release notes not opened yet. */
+export const UNSEEN_MARK = ' ●'
 /** The glyph column before a release's heading (its new mark): its text starts past it. */
 export const MARK_CELLS = 2
 /** Where a release's notes wrap to: under the heading's text, past their own `· `. */
@@ -75,14 +77,16 @@ export function shortTabLabels(runs: readonly TestRun[], learn: LearnStatus | nu
 }
 
 /**
- * The labels the tab row has room for in `columns` cells, with the version (`version`,
- * its new mark included) at the right: the full ones while they fit, else one tab at a
- * time gives up its count (Learn, then Phases, then Tests). `rows` is 2 when even the
+ * The labels the tab row has room for in `columns` cells, with the version (`version`)
+ * at the right: the full ones while they fit, else one tab at a time gives up its count
+ * (Learn, then Phases, then Tests). The version is always measured with its unseen mark,
+ * shown or not, so the row doesn't re-fit when the mark clears. `rows` is 2 when even the
  * short ones don't fit and the version drops to a row of its own; 1 while the width is
  * unknown.
  */
 export function fitTabs(full: TabLabels, short: TabLabels, version: string, columns: number): { labels: TabLabels; rows: number } {
-  const width = (labels: TabLabels) => labels.phases.length + labels.tests.length + labels.learn.length + 3 * TAB_GAP + version.length
+  const versionCells = version.length + UNSEEN_MARK.length
+  const width = (labels: TabLabels) => labels.phases.length + labels.tests.length + labels.learn.length + 3 * TAB_GAP + versionCells
   let labels: TabLabels = { ...full }
   if (!(columns > 0)) return { labels, rows: 1 }
   for (const tab of SHORTEN_ORDER) {

@@ -7,7 +7,7 @@ import type { LearnStatus } from './learn'
 import { GAMES, isGame, openingText, windowScript } from './pages'
 import {
   bar, buildColor, buildRatio, collapsedLine, fitReleases, fitRuns, fitTabs, frontTab, MARK_CELLS, PANE_ID, runMark,
-  shortTabLabels, statusLine, TAB_GAP, tabLabels, testsFooter, wrappedRows,
+  shortTabLabels, statusLine, TAB_GAP, tabLabels, testsFooter, UNSEEN_MARK, wrappedRows,
 } from './pane'
 import type { LiveTab, Tab } from './pane'
 import { runCount, runRatio } from './format'
@@ -692,8 +692,9 @@ export const register: Register = on => {
     const isUnseen = isReleaseUnseen(newestRelease(releases, pluginVersion), seenRelease)
     const versionText = releasesLabel(pluginVersion)
     const isInline = e.props.placement === 'inline'
-    // The labels the row has room for: the counts give way before the row wraps.
-    const fitted = fitTabs(tabLabels(plan, runs, learn), shortTabLabels(runs, learn), `${versionText}${isUnseen ? ' ●' : ''}`, e.props.bodyColumns)
+    // The labels the row has room for: the counts give way before the row wraps. The
+    // version is measured with its dot either way, so opening Releases moves no tab.
+    const fitted = fitTabs(tabLabels(plan, runs, learn), shortTabLabels(runs, learn), versionText, e.props.bodyColumns)
     // Inline, the rows the layout gave the body: less the tab row and the gap under it, what a tab may draw.
     const room = Math.max(1, (e.props.scroll?.bodyRows ?? PANE_ROWS) - fitted.rows - 1)
     // A click puts the tab in front and keeps it there until a new run or a new plan
@@ -733,7 +734,7 @@ export const register: Register = on => {
         onPress={show('releases')}
       >
         {versionLook}
-        {isUnseen && <Text color="claude"> ●</Text>}
+        {isUnseen && <Text color="claude">{UNSEEN_MARK}</Text>}
       </Button>
     )
 
@@ -871,9 +872,12 @@ export const register: Register = on => {
               {course ? 'Carry on reading' : 'Open Learn'}
             </Button>
           </Box>
-          {/* The games on their own row, which wraps rather than clips in a narrow pane: under the first game, not the label. */}
+          {/* The games on their own row, which wraps rather than clips in a narrow pane: under the first game, not the label,
+              which never shrinks, so it stays one word. */}
           <Box flexDirection="row" columnGap={1}>
-            <Text dimColor>Games</Text>
+            <Box key="games:label" flexShrink={0}>
+              <Text dimColor>Games</Text>
+            </Box>
             <Box flexDirection="row" flexWrap="wrap" flexShrink={1} columnGap={1}>
               {GAMES.map(game => (
                 <Button key={`game:${game.id}`} onPress={open(`games/${game.id}`)}>{game.label}</Button>
