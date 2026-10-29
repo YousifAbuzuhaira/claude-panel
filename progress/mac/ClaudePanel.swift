@@ -19,6 +19,11 @@
 // sits at the top-right of the chat's terminal window, following it as it moves. Like
 // the WPF panel it prints one JSON line per event (ready, closed, alive), exits on its ✕,
 // and exits two seconds after the state file goes.
+//
+// Every window wears the colour scheme in ~/.config/claude-panel/appearance.json (web/server.mjs
+// serves the same file to the pages). Windows are never faded as a whole: they are clear, and
+// each page's background carries its group's see-through (panel, learn, games), so text stays
+// sharp. The panel's ◐ strip and ⌘[ / ⌘] in a Learn or game window write that file.
 import AppKit
 import WebKit
 
@@ -56,10 +61,78 @@ func readOptions() -> Options {
     return options
 }
 
-/// How see-through a window is (1: solid), kept under `key`; 85% until the person changes it.
-func savedOpacity(_ key: String) -> CGFloat {
-    let value = UserDefaults.standard.double(forKey: key)
-    return value >= 0.3 && value <= 1 ? CGFloat(value) : 0.85
+// --- The appearance every window shares -------------------------------------------------
+
+/// How see-through each group of windows is when nothing is saved: today's look (shared/theme.js DEFAULT_OPACITY).
+let defaultOpacity: [String: Double] = ["panel": 0.92, "learn": 0.96, "games": 0.95]
+/// Below this a clear window's empty background no longer takes clicks (shared/theme.js MIN_OPACITY).
+let minOpacity = 0.15
+
+/// ~/.config/claude-panel/appearance.json, or CLAUDE_PANEL_APPEARANCE (as web/server.mjs reads it).
+func appearanceURL() -> URL {
+    if let path = ProcessInfo.processInfo.environment["CLAUDE_PANEL_APPEARANCE"], !path.isEmpty {
+        return URL(fileURLWithPath: path)
+    }
+    return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/claude-panel/appearance.json")
+}
+
+/// A JSON file's top-level object, or nil when it is missing or not an object. Data, never code.
+func readJSONObject(_ url: URL) -> [String: Any]? {
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+}
+
+func readAppearance() -> [String: Any]? { readJSONObject(appearanceURL()) }
+
+/// When a file last changed (time and size): read again only when this differs.
+func fileStamp(_ url: URL) -> String {
+    guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else { return "none" }
+    let time = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+    let size = (attributes[.size] as? NSNumber)?.int64Value ?? -1
+    return "\(time) \(size)"
+}
+
+func isHexColor(_ text: String) -> Bool {
+    text.range(of: "^#[0-9A-Fa-f]{6}$", options: .regularExpression) != nil
+}
+
+/// The fields every reader knows, field by field from `value`, else from `saved`: {v, preset,
+/// colors {bg, accent, text}, opacity {panel, learn, games}}. Readers check them again
+/// (theme.js parseAppearance, Theme.ps1 Read-Appearance); a field left out is today's look.
+func cleanAppearance(_ value: [String: Any], over saved: [String: Any]?) -> [String: Any] {
+    var out: [String: Any] = ["v": 1]
+    let presetName = (value["preset"] as? String) ?? (saved?["preset"] as? String) ?? "ember"
+    let preset = String(presetName.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }.prefix(40))
+    out["preset"] = preset.isEmpty ? "ember" : preset
+    let givenColors = value["colors"] as? [String: Any]
+    let savedColors = saved?["colors"] as? [String: Any]
+    var colors: [String: String] = [:]
+    for key in ["bg", "accent", "text"] {
+        let candidates = [givenColors?[key] as? String, savedColors?[key] as? String].compactMap { $0 }
+        if let hex = candidates.first(where: isHexColor) { colors[key] = hex.uppercased() }
+    }
+    if !colors.isEmpty { out["colors"] = colors }
+    let givenOpacity = value["opacity"] as? [String: Any]
+    let savedOpacity = saved?["opacity"] as? [String: Any]
+    var opacity: [String: Double] = [:]
+    for key in ["panel", "learn", "games"] {
+        let number = (givenOpacity?[key] as? NSNumber) ?? (savedOpacity?[key] as? NSNumber)
+        if let number, number.doubleValue.isFinite {
+            opacity[key] = (min(max(number.doubleValue, minOpacity), 1) * 100).rounded() / 100
+        }
+    }
+    if !opacity.isEmpty { out["opacity"] = opacity }
+    return out
+}
+
+/// Written whole and atomically (a temporary file, then a rename), as UTF-8 JSON with no BOM.
+@discardableResult
+func writeAppearance(_ value: [String: Any]) -> Bool {
+    let url = appearanceURL()
+    guard JSONSerialization.isValidJSONObject(value),
+          let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]) else { return false }
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    return (try? data.write(to: url, options: .atomic)) != nil
 }
 
 /// One window per id: a pid file in ~/.cache/claude-panel/windows/<id>.pid.
@@ -115,6 +188,26 @@ final class FloatingWindow: NSPanel {
     }
 }
 
+/// The title bar's empty part, over a page that fills the whole window (.fullSizeContentView):
+/// the page would take the mouse there, so this strip moves the window, and a double click
+/// zooms it (or minimizes it) as the person's system setting says.
+final class TitleBarStrip: NSView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        if event.clickCount == 2 {
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "Minimize": if window.styleMask.contains(.miniaturizable) { window.performMiniaturize(nil) }
+            case "None": break
+            default: if window.styleMask.contains(.resizable) { window.performZoom(nil) }
+            }
+            return
+        }
+        window.performDrag(with: event)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let options: Options
     var window: NSWindow!
@@ -127,16 +220,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var isPlacing = false
     let pin = SpacePin()
     var isAlwaysOnTop = false
+    /// The window's title follows the page's <title> as the person moves between pages.
+    var titleWatch: NSKeyValueObservation?
 
     init(options: Options) {
         self.options = options
     }
 
+    /// Which see-through this window takes from appearance.json: Learn's, or the games' (the hub included).
+    var opacityGroup: String { options.id == "learn" ? "learn" : "games" }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
 
+        // The page fills the window, title bar included (.fullSizeContentView): it is told the
+        // title bar's height, and that it is in the app (only here can its background be see-through).
+        let probe = NSRect(x: 0, y: 0, width: 400, height: 300)
+        let measured = NSWindow.frameRect(forContentRect: probe, styleMask: [.titled, .closable]).height - probe.height
+        let titleBar = measured >= 16 && measured <= 60 ? measured : 28
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        let native = "document.documentElement.classList.add('native');document.documentElement.style.setProperty('--titlebar','\(Int(titleBar.rounded()))px');"
+        config.userContentController.addUserScript(WKUserScript(source: native, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -147,7 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             // Stuck to the terminal: a floating panel on every Space, full-screen ones included.
             let floating = FloatingWindow(
                 contentRect: NSRect(origin: .zero, size: size),
-                styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
+                styleMask: [.titled, .closable, .resizable, .nonactivatingPanel, .fullSizeContentView],
                 backing: .buffered, defer: false)
             floating.isFloatingPanel = true
             floating.hidesOnDeactivate = false
@@ -158,15 +263,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         } else {
             window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: size),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered, defer: false)
         }
         window.title = options.title
-        window.alphaValue = savedOpacity("window.\(options.id).opacity")
+        // Clear, never faded as a whole: the page's own background carries the see-through, and
+        // no title-bar strip of a fixed colour sits over a light page.
+        window.alphaValue = 1
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.titlebarAppearsTransparent = true
-        window.backgroundColor = NSColor(red: 0.08, green: 0.085, blue: 0.1, alpha: 1)
-        window.contentView = webView
+        window.titleVisibility = .hidden
+
+        let content = NSView(frame: NSRect(origin: .zero, size: size))
+        webView.frame = content.bounds
+        webView.autoresizingMask = [.width, .height]
+        content.addSubview(webView)
+        // Right of the traffic lights, the title bar moves the window as it always did.
+        let lights = (window.standardWindowButton(.zoomButton)?.frame.maxX ?? 70) + 8
+        let strip = TitleBarStrip(frame: NSRect(x: lights, y: size.height - titleBar, width: max(0, size.width - lights), height: titleBar))
+        strip.autoresizingMask = [.width, .minYMargin]
+        content.addSubview(strip)
+        window.contentView = content
+        window.makeFirstResponder(webView)
         window.delegate = self
+        titleWatch = webView.observe(\.title, options: [.new]) { [weak self] view, _ in
+            guard let self = self, let title = view.title, !title.isEmpty else { return }
+            self.window.title = title
+        }
         let defaults = UserDefaults.standard
         let saved = NSSize(width: defaults.double(forKey: "window.\(options.id).width"), height: defaults.double(forKey: "window.\(options.id).height"))
         if saved.width >= 320 && saved.height >= 240 { window.setContentSize(saved) }
@@ -185,6 +309,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
         if let url = options.url { webView.load(URLRequest(url: url)) }
         try? "\(getpid()) \(options.url?.port ?? 0)".write(to: pidFile(options.id), atomically: true, encoding: .utf8)
+        // A deep link while this window is open (`web.sh open learn --view settings`): the server
+        // writes the path to <id>.open beside the pid file. Load it on this page's own origin,
+        // where the page keeps its token for the session.
+        let mailbox = pidFile(options.id).deletingPathExtension().appendingPathExtension("open")
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self, let text = try? String(contentsOf: mailbox, encoding: .utf8) else { return }
+            try? FileManager.default.removeItem(at: mailbox)
+            let path = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard path.hasPrefix("/"), !path.hasPrefix("//"), let base = self.webView.url,
+                  let target = URL(string: path, relativeTo: base) else { return }
+            self.webView.load(URLRequest(url: target))
+        }
         // A free-standing window comes forward; one stuck to the terminal leaves it in front.
         if !tracker.isKnown { NSApp.activate(ignoringOtherApps: true) }
     }
@@ -298,11 +434,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     @objc func reloadPage(_ sender: Any?) { webView.reload() }
 
-    /// ⌘[ more see-through, ⌘] more solid: 30% to 100%, kept per page.
+    /// ⌘[ more see-through, ⌘] more solid, by 10%: the background only (text stays solid), for every
+    /// Learn window or every game window at once, kept in appearance.json. This page shows it at
+    /// once; the others (and this one, fully) follow within two seconds (shared/look.js polls).
     func changeOpacity(_ step: CGFloat) {
-        let value = min(max(window.alphaValue + step, 0.3), 1)
-        window.alphaValue = value
-        UserDefaults.standard.set(Double(value), forKey: "window.\(options.id).opacity")
+        let group = opacityGroup
+        var saved = readAppearance() ?? [:]
+        var opacity = (saved["opacity"] as? [String: Any]) ?? [:]
+        let now = (opacity[group] as? NSNumber)?.doubleValue ?? defaultOpacity[group] ?? 1
+        opacity[group] = min(max(now + Double(step), minOpacity), 1)
+        saved["opacity"] = opacity
+        let next = cleanAppearance(saved, over: nil)
+        guard writeAppearance(next) else { return }
+        webView.callAsyncJavaScript(
+            "if (window.ClaudeTheme) window.ClaudeTheme.applyAppearance(a, g)",
+            arguments: ["a": next, "g": group], in: nil, in: .page, completionHandler: nil)
     }
 
     @objc func moreTransparent(_ sender: Any?) { changeOpacity(-0.1) }
@@ -513,11 +659,18 @@ final class SpacePin {
     }
 }
 
-/// A strip over the header's empty part: dragging it moves the panel (the page can't).
+/// A strip over the header's empty part (between the open/closed mark and the marks on the right,
+/// as the page reports them): dragging it moves the panel (the page can't); a double click opens
+/// or closes it, as on Windows.
 final class DragStrip: NSView {
     var onDragEnd: (() -> Void)?
+    var onDoubleClick: (() -> Void)?
     // performDrag follows the mouse until it is let go: only then is the new spot kept.
     override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            onDoubleClick?()
+            return
+        }
         window?.performDrag(with: event)
         onDragEnd?()
     }
@@ -532,8 +685,17 @@ final class ResizeGrip: NSView {
     var onReset: (() -> Void)?
     private var start = NSPoint.zero
 
+    /// The diagonal resize cursor macOS shows on window corners (asked for by name, so a macOS
+    /// without it gets the crosshair instead).
+    static let cursor: NSCursor = {
+        let name = Selector(("_windowResizeNorthEastSouthWestCursor"))
+        let cursorClass: AnyObject = NSCursor.self
+        if cursorClass.responds(to: name), let found = cursorClass.perform(name)?.takeUnretainedValue() as? NSCursor { return found }
+        return .crosshair
+    }()
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: ResizeGrip.cursor) }
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
@@ -583,8 +745,20 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
     var isCollapsed = false
     var resizeFrom: (width: CGFloat, height: CGFloat)?
     var wasSized = false
-    var shownHeight: CGFloat { isCollapsed || chosenHeight < 90 ? height : chosenHeight }
+    /// The tallest it may be while fitting its content: down to the terminal's bottom edge, no further.
+    var limit = CGFloat.greatestFiniteMagnitude
+    var shownHeight: CGFloat {
+        if isCollapsed { return height }
+        if chosenHeight >= 90 { return chosenHeight }
+        return min(height, limit)
+    }
     let margin: CGFloat = 12
+    var strip: DragStrip!
+    var grip: ResizeGrip!
+    /// Where the page's header row ends, where its open/closed mark ends and its marks begin (from
+    /// the right), and its grip's size, in points: the page posts them ('chrome') whenever they change.
+    var chrome: (header: CGFloat, left: CGFloat, icons: CGFloat, grip: CGFloat) = (33, 29, 77, 14)
+    var appearanceStamp = ""
 
     init(options: Options) {
         self.options = options
@@ -613,25 +787,34 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
         // own, which an ordinary window never joins. It shows only where the terminal is.
         panel.collectionBehavior = [.fullScreenAuxiliary]
         panel.delegate = self
-        panel.alphaValue = savedOpacity("panel.opacity")
+        // Never faded as a whole: the page's card fill carries the panel's see-through (appearance.json).
+        panel.alphaValue = 1
 
         let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         content.addSubview(webView)
-        let strip = DragStrip(frame: NSRect(x: 0, y: height - 30, width: width - 90, height: 30))
+        strip = DragStrip(frame: .zero)
         strip.autoresizingMask = [.minYMargin, .width]
         strip.onDragEnd = { [weak self] in self?.keepDraggedSpot() }
+        strip.onDoubleClick = { [weak self] in self?.webView.evaluateJavaScript("window.toggleCollapsed()", completionHandler: nil) }
         content.addSubview(strip)
-        let grip = ResizeGrip(frame: NSRect(x: 0, y: 0, width: 16, height: 16))
+        grip = ResizeGrip(frame: .zero)
         grip.autoresizingMask = [.maxXMargin, .maxYMargin]
         grip.onResize = { [weak self] dx, dy in self?.resize(dx: dx, dy: dy) }
         grip.onEnd = { [weak self] in self?.keepSize() }
         grip.onReset = { [weak self] in self?.resetSize() }
         content.addSubview(grip)
         panel.contentView = content
+        layoutChrome()
 
         if let html = options.html {
             let url = URL(fileURLWithPath: html)
-            webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+            // The page loads web/public/shared/theme.js and theme.css: it may read the whole plugin.
+            let parent = url.deletingLastPathComponent().deletingLastPathComponent()
+            var access = parent
+            if let root = options.root, url.standardizedFileURL.path.hasPrefix(URL(fileURLWithPath: root).standardizedFileURL.path) {
+                access = URL(fileURLWithPath: root, isDirectory: true)
+            }
+            webView.loadFileURL(url, allowingReadAccessTo: access)
         }
 
         Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }
@@ -643,6 +826,9 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
         case "loaded":
             isLoaded = true
             lastText = nil
+            pushPresets()
+            pushAppearance(force: true)
+            pushReleases()
             readState()
             place(force: true)
             sendEvent("ready")
@@ -651,17 +837,28 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
                 height = CGFloat(h)
                 if resizeFrom == nil { place(force: true) }
             }
+        case "chrome":
+            let number = { (key: String) -> CGFloat? in (body[key] as? NSNumber).map { CGFloat($0.doubleValue) } }
+            chrome = (header: number("header") ?? chrome.header, left: number("left") ?? chrome.left,
+                      icons: number("icons") ?? chrome.icons, grip: number("grip") ?? chrome.grip)
+            layoutChrome()
         case "collapsed":
             isCollapsed = body["value"] as? Bool ?? false
             place(force: true)
         case "open":
-            if let page = body["page"] as? String { openPage(page) }
-        case "opacity":
-            // ◐ steps through 100, 85, 70 and 55%.
-            let steps: [CGFloat] = [1, 0.85, 0.7, 0.55]
-            let now = steps.firstIndex(where: { abs($0 - panel.alphaValue) < 0.05 }) ?? 0
-            panel.alphaValue = steps[(now + 1) % steps.count]
-            UserDefaults.standard.set(Double(panel.alphaValue), forKey: "panel.opacity")
+            // A Learn view ("settings" from Custom colours, "course" from Carry on reading) or a game.
+            if let page = body["page"] as? String { openPage(page, view: body["view"] as? String, course: body["course"] as? String) }
+        case "appearance":
+            // A swatch or a see-through bar in the ◐ strip: every window follows the file.
+            if let value = body["value"] as? [String: Any], writeAppearance(cleanAppearance(value, over: readAppearance())) {
+                // This write is no news to the page that made it.
+                appearanceStamp = fileStamp(appearanceURL())
+            }
+        case "seen":
+            // The Releases tab was opened: its dot stays off until a newer version comes.
+            if let version = body["version"] as? String, !version.isEmpty, version.count <= 40 {
+                UserDefaults.standard.set(version, forKey: "panel.seenRelease")
+            }
         case "close":
             // ✕: hidden until something new (the plugin starts it again then).
             sendEvent("closed")
@@ -670,19 +867,68 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
         }
     }
 
-    func openPage(_ page: String) {
-        guard let root = options.root else { return }
+    /// `web.sh open <page> [--view <view>] [--course <id>]`: the window comes forward if it is open.
+    func openPage(_ page: String, view: String? = nil, course: String? = nil) {
+        guard let root = options.root, page.range(of: "^(learn|games(/[a-z0-9]+)?)$", options: .regularExpression) != nil else { return }
+        var arguments = ["\(root)/web/web.sh", "open", page]
+        if let view, view.range(of: "^[a-z]{1,20}$", options: .regularExpression) != nil { arguments += ["--view", view] }
+        if let course, course.range(of: "^[A-Za-z0-9_.-]{1,160}$", options: .regularExpression) != nil { arguments += ["--course", course] }
+        arguments += ["--terminal", options.terminal, "--iterm-session", options.itermSession]
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["\(root)/web/web.sh", "open", page, "--terminal", options.terminal, "--iterm-session", options.itermSession]
+        process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
     }
 
+    // --- The appearance and the releases, pushed to the page as data -------------------
+
+    /// appearance.json as saved (null when there is none: the page shows Ember), when it changed.
+    func pushAppearance(force: Bool) {
+        guard isLoaded else { return }
+        let stamp = fileStamp(appearanceURL())
+        if !force && stamp == appearanceStamp { return }
+        appearanceStamp = stamp
+        let value: Any = readAppearance().map { $0 as Any } ?? NSNull()
+        webView.callAsyncJavaScript("window.setAppearance(a)", arguments: ["a": value], in: nil, in: .page, completionHandler: nil)
+    }
+
+    /// The presets that ship with the plugin (widget/Presets.json), for the ◐ strip's swatches.
+    func pushPresets() {
+        guard let root = options.root,
+              let presets = readJSONObject(URL(fileURLWithPath: root).appendingPathComponent("widget/Presets.json"))?["presets"] as? [Any] else { return }
+        webView.callAsyncJavaScript("window.setPresets(p)", arguments: ["p": presets], in: nil, in: .page, completionHandler: nil)
+    }
+
+    /// The Releases tab: this copy's version (plugin.json), every release (releases.json), and the
+    /// version the person last opened the tab at.
+    func pushReleases() {
+        guard let root = options.root else { return }
+        let base = URL(fileURLWithPath: root)
+        let releases = (readJSONObject(base.appendingPathComponent("releases.json"))?["releases"] as? [Any]) ?? []
+        var value: [String: Any] = ["version": NSNull(), "releases": releases, "seen": NSNull()]
+        if let version = readJSONObject(base.appendingPathComponent(".claude-plugin/plugin.json"))?["version"] as? String { value["version"] = version }
+        if let seen = UserDefaults.standard.string(forKey: "panel.seenRelease") { value["seen"] = seen }
+        webView.callAsyncJavaScript("window.setReleases(r)", arguments: ["r": value], in: nil, in: .page, completionHandler: nil)
+    }
+
+    /// The drag strip over the header between its marks, and the grip view over the page's grip.
+    func layoutChrome() {
+        guard let content = panel?.contentView else { return }
+        let size = content.bounds.size
+        let header = max(0, min(chrome.header, size.height))
+        strip.frame = NSRect(x: chrome.left, y: size.height - header, width: max(0, size.width - chrome.left - chrome.icons), height: header)
+        grip.frame = NSRect(x: 0, y: 0, width: chrome.grip, height: chrome.grip)
+        grip.isHidden = chrome.grip < 1
+        panel.invalidateCursorRects(for: grip)
+    }
+
     func tick() {
         ticks += 1
         if ticks % 3 == 0 { readState() }
+        // Another window (or Learn's settings) changed the colour scheme or see-through.
+        if ticks % 10 == 0 { pushAppearance(force: false) }
         if ticks % 50 == 0 && !sendEvent("alive") { NSApp.terminate(nil) }
         place(force: false)
     }
@@ -731,9 +977,14 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
     func placeAt(_ box: CGRect) {
         let x = box.maxX - width - margin + offset.x
         let top = box.maxY - margin - 28 - offset.y
+        // Fitting its content, it stops at the terminal's bottom edge (a long plan or the Releases
+        // list scrolls instead of running off the screen).
+        limit = max(90, top - box.minY - margin)
         isPlacing = true
         panel.setFrame(NSRect(x: x, y: top - shownHeight, width: width, height: shownHeight), display: true)
-        let isSized = !isCollapsed && chosenHeight >= 90
+        layoutChrome()
+        // Sized by the person, or cut to the limit: the page fills the window and its body scrolls.
+        let isSized = !isCollapsed && (chosenHeight >= 90 || height > limit)
         if isSized != wasSized {
             wasSized = isSized
             webView.evaluateJavaScript("window.setSized(\(isSized))", completionHandler: nil)

@@ -3,78 +3,178 @@
 <head>
 <meta charset="utf-8">
 <title>Progress</title>
+<!-- The roles every window shares (Ember until ClaudePanel.swift pushes the appearance), and the
+     derivation that turns three colours into all of them. Classic files over file://: Swift grants
+     read access to the plugin root, the parent of mac/. -->
+<link rel="stylesheet" href="../web/public/shared/theme.css">
+<script src="../web/public/shared/theme.js"></script>
 <style>
-  /* The floating panel on macOS: the same Phases, Tests and Learn tabs as widget/PhasesWidget.ps1,
-     drawn from phases.json (contract 1). ClaudePanel.swift calls render(state) on every change. */
-  :root {
-    --bg: rgba(24, 25, 30, 0.94); --line: rgba(255, 255, 255, 0.08); --text: #e8e6e3; --dim: #8b8d94;
-    --accent: #d9875f; --green: #6cc28a; --red: #e5736b; --gold: #e3b341; --chip: rgba(255, 255, 255, 0.06);
+  /* The floating panel on macOS: the twin of widget/PhasesWidget.ps1, drawn from phases.json
+     (contract 1). ClaudePanel.swift calls render(state) on every change, setAppearance(a) when the
+     colour scheme or see-through changes, setPresets(list) and setReleases({...}) once.
+     Two header rows: the marks, then the tabs with the version (the Releases tab) on the right.
+     Sizes are the WPF panel's: padding 10 12, marks 22, glyph column 14, [x] column 28, gaps 2 / 8. */
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+  body { color: var(--ink); font: 12px/1.25 var(--mono); -webkit-user-select: none; user-select: none; cursor: default; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
+
+  /* The card: the window's only fill. --card-fill carries the panel's see-through; text, lines and
+     accents stay solid. As tall as its content, or as the window when sized (then the body scrolls). */
+  #card {
+    position: relative; display: flex; flex-direction: column; max-height: 100vh; overflow: hidden;
+    padding: 10px 12px; background: var(--card-fill); border: 1px solid var(--edge); border-radius: var(--card-radius);
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; background: transparent; color: var(--text); font: 12.5px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; -webkit-user-select: none; cursor: default; overflow: hidden; }
-  html, body { height: 100%; }
-  /* As tall as its content, or as the person sized the window: then the tabs' body scrolls. */
-  #card { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; max-height: 100vh; display: flex; flex-direction: column; position: relative; }
   #card.sized { height: 100vh; }
-  header, nav { flex: none; }
-  main { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
-  main::-webkit-scrollbar { width: 6px; } main::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
-  #grip { position: absolute; left: 3px; bottom: 2px; width: 10px; height: 10px; color: var(--dim); font-size: 9px; line-height: 10px; opacity: 0.6; pointer-events: none; transform: scaleX(-1); }
-  header { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line); }
-  header .title { flex: 1; font-weight: 600; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  header .title b { color: var(--text); font-weight: 600; }
-  .icon { border: 0; background: none; color: var(--dim); font-size: 13px; width: 22px; height: 22px; border-radius: 6px; padding: 0; }
-  .icon:hover { background: var(--chip); color: var(--text); }
-  nav { display: flex; gap: 4px; padding: 8px 10px 0; }
-  nav button { border: 0; background: none; color: var(--dim); font: inherit; padding: 3px 8px; border-radius: 6px; }
-  nav button.on { background: var(--chip); color: var(--text); font-weight: 600; }
-  nav button:hover { color: var(--text); }
-  main { padding: 8px 12px 10px; }
-  .plan-title { font-weight: 600; margin-bottom: 4px; }
-  .item { display: flex; gap: 7px; padding: 1px 0; }
-  .item .mark { font-family: ui-monospace, Menlo, monospace; flex: none; }
-  .item.done .mark { color: var(--green); } .item.done .name { color: var(--dim); }
-  .item.now .mark, .item.now .name { color: var(--accent); font-weight: 600; }
-  .foot { color: var(--dim); margin-top: 6px; }
-  .run { margin-bottom: 6px; }
-  .run .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .run .label .m { margin-right: 6px; }
-  .bar { font-family: ui-monospace, Menlo, monospace; letter-spacing: -1px; }
-  .stats { color: var(--dim); font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  #top, #foot { flex: none; }
+  #scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -12px; padding: 0 12px; }
+  #scroll::-webkit-scrollbar { width: 6px; }
+  #scroll::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 3px; border: 0; }
+  #body { display: flow-root; }
+
+  /* Row 1: open/closed mark, title (the one-line summary when closed), the marks. The marks reach
+     6px into the padding so their glyphs line up with the text edge. Swift drags the panel by
+     what lies between the marks (it is told where they are: post 'chrome'). */
+  #head { display: flex; align-items: center; height: 22px; }
+  #head .ui-mark { flex: none; }
+  #collapse { margin: 0 4px 0 -6px; }
+  #look { margin-left: 8px; }
+  #games { margin-left: 2px; }
+  #close { margin: 0 -6px 0 2px; }
+  #title { flex: 1 1 auto; min-width: 0; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #title b { font-weight: bold; }
+
+  /* Row 2: the tabs; the version on the right is the Releases tab. Mono, so bold doesn't move them. */
+  #tabs { display: flex; align-items: center; margin-top: 4px; min-width: 0; }
+  #tablist { display: flex; gap: 12px; flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .tab { flex: none; padding: 2px 0; color: var(--dim); white-space: nowrap; }
+  .tab:hover { color: var(--ink); }
+  .tab.on { color: var(--ink); font-weight: bold; }
+  #releases-tab { margin-left: 12px; }
+  .new { color: var(--accent); font-weight: normal; }
+
+  /* The strips under the header: one at a time, each under its mark. */
+  .strip { margin-top: 8px; }
+  .strip[hidden] { display: none; }
+  .ui-caption { display: block; }
+  #look-strip .ui-caption { margin-bottom: 6px; }
+  #look-strip .ui-caption.next { margin-top: 12px; }
+  .ui-swatches { gap: 6px; }
+  .ui-swatch { flex: none; }
+  .bar-row { display: flex; align-items: center; height: 18px; }
+  .bar-row + .bar-row { margin-top: 2px; }
+  .bar-row label { flex: none; width: 52px; color: var(--dim); font-size: 11.5px; }
+  .bar-row output { flex: none; width: 40px; text-align: right; color: var(--dim); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .see { position: relative; flex: 1 1 auto; height: 18px; cursor: pointer; touch-action: none; }
+  .see:hover .track { background: var(--edge); }
+  .see .track, .see .fill { position: absolute; left: 0; top: 7px; height: 4px; border-radius: 2px; pointer-events: none; }
+  .see .track { right: 0; background: var(--line); }
+  .see .fill { background: var(--accent); }
+  .see .knob { position: absolute; top: 4px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--ink); pointer-events: none; }
+  .link { display: inline-block; color: var(--blue); cursor: pointer; }
+  .link:hover { text-decoration: underline; }
+  #custom { margin-top: 6px; }
+  #games-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+  #games-strip[hidden] { display: none; }
+  #games-strip .ui-chip { font-family: var(--mono); }
+  #games-strip .ui-chip.first { margin-right: 6px; }
+
+  .rule { height: 1px; margin: 8px 0; background: var(--rule); }
+
+  /* The body: a glyph column, then the text. */
+  .row { display: flex; align-items: baseline; }
+  .row + .row, .sub { margin-top: 2px; }
+  .group, .row.group { margin-top: 8px; }
+  .cell { flex: none; width: 14px; white-space: nowrap; }
+  .box { flex: none; width: 28px; white-space: nowrap; }
+  .text { flex: 1 1 auto; min-width: 0; }
+  .trim { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .indent { margin-left: 14px; }
+  .heading { font-weight: bold; margin-bottom: 6px; }
+  .strong { font-weight: bold; }
+  /* A bar and its counts on one line: a narrow panel cuts the bar's tail, never the counts. */
+  .counts { display: flex; white-space: nowrap; min-width: 0; }
+  .counts .bar { flex: 0 1 auto; overflow: hidden; }
+  .counts .rest { flex: none; white-space: pre; }
+  .ink { color: var(--ink); } .dim { color: var(--dim); } .faint { color: var(--faint); }
   .ok { color: var(--green); } .bad { color: var(--red); } .warn { color: var(--gold); } .acc { color: var(--accent); }
-  .empty { color: var(--dim); }
-  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .row button { border: 1px solid var(--line); background: var(--chip); color: var(--text); font: inherit; padding: 3px 9px; border-radius: 7px; }
-  .row button.primary { background: var(--accent); border-color: var(--accent); color: #1b1b1f; font-weight: 600; }
-  .row button:hover { filter: brightness(1.15); }
-  .collapsed nav, .collapsed main { display: none; }
+  .hint { margin-top: 2px; color: var(--faint); font-size: 11.5px; line-height: 1.3; }
+  .act { margin-top: 6px; }
+
+  #foot { margin-top: 8px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #foot:empty { display: none; }
+
+  /* The resize grip, inside the card's bottom-left corner (the panel hangs from the terminal's
+     top-right corner). Swift puts its own grip view exactly over this box. */
+  #grip { position: absolute; left: 0; bottom: 0; width: 14px; height: 14px; pointer-events: none; }
+  #grip span { position: absolute; left: 4px; bottom: 3px; font: 10px/10px var(--sans); color: var(--faint); }
+
+  .collapsed #tabs, .collapsed .strip, .collapsed .rule, .collapsed #scroll, .collapsed #foot, .collapsed #grip,
+  .collapsed #look, .collapsed #games { display: none; }
 </style>
 </head>
 <body>
 <div id="card">
-  <header>
-    <div class="title" id="summary"><b>Progress</b></div>
-    <button class="icon" id="opacity" title="See-through: 100, 85, 70, 55%">◐</button>
-    <button class="icon" id="collapse" title="Collapse">▾</button>
-    <button class="icon" id="close" title="Hide until something new">✕</button>
-  </header>
-  <nav id="tabs"></nav>
-  <main id="body"></main>
-  <div id="grip" title="Drag to resize; double-click to fit">◢</div>
+  <div id="top">
+    <header id="head">
+      <button class="ui-mark" id="collapse" title="Collapse">▾</button>
+      <div id="title">Progress</div>
+      <button class="ui-mark" id="look" title="Colour scheme and see-through">◐</button>
+      <button class="ui-mark" id="games" title="Learn and the games">▦</button>
+      <button class="ui-mark" id="close" title="Hide until something new">✕</button>
+    </header>
+    <nav id="tabs">
+      <div id="tablist"></div>
+      <button class="tab" id="releases-tab" title="Releases: what is new in each version"></button>
+    </nav>
+    <section class="strip" id="look-strip" hidden>
+      <span class="ui-caption">Colour scheme</span>
+      <div class="ui-swatches" id="swatches"></div>
+      <span class="ui-caption next">See-through</span>
+      <div id="bars"></div>
+      <div class="link" id="custom" title="Your own background, accent and text colours, in Learn's settings">Custom colours →</div>
+    </section>
+    <section class="strip" id="games-strip" hidden></section>
+    <div class="rule"></div>
+  </div>
+  <main id="scroll"><div id="body"></div></main>
+  <div id="foot"></div>
+  <div id="grip" title="Drag to resize; double-click to fit"><span>◣</span></div>
 </div>
 <script>
 const post = message => window.webkit?.messageHandlers?.panel?.postMessage(message);
-const GAMES = [['sudoku', 'Sudoku'], ['2048', '2048'], ['typing', 'Typing'], ['chess', 'Chess']];
+const T = globalThis.ClaudeTheme;
+const G = { check: '✓', cross: '✗', live: '●', middot: '·', arrow: '→', course: '≡', collapse: '▾', expand: '▸' };
+// Learn and the games, as the panel's games mark lists them (widget/Chrome.ps1 $UI_SIBLINGS).
+const SIBLINGS = [['learn', 'Learn'], ['games/sudoku', 'Sudoku'], ['games/2048', '2048'], ['games/typing', 'Typing'], ['games/chess', 'Chess']];
+const SEE_THROUGH = [['panel', 'Panel'], ['learn', 'Learn'], ['games', 'Games']];
+const MIN_OPACITY = T ? T.MIN_OPACITY : 0.15;
+const BAR_CELLS = 18;
+const RELEASES_SHOWN = 4;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 let state = null;
 let tab = 'phases';
 let manualTab = null;
-let lastFocus = null;
-let lastPlan = null;
+let seenFocus = null;
+let seenPlan = null;
 let collapsed = false;
+let strip = '';
+let appearance = T ? T.parseAppearance(null) : null;
+let presets = T ? T.parsePresets(null) : [];
+// A see-through bar being dragged: the appearance Swift pushes meanwhile waits until it's let go.
+let dragging = null;
+let pending = null;
+let releases = { version: null, list: [] };
+let seenRelease = null;
+let seenBefore = null;
+let lastHeight = 0;
+let lastChrome = '';
 
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined || value === false) continue;
     if (key === 'class') node.className = value;
     else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
     else node.setAttribute(key, value);
@@ -82,134 +182,437 @@ const el = (tag, attrs = {}, ...kids) => {
   for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) node.append(kid.nodeType ? kid : String(kid));
   return node;
 };
-const bar = (ratio, cells = 18) => {
-  const full = ratio === null || ratio === undefined ? 0 : Math.max(0, Math.min(cells, Math.round(ratio * cells)));
+const $ = id => document.getElementById(id);
+const bar = (ratio, cells = BAR_CELLS) => {
+  const full = ratio === null || ratio === undefined || !Number.isFinite(Number(ratio)) ? 0 : Math.max(0, Math.min(cells, Math.round(Number(ratio) * cells)));
   return '█'.repeat(full) + '░'.repeat(cells - full);
 };
-const hasPlan = () => state?.plan && state.plan.items?.length > 0;
-const runs = () => state?.runs || [];
+const hasPlan = () => !!(state?.plan && state.plan.items?.length > 0);
+const runs = () => (state?.runs || []).filter(Boolean);
 const build = () => state?.learn?.build || null;
 const course = () => state?.learn?.course || null;
 
+// -1, 0 or 1 by version number ("0.10.0" after "0.9.1").
+function compareVersion(a, b) {
+  const pa = String(a ?? '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b ?? '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return Math.sign(d);
+  }
+  return 0;
+}
+const formatDate = date => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date ?? ''));
+  return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1] || m[2]}` : String(date ?? '');
+};
+const newestRelease = () => releases.list[0]?.version || releases.version || null;
+const isReleaseUnseen = () => {
+  const newest = newestRelease();
+  return !!newest && (!seenRelease || compareVersion(newest, seenRelease) > 0);
+};
+
+function runLook(run) {
+  if (run.status === 'passed') return { glyph: G.check, color: 'ok' };
+  if (run.status === 'failed') return { glyph: G.cross, color: 'bad' };
+  return { glyph: G.live, color: Number(run.failed) > 0 ? 'bad' : 'acc' };
+}
+const buildColor = s => ({ failed: 'bad', 'waiting-picks': 'warn', done: 'ok' })[s] || 'acc';
+
+// Full labels when they fit beside the version; else the tabs not in front drop their counts; else
+// all do; and at the narrowest the names alone.
 function labels() {
-  const plan = hasPlan() ? `Phases ${state.plan.done}/${state.plan.total}` : 'Phases';
+  const plan = hasPlan() ? state.plan : null;
   const list = runs();
-  const live = [...list].reverse().find(run => run.status === 'running');
-  const last = list.at(-1);
-  const tests = live ? `Tests ● ${live.count}` : last ? (last.status === 'failed' ? 'Tests ✗' : 'Tests ✓') : 'Tests';
+  const live = list.filter(run => run.status === 'running');
+  const full = { phases: 'Phases', tests: 'Tests', learn: 'Learn' };
+  const short = { ...full };
+  if (plan) full.phases = `Phases ${plan.done}/${plan.total}`;
+  if (live.length) {
+    full.tests = `Tests ${G.live} ${live.at(-1).count}`;
+    short.tests = `Tests ${G.live}`;
+  } else if (list.length) {
+    full.tests = short.tests = `Tests ${runLook(list.at(-1)).glyph}`;
+  }
   const b = build();
-  const learn = b?.state === 'running' ? (b.total > 0 ? `Learn ${b.done}/${b.total}` : 'Learn ●') : 'Learn';
-  return { phases: plan, tests, learn };
+  if (b && b.state === 'running') {
+    full.learn = short.learn = `Learn ${G.live}`;
+    if (Number(b.total) > 0) full.learn = `Learn ${b.done}/${b.total}`;
+  }
+  return { full, short };
 }
 
-// The tab in front, as the WPF panel picks it.
+// The tab in front, as the WPF panel picks it: something new (a new test run, a new plan) brings its
+// tab forward and ends the person's pick; otherwise the tab they clicked stays. Releases is only a click.
 function pickTab() {
+  const plan = hasPlan() ? state.plan : null;
+  const planTitle = plan ? String(plan.title) : null;
+  const list = runs();
+  const live = list.filter(run => run.status === 'running');
+  let isNewRun = false;
   const focus = state?.focus ?? null;
-  const planTitle = hasPlan() ? state.plan.title : null;
-  if (focus !== null && focus !== lastFocus) { tab = 'tests'; manualTab = null; }
-  else if (planTitle !== null && planTitle !== lastPlan) { tab = 'phases'; manualTab = null; }
-  else if (manualTab) tab = manualTab;
-  else if (!hasPlan() && runs().length > 0) tab = 'tests';
-  else if (runs().length === 0 && tab === 'tests') tab = hasPlan() || !build() ? 'phases' : 'learn';
-  else if (!hasPlan() && runs().length === 0 && build()) tab = 'learn';
-  lastFocus = focus;
-  lastPlan = planTitle;
+  if (focus && focus !== seenFocus) {
+    if (seenFocus !== null || live.length > 0) { tab = 'tests'; manualTab = null; isNewRun = true; }
+    seenFocus = focus;
+  }
+  if (planTitle && planTitle !== seenPlan && !isNewRun) { tab = 'phases'; manualTab = null; }
+  seenPlan = planTitle;
+  if (manualTab) { tab = manualTab; return; }
+  if (tab === 'releases') tab = 'phases';
+  if (!plan && list.length > 0 && tab !== 'learn') tab = 'tests';
+  if (list.length === 0 && tab === 'tests') tab = plan || !build() ? 'phases' : 'learn';
+  if (!plan && list.length === 0 && build()) tab = 'learn';
 }
 
-function summary() {
-  if (tab === 'tests' && runs().length) {
-    const run = runs().at(-1);
-    return `${run.label} · ${run.count}`;
-  }
-  if (tab === 'learn' && build()) return `${build().topic}: ${build().message}`;
-  if (hasPlan()) {
-    const now = state.plan.items.find(item => item.status === 'in_progress') || state.plan.items.find(item => item.status === 'todo');
-    return `${now ? now.name : state.plan.title} · ${state.plan.done}/${state.plan.total}`;
-  }
-  return 'Progress';
-}
+// --- The body of each tab -------------------------------------------------------------------
 
-function phasesBody() {
-  if (!hasPlan()) return [el('div', { class: 'empty' }, 'No plan yet.')];
+const markRow = (glyph, color, text, { cls = '', box = false, top = '' } = {}) =>
+  el('div', { class: `row ${top}`.trim() }, el('span', { class: `${box ? 'box' : 'cell'} ${color}` }, glyph), el('div', { class: `text ${cls}`.trim() }, text));
+const empty = (headline, hint) => [el('div', { class: 'dim' }, headline), hint ? el('div', { class: 'hint' }, hint) : null];
+const counts = (ratio, color, ...rest) => el('div', { class: 'counts sub indent' }, el('span', { class: `bar ${color}` }, bar(ratio)), el('span', { class: 'rest' }, ...rest));
+const learnLink = (text, view) => el('div', { class: 'link act', onclick: () => openPage('learn', view) }, text);
+
+function phasesBody(foot) {
+  if (!hasPlan()) return empty('No plan yet', 'When Claude plans a task, its phases show here as it works through them.');
   const plan = state.plan;
+  foot.text = `${plan.done} of ${plan.total} done`;
   return [
-    el('div', { class: 'plan-title' }, plan.title),
+    el('div', { class: 'heading' }, plan.title),
     ...plan.items.map(item => {
-      const kind = item.status === 'done' ? 'done' : item.status === 'in_progress' ? 'now' : 'todo';
-      const mark = kind === 'done' ? '[✓]' : kind === 'now' ? '[▸]' : '[ ]';
-      return el('div', { class: `item ${kind}` }, el('span', { class: 'mark' }, mark), el('span', { class: 'name' }, item.name));
+      if (item.status === 'done') return markRow(`[${G.check}]`, 'ok', item.name, { box: true, cls: 'dim' });
+      if (item.status === 'in_progress') return markRow(`[${G.live}]`, 'acc strong', item.name, { box: true, cls: 'acc strong' });
+      return markRow('[ ]', 'dim', item.name, { box: true });
     }),
-    el('div', { class: 'foot' }, `${plan.done} of ${plan.total} done`),
   ];
 }
 
-function testsBody() {
+function testsBody(foot) {
   const list = [...runs()].reverse();
-  if (list.length === 0) return [el('div', { class: 'empty' }, 'No test runs yet.')];
-  const totals = state.totals || { runs: 0, tests: 0, passed: 0, failed: 0 };
-  return [
-    ...list.map(run => {
-      const color = run.status === 'passed' ? 'ok' : run.status === 'failed' || run.failed > 0 ? 'bad' : 'acc';
-      const mark = run.status === 'running' ? '●' : run.status === 'passed' ? '✓' : '✗';
-      return el('div', { class: 'run' },
-        el('div', { class: 'label' }, el('span', { class: `m ${color}` }, mark), run.label),
-        el('div', { class: 'stats' }, el('span', { class: `bar ${color}` }, bar(run.ratio)), ` ${run.count}  `, el('span', { class: 'ok' }, `✓${run.passed}`), run.failed > 0 ? el('span', { class: 'bad' }, ` ✗${run.failed}`) : null));
-    }),
-    el('div', { class: 'foot' }, `${totals.tests} tests in ${totals.runs} run${totals.runs === 1 ? '' : 's'} · ${totals.passed} passed${totals.failed ? ` · ${totals.failed} failed` : ''}`),
-  ];
+  if (list.length === 0) return empty('No test runs yet', 'Test commands Claude runs show here as they go, with their counts.');
+  const totals = state.totals;
+  if (totals && Number(totals.tests) > 0) {
+    foot.text = `${totals.tests} tests in ${totals.runs} run${Number(totals.runs) === 1 ? '' : 's'} ${G.middot} ${totals.passed} passed${Number(totals.failed) > 0 ? ` ${G.middot} ${totals.failed} failed` : ''}`;
+  }
+  return list.map((run, i) => {
+    const look = runLook(run);
+    return el('div', { class: i ? 'group' : '' },
+      markRow(look.glyph, look.color, run.label, { cls: `trim ${run.status === 'running' ? 'ink' : 'dim'}` }),
+      counts(run.ratio, look.color, ` ${run.count}`, el('span', { class: 'ok' }, `  ${G.check}${run.passed}`), Number(run.failed) > 0 ? el('span', { class: 'bad' }, ` ${G.cross}${run.failed}`) : null));
+  });
 }
 
 function learnBody() {
   const b = build();
   const c = course();
-  const color = b ? ({ failed: 'bad', 'waiting-picks': 'warn', done: 'ok' }[b.state] || 'acc') : 'acc';
-  return [
-    b ? el('div', {}, el('b', { class: color }, b.topic), ' ', el('span', { class: 'empty' }, b.message)) : null,
-    b && b.total > 0 ? el('div', { class: 'stats' }, el('span', { class: `bar ${color}` }, bar(b.done / b.total)), ` ${b.done}/${b.total} pages`) : null,
-    c ? el('div', { class: 'plan-title', style: 'margin-top:6px' }, c.title) : null,
-    c ? el('div', { class: 'empty' }, `Page ${c.page} of ${c.total}${c.next ? ` · next: ${c.next}` : ''}`) : null,
-    !b && !c ? el('div', { class: 'empty' }, 'Courses from free videos and docs, written by your own Claude.') : null,
-    el('div', { class: 'row' },
-      el('button', { class: 'primary', onclick: () => post({ type: 'open', page: 'learn' }) }, c ? 'Carry on reading' : 'Open Learn'),
-      ...GAMES.map(([id, label]) => el('button', { onclick: () => post({ type: 'open', page: `games/${id}` }) }, label))),
-  ];
+  if (!b && !c) return [...empty('No course yet', 'Courses Claude builds from free videos and docs, to read while it works.'), learnLink(`Open Learn ${G.arrow}`, '')];
+  const parts = [];
+  if (b) {
+    const color = buildColor(b.state);
+    const glyph = b.state === 'done' ? G.check : b.state === 'failed' ? G.cross : G.live;
+    parts.push(markRow(glyph, color, b.topic, { cls: 'trim' }));
+    parts.push(el('div', { class: 'sub indent dim' }, b.message));
+    if (Number(b.total) > 0 && b.state !== 'done') parts.push(counts(Number(b.done) / Number(b.total), color, ` ${b.done}/${b.total} pages`));
+  }
+  if (c) {
+    parts.push(markRow(G.course, 'dim', c.title, { cls: 'strong', top: b ? 'group' : '' }));
+    parts.push(el('div', { class: 'sub indent dim' }, `Page ${c.page} of ${c.total}${c.next ? ` ${G.middot} next: ${c.next}` : ''}`));
+  }
+  const link = c ? learnLink(`Carry on reading ${G.arrow}`, 'course') : learnLink(`Open Learn ${G.arrow}`, '');
+  link.classList.add('indent');
+  parts.push(link);
+  return parts;
+}
+
+// Newest first: "0.2.0 · 29 Oct · Mahmood", then its notes. The entries the person had not seen when
+// they opened the tab wear the new mark (with nothing seen before, the newest alone).
+function releasesBody(foot) {
+  const list = releases.list;
+  const parts = [];
+  const newest = list[0]?.version;
+  if (releases.version && newest && compareVersion(releases.version, newest) > 0) {
+    parts.push(el('div', { class: 'bad trim' }, `v${releases.version} has no release note yet`));
+  }
+  if (list.length === 0) return [...parts, ...empty('No release notes', 'This copy of the plugin has no releases.json beside its mac folder.')];
+  const shown = Math.min(list.length, RELEASES_SHOWN);
+  for (let i = 0; i < shown; i++) {
+    const release = list[i];
+    const isNew = seenBefore ? compareVersion(release.version, seenBefore) > 0 : i === 0;
+    const meta = `${release.date ? ` ${G.middot} ${formatDate(release.date)}` : ''}${release.by ? ` ${G.middot} ${release.by}` : ''}`;
+    parts.push(markRow(isNew ? G.live : '', 'acc', [el('b', { class: 'ink' }, release.version), el('span', { class: 'dim' }, meta)], { cls: 'trim', top: parts.length ? 'group' : '' }));
+    for (const note of (release.notes || []).slice(0, 3)) parts.push(el('div', { class: 'row sub indent' }, el('span', { class: 'cell dim' }, G.middot), el('div', { class: 'text' }, note)));
+  }
+  const noun = list.length === 1 ? 'release' : 'releases';
+  foot.text = shown < list.length ? `Newest ${shown} of ${list.length} ${noun}` : `${list.length} ${noun}`;
+  return parts;
+}
+
+// The collapsed card's one line: a lead (bold, in its colour) and the rest (dim).
+function summary() {
+  const lead = (text, color, rest = '', plain = false) => [el(plain ? 'span' : 'b', { class: color }, text), rest ? el('span', { class: 'dim' }, rest) : null];
+  if (tab === 'releases') {
+    const first = releases.list[0]?.notes?.[0];
+    return lead(releases.version ? `v${releases.version}` : 'Releases', 'ink', first ? ` ${G.middot} ${first}` : '');
+  }
+  if (tab === 'learn') {
+    const b = build();
+    if (b) return lead('Learn', buildColor(b.state), ` ${G.middot} ${b.message}`);
+    if (course()) return lead('Learn', 'ink', ` ${G.middot} ${course().title}`);
+    return lead('Learn', 'ink', ` ${G.middot} no course yet`);
+  }
+  if (tab === 'tests') {
+    const run = runs().at(-1);
+    if (!run) return lead('No test runs yet', 'dim', '', true);
+    const look = runLook(run);
+    return lead(`${look.glyph} ${run.count}`, look.color, ` ${run.label}`);
+  }
+  if (!hasPlan()) return lead('No plan yet', 'dim', '', true);
+  const plan = state.plan;
+  const now = plan.items.find(item => item.status === 'in_progress') || plan.items.find(item => item.status === 'todo');
+  return now ? lead(now.name, 'acc', ` ${G.middot} ${plan.done}/${plan.total}`) : lead('All done', 'ok', ` ${G.middot} ${plan.done}/${plan.total}`);
+}
+
+// --- The strips -----------------------------------------------------------------------------
+
+// Built once (again only when the presets change), then updated in place: a bar being dragged is
+// never replaced under the pointer.
+let builtPresets = '';
+function drawLookStrip() {
+  if (!T) return;
+  const now = appearance;
+  const key = JSON.stringify(presets);
+  if (key !== builtPresets) {
+    builtPresets = key;
+    $('swatches').replaceChildren(...presets.map(preset =>
+      el('button', { class: 'ui-swatch', title: preset.label || preset.name, style: `background:${preset.bg}`, onclick: () => pickPreset(preset) },
+        el('i', { style: `background:${preset.accent}` }), el('i', { style: `background:${preset.text}` }))));
+  }
+  [...$('swatches').children].forEach((swatch, i) => {
+    const preset = presets[i];
+    const inUse = now.preset === preset.name && now.colors.bg === preset.bg.toUpperCase() && now.colors.accent === preset.accent.toUpperCase();
+    swatch.classList.toggle('on', inUse);
+  });
+  if (!$('bars').childElementCount) {
+    $('bars').replaceChildren(...SEE_THROUGH.map(([group, label]) => {
+      const see = el('div', { class: 'see', 'data-key': group, title: group === 'panel' ? 'How see-through the panel is' : `How see-through the ${label} windows are` },
+        el('div', { class: 'track' }), el('div', { class: 'fill' }), el('div', { class: 'knob' }));
+      see.addEventListener('pointerdown', startDrag);
+      return el('div', { class: 'bar-row' }, el('label', {}, label), see, el('output', {}));
+    }));
+  }
+  if (dragging) return;
+  for (const see of $('bars').querySelectorAll('.see')) showBar(see, now.opacity[see.dataset.key]);
+}
+
+function showBar(see, value) {
+  see.querySelector('.fill').style.width = `${value * 100}%`;
+  see.querySelector('.knob').style.left = `${value * 100}%`;
+  see.parentElement.querySelector('output').textContent = `${Math.round(value * 100)}%`;
+}
+
+let builtGames = false;
+function drawGamesStrip() {
+  if (builtGames) return;
+  builtGames = true;
+  $('games-strip').replaceChildren(...SIBLINGS.map(([page, label], i) =>
+    el('button', { class: `ui-chip${i === 0 ? ' first' : ''}`, title: `Open ${label}`, onclick: () => { setStrip(''); openPage(page); } }, label)));
+}
+
+// One strip at a time ('look', 'games', '' for none); its mark shows it's open.
+function setStrip(name) {
+  strip = name;
+  draw();
+}
+
+function pickPreset(preset) {
+  if (!T) return;
+  appearance = { ...appearance, preset: preset.name, colors: { bg: preset.bg.toUpperCase(), accent: preset.accent.toUpperCase(), text: preset.text.toUpperCase() } };
+  T.applyAppearance(appearance, 'panel');
+  post({ type: 'appearance', value: { v: 1, ...appearance } });
+  draw();
+}
+
+// A see-through bar: click or drag. The panel shows its own value as it moves; the file is written
+// (by Swift) when it's let go, and the other windows follow.
+function valueAt(see, x) {
+  const box = see.getBoundingClientRect();
+  const ratio = box.width > 0 ? (x - box.left) / box.width : 1;
+  return Math.round(Math.max(MIN_OPACITY, Math.min(1, ratio)) * 100) / 100;
+}
+function moveDrag(value) {
+  dragging.value = value;
+  showBar(dragging.see, value);
+  if (dragging.key === 'panel' && T) T.applyAppearance({ ...appearance, opacity: { ...appearance.opacity, panel: value } }, 'panel');
+}
+function startDrag(event) {
+  if (event.button !== 0 || !T) return;
+  const see = event.currentTarget;
+  see.setPointerCapture?.(event.pointerId);
+  dragging = { key: see.dataset.key, see, value: appearance.opacity[see.dataset.key] };
+  moveDrag(valueAt(see, event.clientX));
+  const move = e => moveDrag(valueAt(see, e.clientX));
+  const end = () => {
+    see.removeEventListener('pointermove', move);
+    see.removeEventListener('pointerup', end);
+    see.removeEventListener('pointercancel', end);
+    const { key, value } = dragging;
+    dragging = null;
+    // A change saved elsewhere while dragging is the base; this bar's value goes on top of it.
+    const base = pending ? T.parseAppearance(pending) : appearance;
+    pending = null;
+    appearance = { ...base, opacity: { ...base.opacity, [key]: value } };
+    T.applyAppearance(appearance, 'panel');
+    post({ type: 'appearance', value: { v: 1, ...appearance } });
+    draw();
+  };
+  see.addEventListener('pointermove', move);
+  see.addEventListener('pointerup', end);
+  see.addEventListener('pointercancel', end);
+}
+
+function openPage(page, view, course) {
+  const message = { type: 'open', page };
+  if (view) message.view = view;
+  if (course) message.course = course;
+  post(message);
+}
+
+// --- Drawing --------------------------------------------------------------------------------
+
+function selectTab(name) {
+  if (name === 'releases' && tab !== 'releases') {
+    seenBefore = seenRelease;
+    const newest = newestRelease();
+    if (newest) {
+      seenRelease = newest;
+      post({ type: 'seen', version: newest });
+    }
+  }
+  tab = manualTab = name;
+  draw();
+}
+
+function drawTabs() {
+  // The version first: the tabs fit in what it leaves.
+  const release = $('releases-tab');
+  release.className = `tab${tab === 'releases' ? ' on' : ''}`;
+  release.replaceChildren(releases.version ? `v${releases.version}` : 'Releases', isReleaseUnseen() ? el('span', { class: 'new' }, ` ${G.live}`) : '');
+  release.hidden = !releases.version && releases.list.length === 0;
+  const { full, short } = labels();
+  const list = $('tablist');
+  const make = level => list.replaceChildren(...['phases', 'tests', 'learn'].map(name => {
+    const bare = { phases: 'Phases', tests: 'Tests', learn: 'Learn' };
+    const text = level === 3 ? bare[name] : level === 0 || (level === 1 && name === tab) ? full[name] : short[name];
+    return el('button', { class: `tab${name === tab ? ' on' : ''}`, onclick: () => selectTab(name) }, text);
+  }));
+  for (const level of [0, 1, 2, 3]) {
+    make(level);
+    if (list.scrollWidth <= list.clientWidth + 0.5) break;
+  }
 }
 
 function draw() {
-  const names = labels();
-  const tabs = document.getElementById('tabs');
-  tabs.replaceChildren(...['phases', 'tests', 'learn'].map(name =>
-    el('button', { class: name === tab ? 'on' : '', onclick: () => { tab = manualTab = name; draw(); } }, names[name])));
-  const body = document.getElementById('body');
-  body.replaceChildren(...(tab === 'tests' ? testsBody() : tab === 'learn' ? learnBody() : phasesBody()));
-  const text = summary();
-  document.getElementById('summary').replaceChildren(collapsed ? text : el('b', {}, 'Progress'));
   document.body.classList.toggle('collapsed', collapsed);
-  document.getElementById('collapse').textContent = collapsed ? '▸' : '▾';
-  // The content's own height, scrolled part included: the window fits it unless the person sized it.
-  requestAnimationFrame(() => {
-    const parts = ['header', 'nav', 'main'].map(selector => document.querySelector(selector));
-    const natural = parts.reduce((sum, part) => sum + (getComputedStyle(part).display === 'none' ? 0 : part.tagName === 'MAIN' ? part.scrollHeight : part.offsetHeight), 0) + 2;
-    post({ type: 'height', height: Math.ceil(natural) });
-  });
+  const toggle = $('collapse');
+  toggle.textContent = collapsed ? G.expand : G.collapse;
+  toggle.title = collapsed ? 'Expand' : 'Collapse';
+  $('title').replaceChildren(...(collapsed ? summary().filter(Boolean) : ['Progress']));
+  $('look').classList.toggle('on', strip === 'look');
+  $('games').classList.toggle('on', strip === 'games');
+  $('look-strip').hidden = collapsed || strip !== 'look';
+  $('games-strip').hidden = collapsed || strip !== 'games';
+  if (!collapsed) {
+    drawTabs();
+    if (strip === 'look') drawLookStrip();
+    if (strip === 'games') drawGamesStrip();
+    const foot = { text: '' };
+    const parts = tab === 'tests' ? testsBody(foot) : tab === 'learn' ? learnBody() : tab === 'releases' ? releasesBody(foot) : phasesBody(foot);
+    $('body').replaceChildren(...parts.filter(Boolean));
+    $('foot').textContent = foot.text;
+  }
+  requestAnimationFrame(report);
 }
+
+// The content's own height (what scrolls included): the window fits it unless sized. And where the
+// marks and the grip are, so Swift's drag strip and grip view sit exactly on them.
+function report() {
+  const card = $('card');
+  const scroll = $('scroll');
+  const shown = getComputedStyle(scroll).display !== 'none';
+  const natural = Math.ceil(card.offsetHeight - (shown ? scroll.clientHeight - $('body').offsetHeight : 0));
+  if (natural !== lastHeight) {
+    lastHeight = natural;
+    post({ type: 'height', height: natural });
+  }
+  const head = $('head').getBoundingClientRect();
+  const lead = $('collapse').getBoundingClientRect();
+  const marks = ['look', 'games', 'close'].map($).filter(mark => getComputedStyle(mark).display !== 'none');
+  const firstMark = marks.length ? marks[0].getBoundingClientRect().left : window.innerWidth;
+  const chrome = {
+    type: 'chrome',
+    header: Math.ceil(head.bottom),
+    left: Math.ceil(lead.right),
+    icons: Math.ceil(window.innerWidth - firstMark),
+    grip: collapsed ? 0 : $('grip').offsetWidth,
+  };
+  const text = JSON.stringify(chrome);
+  if (text !== lastChrome) {
+    lastChrome = text;
+    post(chrome);
+  }
+}
+
+// --- What Swift calls -------------------------------------------------------------------------
 
 window.render = next => {
   state = next;
   pickTab();
   draw();
 };
-window.setCollapsed = value => { collapsed = !!value; draw(); };
-// Sized by the person with the corner grip: fill the window and scroll; else fit the content.
-window.setSized = value => { document.getElementById('card').classList.toggle('sized', !!value); draw(); };
-
-document.getElementById('close').addEventListener('click', () => post({ type: 'close' }));
-document.getElementById('opacity').addEventListener('click', () => post({ type: 'opacity' }));
-document.getElementById('collapse').addEventListener('click', () => {
+window.setCollapsed = value => {
+  collapsed = !!value;
+  if (collapsed) strip = '';
+  draw();
+};
+// The header's double-click (Swift's drag strip sees it): open or close, as the mark does.
+window.toggleCollapsed = () => {
   collapsed = !collapsed;
+  if (collapsed) strip = '';
   post({ type: 'collapsed', value: collapsed });
   draw();
-});
+};
+// Sized by the person with the corner grip, or taller than the terminal: fill the window and scroll.
+window.setSized = value => { $('card').classList.toggle('sized', !!value); draw(); };
+// appearance.json as saved (null when there is none: Ember). May carry the presets too.
+window.setAppearance = value => {
+  if (!T) return;
+  if (value && Array.isArray(value.presets)) presets = T.parsePresets({ presets: value.presets });
+  if (dragging) { pending = value; return; }
+  appearance = T.parseAppearance(value);
+  T.applyAppearance(appearance, 'panel');
+  draw();
+};
+window.setPresets = list => {
+  if (!T) return;
+  presets = T.parsePresets(Array.isArray(list) ? { presets: list } : list);
+  if (strip === 'look') draw();
+};
+// {version (plugin.json), releases (releases.json, newest first), seen (the version last opened)}.
+window.setReleases = value => {
+  releases = { version: value?.version || null, list: Array.isArray(value?.releases) ? value.releases.filter(r => r && r.version) : [] };
+  if (!releases.version && releases.list.length) releases.version = releases.list[0].version;
+  if (typeof value?.seen === 'string' && value.seen) seenRelease = seenBefore = value.seen;
+  draw();
+};
+window.selectTab = selectTab;
+window.setStrip = setStrip;
+
+$('close').addEventListener('click', () => post({ type: 'close' }));
+$('look').addEventListener('click', () => setStrip(strip === 'look' ? '' : 'look'));
+$('games').addEventListener('click', () => setStrip(strip === 'games' ? '' : 'games'));
+$('collapse').addEventListener('click', () => window.toggleCollapsed());
+$('releases-tab').addEventListener('click', () => selectTab('releases'));
+$('custom').addEventListener('click', () => { setStrip(''); openPage('learn', 'settings'); });
+if (T) T.applyAppearance(appearance, 'panel');
 draw();
 post({ type: 'loaded' });
 </script>
