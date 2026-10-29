@@ -950,12 +950,28 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
             UserDefaults.standard.set(isCollapsed, forKey: "panel.collapsed")
             place(force: true)
         case "tab":
-            // A tab the person clicked: the next panel opens on it (pushPrefs leaves Releases out).
-            // Null when something new ended that pick.
-            if let name = body["value"] as? String, ["phases", "tests", "learn", "releases"].contains(name) {
-                UserDefaults.standard.set(name, forKey: "panel.tab")
+            // A tab the person clicked, with what the panel had seen then ("seen": the plan's title
+            // and the newest run): the next panel opens on it unless a plan or run came since.
+            // Releases is a look, not a place to come back to: it leaves the pick before it as it
+            // was. Null when something new ended that pick.
+            let defaults = UserDefaults.standard
+            if let name = body["value"] as? String, ["phases", "tests", "learn"].contains(name) {
+                defaults.set(name, forKey: "panel.tab")
+                let seen = body["seen"] as? [String: Any]
+                let plan = seen?["plan"] as? String
+                let focus = seen?["focus"] as? String
+                if seen != nil && (plan?.count ?? 0) <= 1000 && (focus?.count ?? 0) <= 200 {
+                    var marks: [String: String] = [:]
+                    if let plan = plan { marks["plan"] = plan }
+                    if let focus = focus { marks["focus"] = focus }
+                    defaults.set(marks, forKey: "panel.tabSeen")
+                } else {
+                    // Not known (or not sane): the next panel takes a plan or a live run it starts with as new.
+                    defaults.removeObject(forKey: "panel.tabSeen")
+                }
             } else if body["value"] is NSNull {
-                UserDefaults.standard.removeObject(forKey: "panel.tab")
+                defaults.removeObject(forKey: "panel.tab")
+                defaults.removeObject(forKey: "panel.tabSeen")
             }
         case "open":
             // A Learn view ("settings" from Custom colours, "course" from Carry on reading) or a game.
@@ -1026,14 +1042,23 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
     }
 
     /// What the person left the last panel as, as the WPF panel keeps it: the tab they picked
-    /// (Releases is a look, not a place to come back to) and whether it was collapsed. Given
-    /// before the first state, so the saved tab stands against what that state holds.
+    /// (Releases is a look, not a place to come back to), what that panel had seen with it, and
+    /// whether it was collapsed. Given before the first state, so the page can tell whether that
+    /// state is news (a new plan or run brings its tab forward) or where the panel starts.
     func pushPrefs() {
         let defaults = UserDefaults.standard
         let savedTab = defaults.string(forKey: "panel.tab") ?? ""
         isCollapsed = defaults.bool(forKey: "panel.collapsed")
-        var prefs: [String: Any] = ["tab": NSNull(), "collapsed": isCollapsed]
-        if ["phases", "tests", "learn"].contains(savedTab) { prefs["tab"] = savedTab }
+        var prefs: [String: Any] = ["tab": NSNull(), "seen": NSNull(), "collapsed": isCollapsed]
+        if ["phases", "tests", "learn"].contains(savedTab) {
+            prefs["tab"] = savedTab
+            if let saved = defaults.dictionary(forKey: "panel.tabSeen") {
+                var seen: [String: Any] = ["plan": NSNull(), "focus": NSNull()]
+                if let plan = saved["plan"] as? String { seen["plan"] = plan }
+                if let focus = saved["focus"] as? String { seen["focus"] = focus }
+                prefs["seen"] = seen
+            }
+        }
         webView.callAsyncJavaScript("window.setPrefs(p)", arguments: ["p": prefs], in: nil, in: .page, completionHandler: nil)
     }
 

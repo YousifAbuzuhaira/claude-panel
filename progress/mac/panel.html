@@ -34,11 +34,12 @@
   #scroll::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 3px; border: 0; }
   #body { display: flow-root; }
 
-  /* Below 80% the terminal shows through the card, and over a backdrop of the other lightness even
+  /* Below 85% the terminal shows through the card, and over a backdrop of the other lightness even
      the text colour sinks into it: a soft halo of the card's own colour round every glyph and line
-     keeps them off whatever is behind, strongest where the card is clearest (set by wear()). The
-     card's fill itself is never haloed, so the gaps between the lines stay see-through. Three
-     stacked shadows: one alone is too faint to lift dim text off a backdrop of the other lightness. */
+     keeps them off whatever is behind. As in every other window it comes in gently and is full by
+     50% (set by wear()). The card's fill itself is never haloed, so the gaps between the lines
+     stay see-through. Three stacked shadows: one alone is too faint to lift dim text off a
+     backdrop of the other lightness. */
   .halo #top, .halo #scroll, .halo #foot {
     filter: drop-shadow(0 0 0.5px var(--halo)) drop-shadow(0 0 1px var(--halo)) drop-shadow(0 0 2px var(--halo));
   }
@@ -176,9 +177,12 @@ const RELEASES_SHOWN = 2;
 const PICKABLE_TABS = ['phases', 'tests', 'learn'];
 // Which tab gives up its count first when the tabs don't fit: a live test count goes last.
 const SHORTEN_ORDER = ['learn', 'phases', 'tests'];
-// The halo round text and lines: from this see-through down, full strength from the second.
-const HALO_FROM = 0.8;
+// The halo round text and lines, as every window has it (UI_HALO_BELOW in widget/Chrome.ps1,
+// shared/legible.js): on below the first see-through, at no less than the last strength, full by
+// the second.
+const HALO_BELOW = 0.85;
 const HALO_FULL_AT = 0.5;
+const HALO_LEAST = 0.25;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 let state = null;
@@ -186,9 +190,10 @@ let tab = 'phases';
 let manualTab = null;
 let seenFocus = null;
 let seenPlan = null;
-// Until the first state is drawn: what it holds is where the panel starts, not news, so a tab saved
-// from last time stands.
+// Once the first state is drawn the saved prefs are past (setPrefs comes before it).
 let isSeeded = false;
+// The pick Swift keeps for the next panel, as last posted (JSON): posted again only on a change.
+let savedPick = '';
 let collapsed = false;
 let strip = '';
 // The saved appearance, given before the first paint (ClaudePanel.swift injects it), else Ember.
@@ -276,9 +281,10 @@ function labels() {
 
 // The tab in front, as the WPF panel picks it: something new (a new test run, a new plan) brings its
 // tab forward and ends the person's pick; otherwise the tab they clicked stays, and with no pick the
-// panel shows what there is. Two picks outlast news: the tab saved from last time, against what the
-// first state holds (that is where the panel starts, not news); and Releases, which stays until
-// another tab is clicked. Releases is only ever a click.
+// panel shows what there is. The tab saved from last time comes with the plan and run that panel
+// had seen (setPrefs), so the first state is weighed like any later one: a plain restart keeps the
+// tab, a relaunch for a new plan or run brings that forward. Only Releases outlasts news, staying
+// until another tab is clicked. Releases is only ever a click.
 function pickTab() {
   const plan = hasPlan() ? state.plan : null;
   const planTitle = plan ? String(plan.title) : null;
@@ -293,15 +299,22 @@ function pickTab() {
   }
   if (planTitle && planTitle !== seenPlan && !isNewRun) isNewPlan = true;
   seenPlan = planTitle;
-  const isPickKept = !!manualTab && (manualTab === 'releases' || !isSeeded);
-  if (!isPickKept && (isNewRun || isNewPlan)) {
+  if (manualTab !== 'releases' && (isNewRun || isNewPlan)) {
     tab = isNewRun ? 'tests' : 'phases';
     // The pick is over: the next panel no longer opens on it.
-    if (manualTab) post({ type: 'tab', value: null });
+    if (manualTab) {
+      post({ type: 'tab', value: null });
+      savedPick = '';
+    }
     manualTab = null;
   }
   if (state !== null && state !== undefined) isSeeded = true;
-  if (manualTab) { tab = manualTab; return; }
+  if (manualTab) {
+    tab = manualTab;
+    // What the panel has seen since (a plan gone, a first run) goes with it.
+    savePick();
+    return;
+  }
   if (tab === 'releases') tab = 'phases';
   if (!plan && list.length > 0 && tab !== 'learn') tab = 'tests';
   if (list.length === 0 && tab === 'tests') tab = plan || !build() ? 'phases' : 'learn';
@@ -505,11 +518,11 @@ function wear(value) {
   const root = document.documentElement;
   const opacity = Number(value?.opacity?.panel);
   const rgb = T.parseHex(value?.colors?.bg);
-  if (!rgb || !Number.isFinite(opacity) || opacity >= HALO_FROM) {
+  if (!rgb || !Number.isFinite(opacity) || opacity >= HALO_BELOW) {
     root.classList.remove('halo');
     return;
   }
-  const strength = Math.min(1, (HALO_FROM - opacity) / (HALO_FROM - HALO_FULL_AT));
+  const strength = Math.min(1, Math.max(HALO_LEAST, (HALO_BELOW - opacity) / (HALO_BELOW - HALO_FULL_AT)));
   root.style.setProperty('--halo', `rgba(${rgb.join(', ')}, ${Math.round(strength * 1000) / 1000})`);
   root.classList.add('halo');
 }
@@ -572,9 +585,21 @@ function openPage(page, view, courseId) {
 
 // --- Drawing --------------------------------------------------------------------------------
 
+// The pick for the next panel, given to Swift with what this panel has seen: {plan (the plan's
+// title), focus (the newest run)}. Releases is a look, never reopened: it is never saved, and the
+// pick before it stays.
+function savePick() {
+  if (!PICKABLE_TABS.includes(manualTab)) return;
+  const seen = { plan: seenPlan, focus: seenFocus };
+  const text = JSON.stringify([manualTab, seen]);
+  if (text === savedPick) return;
+  savedPick = text;
+  post({ type: 'tab', value: manualTab, seen });
+}
+
 // A tab click: that tab stays in front until something new comes (see pickTab), and the next panel
-// opens on it (Swift keeps it; Releases is a look, never reopened). Opening Releases marks its
-// newest version seen.
+// opens on it unless something new has come by then (savePick). Opening Releases marks its newest
+// version seen.
 function selectTab(name) {
   if (name === 'releases' && tab !== 'releases') {
     seenBefore = seenRelease;
@@ -585,7 +610,7 @@ function selectTab(name) {
     }
   }
   tab = manualTab = name;
-  post({ type: 'tab', value: name });
+  savePick();
   draw();
 }
 
@@ -717,9 +742,17 @@ window.setReleases = value => {
   draw();
 };
 // What the person left the last panel as, given once before the first state: {tab (one of the
-// pickable tabs, or null), collapsed}. Swift already knows it is collapsed: nothing is posted.
+// pickable tabs, or null), seen (what that panel had seen with it: {plan, focus}; null from an
+// older save, which then has seen nothing), collapsed}. Swift already knows it is collapsed:
+// nothing is posted.
 window.setPrefs = value => {
-  if (PICKABLE_TABS.includes(value?.tab) && !isSeeded) tab = manualTab = value.tab;
+  if (PICKABLE_TABS.includes(value?.tab) && !isSeeded) {
+    tab = manualTab = value.tab;
+    const seen = value.seen && typeof value.seen === 'object' ? value.seen : {};
+    seenPlan = typeof seen.plan === 'string' && seen.plan ? seen.plan : null;
+    seenFocus = typeof seen.focus === 'string' && seen.focus ? seen.focus : null;
+    savedPick = JSON.stringify([manualTab, value.seen ? { plan: seenPlan, focus: seenFocus } : null]);
+  }
   if (value?.collapsed) { collapsed = true; strip = ''; }
   draw();
 };
