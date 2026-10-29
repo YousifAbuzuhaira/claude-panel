@@ -6,6 +6,8 @@ A Claude Code plugin that puts a small floating panel over your terminal, showin
 - **Tests.** A live count and bar while a test suite runs. The last few runs stay listed, with a total.
 - **Learn.** Type a topic and your own Claude finds free videos and docs, reads them, and writes you a course: full pages, each with a Claude chat beside it. It tracks what you've learned across courses and tells you what's new.
 - **Games (▦).** Sudoku, 2048, a Monkeytype-style typing test, and chess puzzles explained move by move, for while Claude is busy.
+- **Releases.** What changed in each version, who made it, in a line or two.
+- **Your look.** Pick a colour scheme (Ember, Graphite, Moss, Serika, Paper, or your own three colours) and how see-through each window's background is. Every window follows at once.
 
 <p>
   <img src="docs/images/panel-learn-tab.png" width="380" alt="The floating panel's Learn tab">
@@ -25,7 +27,7 @@ I built this for **my** machine, and it's only been run there:
 - **Claude Code inside WSL2** (Ubuntu)
 - **WezTerm** as the terminal
 
-The panel and the Learn window are Windows PowerShell 5.1 + WPF windows. They find the chat's WezTerm window and sit over it, and they reach into WSL through `\\wsl.localhost`. On any other setup most of it doesn't show yet. The next sections say what works, and how your own Claude can build the rest in your fork.
+The panel and the Learn window are Windows PowerShell 5.1 + WPF windows. They find the chat's WezTerm window and sit over it, and they reach into WSL through `\\wsl.localhost`. Mahmood built the macOS side (a native floating panel and windows); anywhere else the panel is a Claude Code pane and Learn and the games open in the browser. The next sections say what works where.
 
 ## What works where
 
@@ -46,9 +48,9 @@ So a port only adds front ends. [docs/PORTING.md](docs/PORTING.md) is the step-b
 - **Learn and the games** become a small local web app in your browser, running on the same helper;
 - also covered: test tracking under zsh, and native Windows.
 
-## Bring it to your setup (macOS, Linux, other terminals)
+## Bring it to your setup
 
-Build the missing parts in **your own fork**, with your own Claude:
+macOS, Linux and other terminals are covered now (see the table). What's still missing is **Windows without WSL**, and nobody has run it on **Linux** yet. To build or fix that, work in **your own fork**, with your own Claude:
 
 1. **Fork** `YousifAbuzuhaira/claude-panel` on GitHub.
    - The repo is **private**. Ask me (Yousif) to add you as a collaborator first.
@@ -60,14 +62,10 @@ Build the missing parts in **your own fork**, with your own Claude:
    ```
 3. **Paste the prompt** for your setup:
 
-   - **macOS:**
-     > Read CLAUDE.md and docs/PORTING.md. I'm on macOS with zsh. Build steps 1–6 one at a time, in order, checking each before the next. Keep the Windows + WSL + WezTerm path as it is.
-   - **Linux / bash:**
-     > Read CLAUDE.md and docs/PORTING.md. I'm on Linux with bash. Build steps 1 and 3–6 one at a time, in order, checking each before the next. Keep the Windows + WSL + WezTerm path as it is.
-   - **Windows + WSL with another terminal:** the Linux prompt, but only steps 1 and 3. You already have Learn and the games.
-   - **Windows, no WSL:** the Linux prompt with your setup named, steps 1 and 3–7.
-
-   Learn and the games are big (steps 5 and 6). Do them in separate sessions if you like: the guide is written so each step stands alone.
+   - **Windows, no WSL:**
+     > Read CLAUDE.md and docs/PORTING.md. I'm on Windows with Claude Code in PowerShell, no WSL. Build step 7, checking each part before the next. Keep the other setups as they are.
+   - **Linux:**
+     > Read CLAUDE.md. I'm on Linux with bash. Run the pane, Learn and the games (the browser path), check each works, and fix what doesn't. Keep the other setups as they are.
 4. **Install from your fork**, and update it whenever you push. Bump `version` in `progress/.claude-plugin/plugin.json` each time:
 
    ```bash
@@ -130,13 +128,13 @@ claude plugin install progress@claude-panel
 
 Then in a Claude Code session, `/reload-plugins`:
 
-- **The panel** floats over your terminal window, at its top-right corner, and follows it as you move it. It opens by itself for a new plan, a new test run or a Learn build, and `/phases` opens it by hand. Drag it by its header to where you like it (that spot is kept, relative to the window), size it from its bottom-left corner (double-click the corner to fit its content again), make it more or less see-through with ◐ (100, 85, 70, 55%), collapse it with ▾, and ✕ hides it until the next plan or run. It sits above the terminal while the terminal is in front, and behind any other app you bring forward.
+- **The panel** floats over your terminal window, at its top-right corner, and follows it as you move it. It opens by itself for a new plan, a new test run or a Learn build, and `/phases` opens it by hand. Drag it by its header to where you like it (that spot is kept, relative to the window), size it from its bottom-left corner (double-click the corner to fit its content again), pick the colour scheme and see-through with ◐, collapse it with ▼, and ✕ hides it until the next plan or run. It sits above the terminal while the terminal is in front, and behind any other app you bring forward.
   - **iTerm2:** the first time, macOS asks whether *Claude Panel* may control iTerm2. Allow it, and the panel finds the exact window your Claude session is in. Without it, the panel sits on iTerm's front window. Other terminals (Terminal, Ghostty, WezTerm, Warp, VS Code) use their front window.
   - Without Swift (no Xcode or Command Line Tools), or with `CLAUDE_PANEL_PANE=1`, the panel is a Claude Code pane instead: docked beside the chat in fullscreen mode from 110 columns, otherwise above the prompt.
   - The status line under the prompt (`Phases 2/5 · Tests ● 12/40`) shows either way.
 - **Learn:** `/learn`, or the pane's Learn tab, opens it in its own window.
 - **Games:** `/games sudoku`, `/games 2048`, `/games typing` or `/games chess`, or the buttons on the Learn tab, each in its own window.
-- **The windows** stick to your terminal window like the panel: the first time centred on it, then wherever you move them on it. They move with it, float above it while it's in front, go behind other apps, and hide when it's minimized or on another Space. This works with the terminal in full screen too: the panel and the windows join its Space and take typing and clicks without pulling you off it. Window ▸ Always on Top keeps one above other apps too. They're 85% see-through to start: ⌘[ makes one more see-through and ⌘] more solid (remembered per page).
+- **The windows** stick to your terminal window like the panel: the first time centred on it, then wherever you move them on it. They move with it, float above it while it's in front, go behind other apps, and hide when it's minimized or on another Space. This works with the terminal in full screen too: the panel and the windows join its Space and take typing and clicks without pulling you off it. Window ▸ Always on Top keeps one above other apps too. ⌘[ makes the background more see-through and ⌘] more solid (the text stays solid; all Learn windows, or all game windows, together).
 - They're a small native app (`progress/mac/ClaudePanel.swift`, a WKWebView with no tabs or address bar). It's built with `swiftc` the first time it's needed (a few seconds) and cached in `~/.cache/claude-panel/app/`. Links to YouTube, docs or lichess open in your browser. Without Xcode or its Command Line Tools (`xcode-select --install`), or with `CLAUDE_PANEL_BROWSER=1`, the pages open in your browser instead.
 
 Learn and the games run on a small local server (`progress/web/server.mjs`). It listens on 127.0.0.1 only, wants a per-launch token on every request, and exits after 30 minutes with no page open. Its record is in `~/.config/claude-learn/web.json`, and game saves go in `~/.config/claude-panel/games/`. Chess downloads Stockfish (WebAssembly, GPL-3.0) from unpkg the first time, checks its hash, and caches it in `~/.cache/claude-learn/stockfish/`.
@@ -147,7 +145,9 @@ Learn and the games run on a small local server (`progress/web/server.mjs`). It 
 
 - **Phases.** Nothing to do: the plugin tells Claude to use its `phases_write` tool for any job with 3 or more steps. `/phases` opens the panel by hand; `/phases clear` empties it.
 - **Tests.** When Claude runs a test command (vitest, jest, playwright, `node --test`, pnpm/npm/yarn/bun/turbo test scripts), the Tests tab fills in live.
-- **The panel.** Drag it anywhere, resize it from the corner grip, collapse it with the arrow, close it with ✕.
+- **The panel.** Its top row holds the open/closed arrow, the chat's title, the version (that's the **Releases** tab, with a dot while there's news) and three marks: ◐ colour scheme and see-through, ▦ Learn and the games, ✕ hide until something new. Below it are the Phases, Tests and Learn tabs. A tab you click stays in front until a new plan or test run arrives. Drag the panel anywhere and resize it from the corner grip.
+- **Colour scheme and see-through.** ◐ in the panel: click a scheme; drag the Panel, Learn and Games bars to make each window's background more or less see-through (the text stays solid; below about 85% it gets a soft edge so it reads over anything). *Custom colours →* opens Learn's Settings, where you can set your own background, accent and text colours. Every open window changes within a second.
+- **Releases.** Click the version in the panel's top row: each release, its date, who made it, and what's new.
 - **Learn.** Use the panel's Learn tab, then *Open Learn*.
   - **Library:** type a topic or paste a YouTube, playlist or docs link. Choose *Let me pick* to tick the sources yourself, or *Just build it*. Builds run in the background: close the window and they carry on.
   - **Course:** contents, the lesson, and a chat that knows the page. ▶ times jump to that moment in the video, and *(added)* marks what Claude added beyond the sources. Answer the check questions in the chat. Nothing becomes *Learned* unless you mark it.
@@ -155,13 +155,13 @@ Learn and the games run on a small local server (`progress/web/server.mjs`). It 
   - **Before a new course:** it shows what you've already learned, what you've only read, and what's new, and offers to skip pages.
   - **Learned:** every concept, by category. Add, rename, edit, nest, merge, or remove (✕) concepts; *Tidy concepts* finds duplicates. Removing a course takes the concepts only it taught with it.
   - **Ask:** "what should I learn next?" Add your work folders in Settings and it suggests topics from the stack you really use, each with a *Build this* button.
-  - **Settings:** the library folder, which Claude model builds courses and which one chats, and text size.
+  - **Settings:** the colour scheme (presets, your own colours, see-through), the library folder, which Claude model builds courses and which one chats, and text size.
   - **Cost:** Learn runs on **your own Claude subscription** through `claude -p`, so it counts toward the same limits as your work. Settings shows the latest reading.
-- **Games.** ▦ in the panel's header. Each game is its own window. Sudoku, 2048 and Chess save the game in progress after every move; Typing keeps your theme and best score.
+- **Games.** ▦ in the panel's header, or in any game's or Learn's header, to go straight to another. Each game is its own window. Sudoku, 2048 and Chess save the game in progress after every move; Typing keeps your theme (by default it follows the colour scheme) and best score.
 
 Where things are kept:
 
-- `%LOCALAPPDATA%\ClaudePhases\` holds the windows' places and the games' saves.
+- `%LOCALAPPDATA%\ClaudePhases\` holds the windows' places, the games' saves and `appearance.json` (the colour scheme and see-through) on Windows; `~/.config/claude-panel/` holds them on macOS and Linux.
 - `~/.claude/learn` holds the Learn library; you can change it in Settings.
 - `~/.config/claude-learn/` holds Learn's settings.
 

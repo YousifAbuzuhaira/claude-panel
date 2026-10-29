@@ -1,8 +1,8 @@
 # Porting claude-panel to your setup
 
-This guide is for the Claude working in **your fork** of this repo. It builds the parts that are missing on your setup, macOS or Linux/bash above all, so you end up with what the author has: the floating panel, Learn, and the games.
+> **Status (0.3.0):** steps 1 to 6 are built. Mahmood's macOS port (0.2.0) added the native floating panel and windows, the pane, Learn and the games in the browser, and zsh test tracking; 0.3.0 added the shared colour scheme and see-through (contract 3 in [CLAUDE.md](../CLAUDE.md)) and the Releases tab (`progress/releases.json`) to all of them. What's left is **step 7, native Windows without WSL**, and a first run on Linux. The rest of this guide is kept as the design notes behind those parts: a new front end also reads `appearance.json` and `releases.json`, as CLAUDE.md describes.
 
-Nothing here has been built or run by the author. It's a plan written from the code as it stands. macOS has never been tested at all. Treat every step as "build it, then check it", in order, one at a time.
+This guide is for the Claude working in **your fork** of this repo. It was written to build the parts missing on a setup, so you end up with what the author has: the floating panel, Learn, and the games. Treat every step as "build it, then check it", in order, one at a time.
 
 Read [CLAUDE.md](../CLAUDE.md) first: the layout, the two contracts, and the rules that bite.
 
@@ -78,7 +78,7 @@ The behaviour to copy is in `widget/PhasesWidget.ps1` (the functions that draw t
 - The plan's title in bold.
 - One row per item:
   - done: `[✓]` in green, with the name dimmed;
-  - in progress: `[▸]`, with the name bold in the accent colour;
+  - in progress: `[●]`, with the name bold in the accent colour (`▸` means collapsed elsewhere);
   - todo: `[ ]`.
 - Footer: "d of t done". With no plan: "No plan yet."
 
