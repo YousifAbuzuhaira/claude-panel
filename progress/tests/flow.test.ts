@@ -17,7 +17,7 @@ describe('Tests tab', () => {
     })
 
     await $.tool.call({ tool: 'Bash', command: 'pnpm test' })
-    expect(seen[0]?.command).toContain('pnpm(){ __kp command pnpm "$@"; }')
+    expect(seen[0]?.command).toContain('function pnpm { __kp command pnpm "$@"; }')
     expect(seen[0]?.command.endsWith('\npnpm test')).toBe(true)
     expect(seen[0]?.midway).toBe('33')
     expect(host.panel()?.runs.at(-1)).toMatchObject({ status: 'passed', count: '94/94', passed: 94, failed: 0 })
@@ -138,11 +138,12 @@ describe('Opening the panel by hand', () => {
     expect(host.spawned.length).toBe(2)
   })
 
-  test('outside WezTerm on WSL, /phases says why and nothing starts', async ($, on) => {
-    const { host } = answerHost(on, { panel: 'comes-up', terminal: 'vscode' })
+  test('outside WezTerm on WSL, /phases opens the pane instead and nothing starts', async ($, on) => {
+    const { host } = answerHost(on, { panel: 'comes-up', terminal: 'iTerm.app' })
     const opened = await $.command.run({ command: 'phases', args: '', ...COMMAND_RUN })
-    expect(opened).toMatchObject({ text: expect.stringContaining('needs WezTerm on WSL') })
+    expect(opened).toMatchObject({ text: expect.stringContaining('Panel opened') })
     expect(host.spawned).toEqual([])
-    expect(host.toasts.length).toBe(1)
+    expect(host.opened).toContain('progress')
+    expect(host.toasts).toEqual([])
   })
 })

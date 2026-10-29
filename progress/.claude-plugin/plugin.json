@@ -1,7 +1,7 @@
 {
   "name": "progress",
-  "version": "0.1.1",
-  "description": "A floating progress panel over the chat window (Phases, Tests and Learn tabs, plus a few games). Learn builds courses from free videos and docs with your own Claude. The panel needs Windows with WSL2 and WezTerm.",
+  "version": "0.2.0",
+  "description": "A progress panel beside the chat (Phases, Tests and Learn tabs, plus a few games). Learn builds courses from free videos and docs with your own Claude. On Windows + WSL2 + WezTerm it floats over the window; anywhere else (macOS, Linux, any terminal) it's a Claude Code pane, and Learn and the games open in your browser.",
   "author": {
     "name": "Yousif Abuzuhaira"
   },

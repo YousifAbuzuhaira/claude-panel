@@ -1,11 +1,13 @@
 {
   "name": "claude-panel",
-  "owner": { "name": "Yousif Abuzuhaira" },
+  "owner": {
+    "name": "Yousif Abuzuhaira"
+  },
   "plugins": [
     {
       "name": "progress",
       "source": "./progress",
-      "description": "A floating panel over the chat (Phases, Tests and Learn tabs, plus games). Built for Windows + WSL2 + WezTerm; see the README for other setups."
+      "description": "A progress panel beside the chat (Phases, Tests and Learn tabs, plus games). A floating window on Windows + WSL2 + WezTerm; a Claude Code pane plus browser pages on macOS, Linux and any terminal."
     }
   ]
 }

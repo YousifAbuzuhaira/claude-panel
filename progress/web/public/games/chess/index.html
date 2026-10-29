@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Puzzles</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<main class="card" id="card">
+  <header class="header">
+    <h1>Puzzles</h1>
+    <div class="header-right">
+      <svg class="spark" id="spark" viewBox="0 0 96 26" aria-label="Your rating over the last puzzles"><title>Your rating over the last puzzles</title><polyline id="sparkLine" points=""/></svg>
+      <div class="rating" id="ratingBox" title="Your puzzle rating (Glicko-2, as on Lichess). A ? means it is still settling.">
+        <div class="rating-label" id="ratingLabel">RATING</div>
+        <div class="rating-number" id="ratingNumber">1500</div>
+        <div class="rating-flash" id="ratingFlash"></div>
+      </div>
+    </div>
+  </header>
+
+  <div class="body">
+    <div class="board-frame">
+      <div class="board" id="board">
+        <svg class="layer under" id="under" viewBox="0 0 8 8" preserveAspectRatio="none"></svg>
+        <div class="layer pieces" id="pieces"></div>
+        <svg class="layer over" id="over" viewBox="0 0 8 8" preserveAspectRatio="none"></svg>
+        <div class="layer promo-shade" id="promoShade" hidden></div>
+        <div class="layer promo" id="promo"></div>
+        <div class="veil" id="veil" hidden><div class="veil-text" id="veilText"></div></div>
+        <div class="loading" id="loading">Loading puzzles…</div>
+      </div>
+    </div>
+
+    <div class="side-host">
+      <section class="side" id="side">
+        <div class="info-line" id="infoLine"></div>
+        <div class="status-row"><span class="side-dot" id="sideDot"></span><span class="status" id="statusText"></span></div>
+        <div class="feed" id="feed"></div>
+        <div class="bottom">
+          <div class="move-strip" id="moveStrip" hidden></div>
+          <div class="buttons">
+            <button type="button" class="btn hint" id="hintButton" title="H. First the idea (half credit), then the piece, then the move (no credit).">Hint</button>
+            <button type="button" class="btn next" id="nextButton" title="N or Enter">Next puzzle</button>
+          </div>
+          <div class="row" id="modeRow"><span class="label">Mode</span></div>
+          <div class="row small" id="difficultyRow" title="How far from your rating the next puzzle is picked"></div>
+          <div class="climb-note" id="climbNote" hidden></div>
+          <div class="settings-row">
+            <button type="button" class="theme-chip" id="themeChip" title="Practise one theme, or a mix (T)"><span id="themeLabel"></span></button>
+            <button type="button" class="swatch" id="boardSwatch" title="Board colour"><span id="swatchLight"></span><span id="swatchDark"></span></button>
+          </div>
+          <div class="links">
+            <a id="puzzleLink" target="_blank" rel="noopener noreferrer">Lichess puzzle ↗</a>
+            <a id="gameLink" target="_blank" rel="noopener noreferrer">Source game ↗</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="picker" id="picker" hidden>
+        <input type="search" id="searchBox" placeholder="search themes..." autocomplete="off" spellcheck="false" aria-label="Search themes">
+        <div class="picker-list" id="pickerList"></div>
+      </section>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <span class="keys">Drag or click · H hint · N next · ← → replay · T themes</span>
+    <span class="credits">Puzzles: Lichess (CC0) · Pieces: cburnett (GPLv2+) · Engine: Stockfish (GPLv3)</span>
+  </footer>
+</main>
+<svg width="0" height="0" class="defs" aria-hidden="true"><defs id="pieceDefs"></defs></svg>
+</body>
+</html>

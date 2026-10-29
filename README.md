@@ -32,10 +32,10 @@ The panel and the Learn window are Windows PowerShell 5.1 + WPF windows. They fi
 | Your setup | Works today | Missing |
 |---|---|---|
 | **Windows + WSL2 + WezTerm** | Everything. | – |
-| **Windows + WSL2 + another terminal** (Windows Terminal, VS Code) | The Learn window and the games, opened with one command (below). | The floating panel, which looks for WezTerm. With no panel, phases and test runs show nowhere. |
+| **Windows + WSL2 + another terminal** (Windows Terminal, VS Code) | The Learn window and the games (`/learn`, `/games <name>`, or the command below), and the panel as a Claude Code pane. | The floating panel, which looks for WezTerm. |
 | **Windows, Claude Code in PowerShell** (no WSL) | The plugin loads and stays out of the way. | The panel, Learn and the games: they all go through WSL. |
-| **macOS** | Learn's helper from the command line: it builds courses into `~/.claude/learn`. | Everything you'd see: the panel, the Learn reader and the games. Test tracking also needs bash, and macOS defaults to zsh. |
-| **Linux / plain bash** | Same as macOS, and test tracking runs under bash, but nothing shows it yet. | Same as macOS. |
+| **macOS** (iTerm2, Terminal, Ghostty, any terminal; zsh or bash) | Everything: the floating panel that follows your terminal window, test tracking, and Learn and the games in their own windows (`/learn`, `/games`). | – |
+| **Linux / plain bash** | The same as macOS (`xdg-open` opens the browser). Built for macOS, not yet run on Linux. | Same as macOS. |
 
 The missing pieces are front ends; the core is shared:
 - Claude's phases and test runs live in the plugin, which can write them to one JSON file.
@@ -119,17 +119,29 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$P/widget
 
 Swap `Learn.ps1` for `ChessPuzzles.ps1`, `Sudoku.ps1`, `Game2048.ps1` or `TypeTest.ps1` for a game.
 
-### macOS / Linux, as it stands
+### macOS / Linux (and any other terminal)
 
-Installed as above, from this repo, the plugin loads and gives Claude its phases tool. Nothing shows yet: the panel is the WezTerm-on-WSL window. Learn's helper already runs on its own (it needs Node 22+ and `claude` on your PATH):
+Install from a clone of this repo; the plugin is then read straight from the folder, so `/reload-plugins` picks up your edits:
 
 ```bash
-P=$(ls -d ~/.claude/plugins/cache/claude-panel/progress/*/ | tail -1)
-bash "$P/learn/learn.sh" build start --topic "Kubernetes deployments" --category DevOps --mode auto
-bash "$P/learn/learn.sh" build list
+claude plugin marketplace add /path/to/claude-panel
+claude plugin install progress@claude-panel
 ```
 
-Courses land in `~/.claude/learn/courses/<id>/pages/*.json`, with the lesson in each page's `markdown` field. To get everything else, follow [Bring it to your setup](#bring-it-to-your-setup-macos-linux-other-terminals). Your Claude builds the pane, the web Learn and the games in your fork, from [docs/PORTING.md](docs/PORTING.md).
+Then in a Claude Code session, `/reload-plugins`:
+
+- **The panel** floats over your terminal window, at its top-right corner, and follows it as you move it. It opens by itself for a new plan, a new test run or a Learn build, and `/phases` opens it by hand. Drag it by its header to where you like it (that spot is kept, relative to the window), size it from its bottom-left corner (double-click the corner to fit its content again), make it more or less see-through with ◐ (100, 85, 70, 55%), collapse it with ▾, and ✕ hides it until the next plan or run. It sits above the terminal while the terminal is in front, and behind any other app you bring forward.
+  - **iTerm2:** the first time, macOS asks whether *Claude Panel* may control iTerm2. Allow it, and the panel finds the exact window your Claude session is in. Without it, the panel sits on iTerm's front window. Other terminals (Terminal, Ghostty, WezTerm, Warp, VS Code) use their front window.
+  - Without Swift (no Xcode or Command Line Tools), or with `CLAUDE_PANEL_PANE=1`, the panel is a Claude Code pane instead: docked beside the chat in fullscreen mode from 110 columns, otherwise above the prompt.
+  - The status line under the prompt (`Phases 2/5 · Tests ● 12/40`) shows either way.
+- **Learn:** `/learn`, or the pane's Learn tab, opens it in its own window.
+- **Games:** `/games sudoku`, `/games 2048`, `/games typing` or `/games chess`, or the buttons on the Learn tab, each in its own window.
+- **The windows** stick to your terminal window like the panel: the first time centred on it, then wherever you move them on it. They move with it, float above it while it's in front, go behind other apps, and hide when it's minimized or on another Space. This works with the terminal in full screen too: the panel and the windows join its Space and take typing and clicks without pulling you off it. Window ▸ Always on Top keeps one above other apps too. They're 85% see-through to start: ⌘[ makes one more see-through and ⌘] more solid (remembered per page).
+- They're a small native app (`progress/mac/ClaudePanel.swift`, a WKWebView with no tabs or address bar). It's built with `swiftc` the first time it's needed (a few seconds) and cached in `~/.cache/claude-panel/app/`. Links to YouTube, docs or lichess open in your browser. Without Xcode or its Command Line Tools (`xcode-select --install`), or with `CLAUDE_PANEL_BROWSER=1`, the pages open in your browser instead.
+
+Learn and the games run on a small local server (`progress/web/server.mjs`). It listens on 127.0.0.1 only, wants a per-launch token on every request, and exits after 30 minutes with no page open. Its record is in `~/.config/claude-learn/web.json`, and game saves go in `~/.config/claude-panel/games/`. Chess downloads Stockfish (WebAssembly, GPL-3.0) from unpkg the first time, checks its hash, and caches it in `~/.cache/claude-learn/stockfish/`.
+
+**Needs:** Node 22+ (Homebrew's `/opt/homebrew/bin/node` is found) and `claude` on your PATH.
 
 ## Using it
 

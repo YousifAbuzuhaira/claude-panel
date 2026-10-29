@@ -73,6 +73,51 @@ export function widgetArgv(options: {
   return argv
 }
 
+// The WPF window behind each of /learn and /games <name> on WSL, as the panel opens them.
+export const WINDOW_SCRIPTS: Record<string, string> = {
+  learn: 'Learn.ps1',
+  'games/sudoku': 'Sudoku.ps1',
+  'games/2048': 'Game2048.ps1',
+  'games/typing': 'TypeTest.ps1',
+  'games/chess': 'ChessPuzzles.ps1',
+}
+
+/** The command that starts a Learn or game window from WSL, any terminal. */
+export function windowArgv(options: { distro: string; pluginRoot: string; script: string; sessionId: string }): string[] {
+  const { distro, pluginRoot, script, sessionId } = options
+  return [
+    POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+    '-File', windowsPath(distro, `${pluginRoot}/widget/${script}`),
+    '-SessionId', sessionId,
+  ]
+}
+
+/** The command that starts the floating panel on macOS: the window app (mac/ClaudePanel.swift) in panel mode. */
+export function macPanelArgv(options: {
+  binary: string
+  pluginRoot: string
+  sessionId: string
+  terminal?: string
+  itermSession?: string
+}): string[] {
+  const { binary, pluginRoot, sessionId, terminal, itermSession } = options
+  const argv = [binary, '--panel', widgetStatePath(sessionId), '--html', `${pluginRoot}/mac/panel.html`, '--root', pluginRoot]
+  if (terminal) argv.push('--terminal', terminal)
+  if (itermSession) argv.push('--iterm-session', itermSession)
+
+  return argv
+}
+
+/** The binary `web.sh app-path` printed, or null where the window app can't be built. */
+export function readAppPath(stdout: string): string | null {
+  try {
+    const answer = JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as { ok?: boolean; binary?: unknown }
+    return answer.ok && typeof answer.binary === 'string' ? answer.binary : null
+  } catch {
+    return null
+  }
+}
+
 /** Splits what the widget printed into events, keeping an unfinished last line. */
 export function readEvents(pending: string, text: string): { events: WidgetEvent[]; pending: string } {
   const lines = (pending + text).split(/\r?\n/)

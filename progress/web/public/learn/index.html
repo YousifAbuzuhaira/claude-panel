@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>Learn</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="top">
+  <span class="brand">Learn</span>
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button type="button" class="tab" role="tab" data-tab="library" title="Ctrl+1">Library</button>
+    <button type="button" class="tab" role="tab" data-tab="course" title="Ctrl+2" hidden>Course</button>
+    <button type="button" class="tab" role="tab" data-tab="learned" title="Ctrl+3">Learned</button>
+    <button type="button" class="tab" role="tab" data-tab="ask" title="Ctrl+4">Ask</button>
+    <button type="button" class="tab" role="tab" data-tab="settings" title="Ctrl+5">Settings</button>
+  </nav>
+  <button type="button" id="build-chip" class="build-chip" hidden></button>
+</header>
+<div id="banner" class="banner" role="alert" hidden></div>
+<div class="views">
+  <section id="view-library" class="view scroll" hidden></section>
+  <section id="view-course" class="view" hidden></section>
+  <section id="view-learned" class="view scroll" hidden></section>
+  <section id="view-ask" class="view" hidden></section>
+  <section id="view-settings" class="view scroll" hidden></section>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

@@ -11,6 +11,9 @@ export type Host = {
   runs: string[][]
   spawned: string[][]
   toasts: string[]
+  /** The panes opened (off WezTerm-on-WSL) and each status line set. */
+  opened: string[]
+  status: (string | undefined)[]
   /** What the Bash log reads as; a test sets it as its run goes on. */
   log: string
 }
@@ -28,12 +31,12 @@ export type PanelState = {
  */
 export function answerHost(
   on: On,
-  options: { panel: 'comes-up' | 'fails' | 'closes'; terminal?: string; learnStatus?: string; off?: boolean } = { panel: 'comes-up' },
+  options: { panel: 'comes-up' | 'fails' | 'closes'; terminal?: string; learnStatus?: string; off?: boolean; mac?: boolean } = { panel: 'comes-up' },
 ) {
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, {
     TERM_PROGRAM: options.terminal ?? 'WezTerm',
-    WSL_DISTRO_NAME: 'Ubuntu',
+    ...(options.mac ? { ITERM_SESSION_ID: 'w0t1p0:ABC-123' } : { WSL_DISTRO_NAME: 'Ubuntu' }),
     SHELL: '/bin/bash',
     HOME: '/home/yousif',
     ...(options.off ? { CLAUDE_PROGRESS_OFF: '1' } : {}),
@@ -44,6 +47,8 @@ export function answerHost(
     runs: [],
     spawned: [],
     toasts: [],
+    opened: [],
+    status: [],
     log: '',
     panel: () => {
       const last = host.writes.filter(write => write.path === STATE).at(-1)
@@ -61,7 +66,9 @@ export function answerHost(
   on('fs.read', (_$, e) => ({ value: e.path === LEARN_STATUS ? (options.learnStatus ?? '') : host.log }))
   on('process.run', (_$, e) => {
     host.runs.push([...e.argv])
-    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    // On a Mac host: uname says Darwin and web.sh hands back the window app it built.
+    const stdout = !options.mac ? '' : e.argv[0] === 'uname' ? 'Darwin\n' : e.argv[2] === 'app-path' ? '{"ok":true,"binary":"/cache/ClaudePanel"}\n' : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('process.spawn', async function* (_$, e) {
     host.spawned.push([...e.argv])
@@ -77,6 +84,16 @@ export function answerHost(
     }
     return { value: { code: options.panel === 'fails' ? 1 : 0, signal: null } }
   })
+  on('ui.open', (_$, e) => {
+    host.opened.push(e.id)
+    return { value: { isPlaced: true as const } }
+  })
+  on('ui.close', () => ({ value: undefined }))
+  on('ui.status', (_$, e) => {
+    host.status.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.invalidate', () => ({ value: undefined }))
   on('ui.toast', (_$, e) => {
     host.toasts.push(e.text)
     return { value: undefined }

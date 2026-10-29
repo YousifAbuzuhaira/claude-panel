@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sudoku</title>
+<link rel="stylesheet" href="../games.css">
+<style>
+  :root {
+    --thin: rgba(255, 255, 255, 0.15);
+    --box: rgba(255, 255, 255, 0.45);
+    --pick: rgba(224, 138, 95, 0.3);
+    --pick-note: rgba(92, 143, 204, 0.36);
+    --peer: rgba(255, 255, 255, 0.07);
+    --same: rgba(224, 138, 95, 0.15);
+  }
+  .card { user-select: none; min-width: 360px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  header h1 { margin: 0; font-size: 14px; }
+  #hearts { font-size: 17px; letter-spacing: 1px; color: var(--red); cursor: default; }
+  #hearts .lost { color: var(--thin); }
+  hr { border: 0; height: 1px; background: var(--thin); margin: 8px 0 12px; }
+
+  .board {
+    display: grid; margin: 0 auto; width: max-content; border: 2px solid var(--box);
+    touch-action: none;
+  }
+  .cell {
+    position: relative; width: var(--cell); height: var(--cell); cursor: pointer;
+    border-left: 1px solid var(--thin); border-top: 1px solid var(--thin);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .cell.col0 { border-left: 0; }
+  .cell.row0 { border-top: 0; }
+  .cell.boxl { border-left: 2px solid var(--box); }
+  .cell.boxt { border-top: 2px solid var(--box); }
+  .cell.pick { background: var(--pick); }
+  .cell.pick.as-note { background: var(--pick-note); }
+  .cell.same { background: var(--same); }
+  .cell.peer { background: var(--peer); }
+  .value { font-size: var(--value); }
+  .value.given { font-weight: bold; color: var(--ink); }
+  .value.right { color: var(--green); }
+  .value.wrong { color: var(--red); }
+  .notes {
+    position: absolute; inset: 1px 2px; display: grid;
+    font-size: var(--note); color: var(--dim);
+  }
+  .notes span { place-self: center; padding: 0 3px; line-height: 1.25; border-radius: 3px; }
+  .notes span.lit { color: var(--accent); font-weight: bold; background: var(--same); }
+
+  #status { text-align: center; margin-top: 9px; color: var(--dim); min-height: 1.35em; }
+  #status.green { color: var(--green); }
+  #status.red { color: var(--red); }
+  .pad { display: flex; justify-content: center; gap: 2px; margin-top: 8px; }
+  .pad button.press { font-size: 18px; padding: 2px 9px; color: var(--ink); }
+  .pad button.press.done { color: var(--dim); }
+  .controls { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; margin-top: 10px; }
+  .controls .sizes { justify-self: end; }
+</style>
+</head>
+<body>
+<a class="back" href="../">&larr; games</a>
+<main class="card">
+  <header>
+    <h1 id="title">Sudoku</h1>
+    <span id="hearts" title="Lives: a wrong answer costs one"></span>
+  </header>
+  <hr>
+  <div class="board" id="board"></div>
+  <div id="status"></div>
+  <div class="pad" id="pad"></div>
+  <div class="controls">
+    <div class="modes">
+      <button class="press" data-mode="answer" title="Answer mode (Space switches; hold Shift or Ctrl to note)">Answer</button>
+      <button class="press" data-mode="notes" title="Notes mode (Space switches; hold Shift or Ctrl to answer)">Notes</button>
+    </div>
+    <button class="press" id="new" title="A fresh puzzle">New</button>
+    <div class="sizes">
+      <button class="press" data-size="4" title="Easy">4x4</button>
+      <button class="press" data-size="6" title="Medium">6x6</button>
+      <button class="press" data-size="9" title="Hard">9x9</button>
+    </div>
+  </div>
+</main>
+<script type="module" src="game.js"></script>
+</body>
+</html>

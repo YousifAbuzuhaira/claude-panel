@@ -1,0 +1,217 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Progress</title>
+<style>
+  /* The floating panel on macOS: the same Phases, Tests and Learn tabs as widget/PhasesWidget.ps1,
+     drawn from phases.json (contract 1). ClaudePanel.swift calls render(state) on every change. */
+  :root {
+    --bg: rgba(24, 25, 30, 0.94); --line: rgba(255, 255, 255, 0.08); --text: #e8e6e3; --dim: #8b8d94;
+    --accent: #d9875f; --green: #6cc28a; --red: #e5736b; --gold: #e3b341; --chip: rgba(255, 255, 255, 0.06);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: transparent; color: var(--text); font: 12.5px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; -webkit-user-select: none; cursor: default; overflow: hidden; }
+  html, body { height: 100%; }
+  /* As tall as its content, or as the person sized the window: then the tabs' body scrolls. */
+  #card { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; max-height: 100vh; display: flex; flex-direction: column; position: relative; }
+  #card.sized { height: 100vh; }
+  header, nav { flex: none; }
+  main { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+  main::-webkit-scrollbar { width: 6px; } main::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+  #grip { position: absolute; left: 3px; bottom: 2px; width: 10px; height: 10px; color: var(--dim); font-size: 9px; line-height: 10px; opacity: 0.6; pointer-events: none; transform: scaleX(-1); }
+  header { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line); }
+  header .title { flex: 1; font-weight: 600; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header .title b { color: var(--text); font-weight: 600; }
+  .icon { border: 0; background: none; color: var(--dim); font-size: 13px; width: 22px; height: 22px; border-radius: 6px; padding: 0; }
+  .icon:hover { background: var(--chip); color: var(--text); }
+  nav { display: flex; gap: 4px; padding: 8px 10px 0; }
+  nav button { border: 0; background: none; color: var(--dim); font: inherit; padding: 3px 8px; border-radius: 6px; }
+  nav button.on { background: var(--chip); color: var(--text); font-weight: 600; }
+  nav button:hover { color: var(--text); }
+  main { padding: 8px 12px 10px; }
+  .plan-title { font-weight: 600; margin-bottom: 4px; }
+  .item { display: flex; gap: 7px; padding: 1px 0; }
+  .item .mark { font-family: ui-monospace, Menlo, monospace; flex: none; }
+  .item.done .mark { color: var(--green); } .item.done .name { color: var(--dim); }
+  .item.now .mark, .item.now .name { color: var(--accent); font-weight: 600; }
+  .foot { color: var(--dim); margin-top: 6px; }
+  .run { margin-bottom: 6px; }
+  .run .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .run .label .m { margin-right: 6px; }
+  .bar { font-family: ui-monospace, Menlo, monospace; letter-spacing: -1px; }
+  .stats { color: var(--dim); font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  .ok { color: var(--green); } .bad { color: var(--red); } .warn { color: var(--gold); } .acc { color: var(--accent); }
+  .empty { color: var(--dim); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .row button { border: 1px solid var(--line); background: var(--chip); color: var(--text); font: inherit; padding: 3px 9px; border-radius: 7px; }
+  .row button.primary { background: var(--accent); border-color: var(--accent); color: #1b1b1f; font-weight: 600; }
+  .row button:hover { filter: brightness(1.15); }
+  .collapsed nav, .collapsed main { display: none; }
+</style>
+</head>
+<body>
+<div id="card">
+  <header>
+    <div class="title" id="summary"><b>Progress</b></div>
+    <button class="icon" id="opacity" title="See-through: 100, 85, 70, 55%">◐</button>
+    <button class="icon" id="collapse" title="Collapse">▾</button>
+    <button class="icon" id="close" title="Hide until something new">✕</button>
+  </header>
+  <nav id="tabs"></nav>
+  <main id="body"></main>
+  <div id="grip" title="Drag to resize; double-click to fit">◢</div>
+</div>
+<script>
+const post = message => window.webkit?.messageHandlers?.panel?.postMessage(message);
+const GAMES = [['sudoku', 'Sudoku'], ['2048', '2048'], ['typing', 'Typing'], ['chess', 'Chess']];
+let state = null;
+let tab = 'phases';
+let manualTab = null;
+let lastFocus = null;
+let lastPlan = null;
+let collapsed = false;
+
+const el = (tag, attrs = {}, ...kids) => {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === 'class') node.className = value;
+    else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value);
+  }
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) node.append(kid.nodeType ? kid : String(kid));
+  return node;
+};
+const bar = (ratio, cells = 18) => {
+  const full = ratio === null || ratio === undefined ? 0 : Math.max(0, Math.min(cells, Math.round(ratio * cells)));
+  return '█'.repeat(full) + '░'.repeat(cells - full);
+};
+const hasPlan = () => state?.plan && state.plan.items?.length > 0;
+const runs = () => state?.runs || [];
+const build = () => state?.learn?.build || null;
+const course = () => state?.learn?.course || null;
+
+function labels() {
+  const plan = hasPlan() ? `Phases ${state.plan.done}/${state.plan.total}` : 'Phases';
+  const list = runs();
+  const live = [...list].reverse().find(run => run.status === 'running');
+  const last = list.at(-1);
+  const tests = live ? `Tests ● ${live.count}` : last ? (last.status === 'failed' ? 'Tests ✗' : 'Tests ✓') : 'Tests';
+  const b = build();
+  const learn = b?.state === 'running' ? (b.total > 0 ? `Learn ${b.done}/${b.total}` : 'Learn ●') : 'Learn';
+  return { phases: plan, tests, learn };
+}
+
+// The tab in front, as the WPF panel picks it.
+function pickTab() {
+  const focus = state?.focus ?? null;
+  const planTitle = hasPlan() ? state.plan.title : null;
+  if (focus !== null && focus !== lastFocus) { tab = 'tests'; manualTab = null; }
+  else if (planTitle !== null && planTitle !== lastPlan) { tab = 'phases'; manualTab = null; }
+  else if (manualTab) tab = manualTab;
+  else if (!hasPlan() && runs().length > 0) tab = 'tests';
+  else if (runs().length === 0 && tab === 'tests') tab = hasPlan() || !build() ? 'phases' : 'learn';
+  else if (!hasPlan() && runs().length === 0 && build()) tab = 'learn';
+  lastFocus = focus;
+  lastPlan = planTitle;
+}
+
+function summary() {
+  if (tab === 'tests' && runs().length) {
+    const run = runs().at(-1);
+    return `${run.label} · ${run.count}`;
+  }
+  if (tab === 'learn' && build()) return `${build().topic}: ${build().message}`;
+  if (hasPlan()) {
+    const now = state.plan.items.find(item => item.status === 'in_progress') || state.plan.items.find(item => item.status === 'todo');
+    return `${now ? now.name : state.plan.title} · ${state.plan.done}/${state.plan.total}`;
+  }
+  return 'Progress';
+}
+
+function phasesBody() {
+  if (!hasPlan()) return [el('div', { class: 'empty' }, 'No plan yet.')];
+  const plan = state.plan;
+  return [
+    el('div', { class: 'plan-title' }, plan.title),
+    ...plan.items.map(item => {
+      const kind = item.status === 'done' ? 'done' : item.status === 'in_progress' ? 'now' : 'todo';
+      const mark = kind === 'done' ? '[✓]' : kind === 'now' ? '[▸]' : '[ ]';
+      return el('div', { class: `item ${kind}` }, el('span', { class: 'mark' }, mark), el('span', { class: 'name' }, item.name));
+    }),
+    el('div', { class: 'foot' }, `${plan.done} of ${plan.total} done`),
+  ];
+}
+
+function testsBody() {
+  const list = [...runs()].reverse();
+  if (list.length === 0) return [el('div', { class: 'empty' }, 'No test runs yet.')];
+  const totals = state.totals || { runs: 0, tests: 0, passed: 0, failed: 0 };
+  return [
+    ...list.map(run => {
+      const color = run.status === 'passed' ? 'ok' : run.status === 'failed' || run.failed > 0 ? 'bad' : 'acc';
+      const mark = run.status === 'running' ? '●' : run.status === 'passed' ? '✓' : '✗';
+      return el('div', { class: 'run' },
+        el('div', { class: 'label' }, el('span', { class: `m ${color}` }, mark), run.label),
+        el('div', { class: 'stats' }, el('span', { class: `bar ${color}` }, bar(run.ratio)), ` ${run.count}  `, el('span', { class: 'ok' }, `✓${run.passed}`), run.failed > 0 ? el('span', { class: 'bad' }, ` ✗${run.failed}`) : null));
+    }),
+    el('div', { class: 'foot' }, `${totals.tests} tests in ${totals.runs} run${totals.runs === 1 ? '' : 's'} · ${totals.passed} passed${totals.failed ? ` · ${totals.failed} failed` : ''}`),
+  ];
+}
+
+function learnBody() {
+  const b = build();
+  const c = course();
+  const color = b ? ({ failed: 'bad', 'waiting-picks': 'warn', done: 'ok' }[b.state] || 'acc') : 'acc';
+  return [
+    b ? el('div', {}, el('b', { class: color }, b.topic), ' ', el('span', { class: 'empty' }, b.message)) : null,
+    b && b.total > 0 ? el('div', { class: 'stats' }, el('span', { class: `bar ${color}` }, bar(b.done / b.total)), ` ${b.done}/${b.total} pages`) : null,
+    c ? el('div', { class: 'plan-title', style: 'margin-top:6px' }, c.title) : null,
+    c ? el('div', { class: 'empty' }, `Page ${c.page} of ${c.total}${c.next ? ` · next: ${c.next}` : ''}`) : null,
+    !b && !c ? el('div', { class: 'empty' }, 'Courses from free videos and docs, written by your own Claude.') : null,
+    el('div', { class: 'row' },
+      el('button', { class: 'primary', onclick: () => post({ type: 'open', page: 'learn' }) }, c ? 'Carry on reading' : 'Open Learn'),
+      ...GAMES.map(([id, label]) => el('button', { onclick: () => post({ type: 'open', page: `games/${id}` }) }, label))),
+  ];
+}
+
+function draw() {
+  const names = labels();
+  const tabs = document.getElementById('tabs');
+  tabs.replaceChildren(...['phases', 'tests', 'learn'].map(name =>
+    el('button', { class: name === tab ? 'on' : '', onclick: () => { tab = manualTab = name; draw(); } }, names[name])));
+  const body = document.getElementById('body');
+  body.replaceChildren(...(tab === 'tests' ? testsBody() : tab === 'learn' ? learnBody() : phasesBody()));
+  const text = summary();
+  document.getElementById('summary').replaceChildren(collapsed ? text : el('b', {}, 'Progress'));
+  document.body.classList.toggle('collapsed', collapsed);
+  document.getElementById('collapse').textContent = collapsed ? '▸' : '▾';
+  // The content's own height, scrolled part included: the window fits it unless the person sized it.
+  requestAnimationFrame(() => {
+    const parts = ['header', 'nav', 'main'].map(selector => document.querySelector(selector));
+    const natural = parts.reduce((sum, part) => sum + (getComputedStyle(part).display === 'none' ? 0 : part.tagName === 'MAIN' ? part.scrollHeight : part.offsetHeight), 0) + 2;
+    post({ type: 'height', height: Math.ceil(natural) });
+  });
+}
+
+window.render = next => {
+  state = next;
+  pickTab();
+  draw();
+};
+window.setCollapsed = value => { collapsed = !!value; draw(); };
+// Sized by the person with the corner grip: fill the window and scroll; else fit the content.
+window.setSized = value => { document.getElementById('card').classList.toggle('sized', !!value); draw(); };
+
+document.getElementById('close').addEventListener('click', () => post({ type: 'close' }));
+document.getElementById('opacity').addEventListener('click', () => post({ type: 'opacity' }));
+document.getElementById('collapse').addEventListener('click', () => {
+  collapsed = !collapsed;
+  post({ type: 'collapsed', value: collapsed });
+  draw();
+});
+draw();
+post({ type: 'loaded' });
+</script>
+</body>
+</html>

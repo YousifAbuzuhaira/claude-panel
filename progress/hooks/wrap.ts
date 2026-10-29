@@ -75,11 +75,15 @@ const quote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
  * is untouched, so `cd`, pipes and `&&` behave as written.
  */
 export function wrapCommand(command: string, logPath: string): string {
-  const shadows = WRAPPED.map(name => `${name}(){ __kp command ${name} "$@"; }`).join('; ')
+  // `function name { … }` parses in bash and zsh alike, even where the shell
+  // snapshot holds an alias of that name (zsh refuses `name(){` then).
+  const shadows = WRAPPED.map(name => `function ${name} { __kp command ${name} "$@"; }`).join('; ')
 
+  // bash keeps the runner's status in ${PIPESTATUS[0]}; zsh has none of it,
+  // so the fallback reads zsh's own ${pipestatus[1]}.
   return (
     `__kp_log=${quote(logPath)}; ` +
-    `__kp(){ "$@" 2>&1 | tee -a "$__kp_log"; local __kp_rc=\${PIPESTATUS[0]}; ` +
+    `function __kp { "$@" 2>&1 | tee -a "$__kp_log"; local __kp_rc=\${PIPESTATUS[0]:-\${pipestatus[1]}}; ` +
     `printf '\\n\\036@kp-exit %s\\n' "$__kp_rc" >>"$__kp_log"; return "$__kp_rc"; }; ` +
     `${shadows}\n${command}`
   )

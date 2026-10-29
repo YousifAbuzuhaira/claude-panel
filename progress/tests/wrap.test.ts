@@ -51,12 +51,12 @@ describe('wrap', () => {
     const wrapped = wrapCommand(command, "/tmp/it's.log")
     expect(wrapped.endsWith(`\n${command}`)).toBe(true)
     expect(wrapped).toContain(`__kp_log='/tmp/it'\\''s.log'`)
-    expect(wrapped).toContain('pnpm(){ __kp command pnpm "$@"; }')
-    expect(wrapped).toContain('${PIPESTATUS[0]}')
+    expect(wrapped).toContain('function pnpm { __kp command pnpm "$@"; }')
+    expect(wrapped).toContain('${PIPESTATUS[0]:-${pipestatus[1]}}')
   })
 
   test('launchers are shadowed too, so `timeout npx …` is copied', () => {
-    expect(wrapCommand('timeout 60 npx tsx test/e2e/a.ts', '/tmp/a.log')).toContain('timeout(){ __kp command timeout "$@"; }')
+    expect(wrapCommand('timeout 60 npx tsx test/e2e/a.ts', '/tmp/a.log')).toContain('function timeout { __kp command timeout "$@"; }')
   })
 
   test('a run key survives a changing log name and keeps packages apart', () => {

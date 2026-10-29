@@ -2,7 +2,7 @@
 
 For Claude working in, installing, or porting this repo. Humans: start at README.md.
 
-The author's setup is Windows 10/11 + Claude Code in WSL2 (Ubuntu) + WezTerm, and only that setup has been run. Everything platform-specific sits in the front ends (the PowerShell windows). The core is two plain contracts, below, that any new front end can use.
+The author's setup is Windows 10/11 + Claude Code in WSL2 (Ubuntu) + WezTerm. A macOS port (any terminal, zsh or bash) sits beside it: the panel as a Claude Code pane drawn by `register.tsx`, and Learn and the games as browser pages served by `web/server.mjs`. Everything platform-specific sits in the front ends. The core is two plain contracts, below, that any new front end can use.
 
 ## Layout
 
@@ -11,7 +11,12 @@ The author's setup is Windows 10/11 + Claude Code in WSL2 (Ubuntu) + WezTerm, an
 progress/
   .claude-plugin/plugin.json
   hooks/register.tsx              the plugin: hooks, the phases_write tool, /phases, panel life, Learn status poll
-  hooks/*.ts                      pure helpers (phases schema + guide, test-command wrapping, output parsing, panel state)
+  hooks/*.ts                      pure helpers (phases schema + guide, test-command wrapping, output parsing, panel state, pane.ts for the pane)
+  web/server.mjs, web/web.sh      the local web server (macOS/Linux): Learn + games in the browser, bridged to learn.sh serve
+  web/public/                     the browser pages: learn/, games/<sudoku|2048|typing|chess>/, shared/api.js
+  web/tests/                      node:test tests for the games' pure logic
+  mac/ClaudePanel.swift           the macOS window app (AppKit + WKWebView): server.mjs builds it with swiftc on first use, caches it by source hash, and opens each page in it; the browser is the fallback
+                                  also the floating panel (--panel mode, drawing mac/panel.html from phases.json, following the terminal window; iTerm2's exact window via AppleScript)
   widget/PhasesWidget.ps1         the floating panel (Windows PowerShell 5.1 + WPF)
   widget/Learn.ps1 (+ LearnRender.ps1, LearnViews.ps1, LearnCore.cs)   the Learn window
   widget/{Sudoku,Game2048,TypeTest,ChessPuzzles}.ps1, ChessCore.cs, *.txt   the games and their data
@@ -37,7 +42,7 @@ Learn window ─ JSON lines ─ learn/learn.sh serve   ← contract 2
       <library>/ (default ~/.claude/learn)  +  ~/.config/claude-learn/{settings,status}.json
 ```
 
-`register.tsx` starts the panel only when `TERM_PROGRAM=WezTerm` and `WSL_DISTRO_NAME` are set (`panelDistro`). Elsewhere it shows one toast and returns **before** writing the state file, so today `phases.json` exists only on WezTerm-on-WSL. Step 1 of [docs/PORTING.md](docs/PORTING.md) moves the write ahead of that check.
+`register.tsx` writes `phases.json` on every setup. It starts the WPF panel only when `TERM_PROGRAM=WezTerm` and `WSL_DISTRO_NAME` are set (`panelDistro`). On macOS it starts the floating panel instead: the window app in panel mode (`macPanelArgv` in `hooks/widget.ts`, binary from `web.sh app-path`), speaking the same ready/closed/alive events as the WPF panel. Anywhere else, or if that panel can't start, it opens a Claude Code pane (`PANE_ID` in `hooks/pane.ts`). Off WSL it also sets a one-line `$.ui.status`, and `/learn` and `/games <name>` open the browser through `web/web.sh open <page>`. On WSL (any terminal) those two commands start the WPF windows instead (`windowArgv` in `hooks/widget.ts`). Test tracking runs under bash and zsh: the wrapper reads `${PIPESTATUS[0]:-${pipestatus[1]}}` and defines its shadows as `function name { …; }`.
 
 ## Contract 1: the panel state file
 
@@ -154,4 +159,5 @@ claude -p --safe-mode --restricted --strict-mcp-config --permission-mode dontAsk
   - the panel: `PhasesWidget.ps1 -StateFile <fixture> -SnapshotPath x.png -SnapshotTab phases|tests|learn -SnapshotLook open`;
   - Learn: `Learn.ps1 -SnapshotPath x.png -SnapshotView library|course|overlap|learned|ask|settings -SnapshotLibrary <a COPY of a library> -SnapshotConfig <an empty folder>`. Never point it at a real library.
 - `node --check` every `learn/*.mjs` you touched.
-- Tests: `claude plugin test ./progress` and `node --test progress/learn/tests/`. Run them only as your own working rules allow.
+- Tests: `claude plugin test ./progress`, `node --test progress/learn/tests/` and `node --test 'progress/web/tests/*.test.mjs'` (the browser games; the folder form fails on Node 24).
+- Web pages (macOS/Linux): `node --check` every `progress/web/**/*.js` you touched, and screenshot them against a **copy** of a library (`LEARN_LIBRARY=<copy> LEARN_CONFIG_DIR=<empty folder> CLAUDE_PANEL_NO_BROWSER=1 bash progress/web/web.sh open learn`). The live event stream keeps `--virtual-time-budget` screenshots from finishing: drive Chrome over its debugging port instead. Run them only as your own working rules allow.

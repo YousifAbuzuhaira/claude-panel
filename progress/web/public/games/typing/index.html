@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Typing</title>
+<link rel="stylesheet" href="../games.css">
+<style>
+  /* Monkeytype's colours, set from the chosen theme. */
+  :root {
+    --bg: #323437; --main: #e2b714; --caret: #e2b714; --sub: #646669; --subAlt: #2c2e31;
+    --text: #d1d0c5; --error: #ca4754; --errorExtra: #7e2a33;
+    --type: 'Roboto Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+    --letter: 26px;
+  }
+  body { background: color-mix(in srgb, var(--bg) 82%, black); font-family: var(--type); }
+  .back { color: var(--sub); }
+  .back:hover { color: var(--text); }
+  .card {
+    background: var(--bg); border-color: color-mix(in srgb, var(--sub) 32%, transparent);
+    padding: 16px 26px 18px; width: min(700px, 100%); color: var(--text);
+  }
+  header { display: flex; align-items: center; justify-content: space-between; }
+  .logo { font-size: 20px; font-weight: bold; }
+  .logo .a { color: var(--sub); }
+  .settings { font-size: 13px; color: var(--main); }
+  .settings .lang { color: var(--sub); margin-left: 1.2em; }
+
+  .views { display: grid; margin-top: 22px; min-height: 290px; }
+  .views > * { grid-area: 1 / 1; }
+  [hidden] { display: none !important; }
+  .typing { align-self: center; }
+  #progress { color: var(--main); font-size: 22px; margin-bottom: 6px; visibility: hidden; }
+  .wordsHost { position: relative; }
+  #words {
+    display: flex; flex-wrap: wrap; font-size: var(--letter); line-height: 1.15; user-select: none;
+    transition: filter 150ms;
+  }
+  .word { margin: 4px calc(var(--letter) * 0.6) 4px 0; border-bottom: 2px solid transparent; white-space: pre; }
+  .word.left-wrong { border-bottom-color: var(--error); }
+  .word span { color: var(--sub); }
+  .word span.right { color: var(--text); }
+  .word span.wrong { color: var(--error); }
+  .word span.extra { color: var(--errorExtra); }
+  #caret {
+    position: absolute; left: 0; top: 0; width: 2.5px; height: calc(var(--letter) * 1.15);
+    border-radius: 1px; background: var(--caret); pointer-events: none;
+  }
+  #caret.glide { transition: left 90ms, top 90ms; }
+  #caret.blink { animation: blink 1s ease-in-out infinite; }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+  #veil {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 16px; color: var(--text); cursor: pointer;
+  }
+  .unfocused #words { filter: blur(6px); }
+  .unfocused #caret { visibility: hidden; }
+
+  .result { display: grid; grid-template-columns: auto 1fr; align-content: start; }
+  .stat .name { color: var(--sub); font-size: 15px; }
+  .stat .value { color: var(--main); font-size: 30px; line-height: 1.1; }
+  .big .name { font-size: 22px; }
+  .big .value { font-size: 58px; line-height: 1; }
+  .big .stat + .stat { margin-top: 6px; }
+  #crown { font-size: 22px; margin-left: 8px; vertical-align: 0.6em; }
+  #graph { margin: 8px 0 0 34px; overflow: visible; }
+  #graph text { fill: var(--sub); font: 10px var(--type); }
+  .details { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0 40px; margin-top: 18px; }
+  .details .type .value { font-size: 16px; line-height: 1.3; }
+
+  .picker { background: var(--bg); display: flex; flex-direction: column; min-height: 0; max-height: 290px; }
+  #search {
+    font: 15px var(--type); color: var(--text); background: var(--subAlt); caret-color: var(--caret);
+    border: 0; border-radius: 6px; padding: 7px 10px; outline: none;
+  }
+  #search::placeholder { color: var(--sub); }
+  #search::selection { background: var(--main); color: var(--bg); }
+  #swatches {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px;
+    margin-top: 10px; overflow-y: auto; scrollbar-width: none; padding: 2px;
+  }
+  .swatch {
+    height: 34px; border-radius: 6px; border: 2px solid transparent; cursor: pointer;
+    display: flex; align-items: center; gap: 6px; padding: 0 8px 0 9px; font: 12px var(--type);
+  }
+  .swatch.on { border-color: var(--text); }
+  .swatch .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .swatch i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .nothing { color: var(--sub); padding: 10px 2px; }
+
+  footer { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; margin-top: 26px; font-size: 12px; color: var(--sub); }
+  footer .keys { grid-column: 2; }
+  kbd { background: var(--subAlt); color: var(--text); border-radius: 4px; padding: 1px 6px 2px; font: 12px var(--type); }
+  kbd + .sep { margin-right: 18px; }
+  #themeButton {
+    justify-self: end; background: none; border: 0; color: var(--sub); font: 12px var(--type);
+    cursor: pointer; display: flex; align-items: center; gap: 6px;
+  }
+  #themeButton:hover { color: var(--text); }
+  #themeButton i { width: 9px; height: 9px; border-radius: 50%; background: var(--main); }
+</style>
+</head>
+<body>
+<a class="back" href="../">&larr; games</a>
+<main class="card">
+  <header>
+    <div class="logo"><span class="a">type</span>test</div>
+    <div class="settings">words 10<span class="lang">english</span></div>
+  </header>
+  <div class="views">
+    <section class="typing" id="typing">
+      <div id="progress">0/10</div>
+      <div class="wordsHost" id="wordsHost">
+        <div id="words"></div>
+        <div id="caret"></div>
+        <div id="veil" hidden>Click here to focus</div>
+      </div>
+    </section>
+    <section class="result" id="result" hidden>
+      <div class="big">
+        <div class="stat"><div class="name">wpm</div><div class="value"><span id="wpm">-</span><span id="crown" title="new personal best" hidden>&#x265B;</span></div></div>
+        <div class="stat"><div class="name">acc</div><div class="value" id="acc">-</div></div>
+      </div>
+      <svg id="graph" width="440" height="188" aria-label="speed each second"></svg>
+      <div class="details">
+        <div class="stat type"><div class="name">test type</div><div class="value">words 10<br>english</div></div>
+        <div class="stat"><div class="name">raw</div><div class="value" id="raw">-</div></div>
+        <div class="stat" title="correct, incorrect, extra, and missed"><div class="name">characters</div><div class="value" id="chars">-</div></div>
+        <div class="stat"><div class="name">consistency</div><div class="value" id="consistency">-</div></div>
+        <div class="stat"><div class="name">time</div><div class="value" id="time">-</div></div>
+      </div>
+    </section>
+    <section class="picker" id="picker" hidden>
+      <input id="search" type="text" placeholder="search themes..." autocomplete="off" spellcheck="false">
+      <div id="swatches"></div>
+    </section>
+  </div>
+  <footer>
+    <span class="keys"><kbd>tab</kbd><span class="sep"> - restart test</span><kbd>esc</kbd><span> - themes</span></span>
+    <button id="themeButton" title="Themes (Esc)"><i></i><span id="themeName"></span></button>
+  </footer>
+</main>
+<script type="module" src="game.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Games</title>
+<link rel="stylesheet" href="games.css">
+<style>
+  .card { width: min(420px, 100%); padding: 18px 20px 20px; }
+  h1 { margin: 0 0 4px; font-size: 22px; color: var(--accent); }
+  p.hint { margin: 0 0 14px; }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  a.game {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    padding: 10px 12px; border-radius: 6px; background: var(--slot);
+    color: var(--ink); text-decoration: none;
+  }
+  a.game:hover { background: #34353b; }
+  a.game b { font-size: 15px; }
+  a.game span { color: var(--dim); font-size: 12px; text-align: right; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>Games</h1>
+  <p class="hint">Something to do while Claude works.</p>
+  <ul>
+    <li><a class="game" href="2048/"><b>2048</b><span>slide and merge</span></a></li>
+    <li><a class="game" href="sudoku/"><b>Sudoku</b><span>4&times;4, 6&times;6, 9&times;9</span></a></li>
+    <li><a class="game" href="typing/"><b>Typing</b><span>ten words, how fast</span></a></li>
+    <li><a class="game" href="chess/"><b>Chess puzzles</b><span>rated tactics</span></a></li>
+  </ul>
+</main>
+<script type="module" src="index.js"></script>
+</body>
+</html>
