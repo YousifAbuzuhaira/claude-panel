@@ -751,7 +751,11 @@ function Build-CourseView {
   [System.Windows.Controls.DockPanel]::SetDock($contentsTop, 'Top')
   $pageList = New-Object System.Windows.Controls.StackPanel
   [void]$contents.Children.Add($contentsTop)
-  [void]$contents.Children.Add((New-RowScroll $pageList 6))
+  # The pages' scrollbar lane comes out of the column, not out of the 16 before the page: the bar
+  # stays clear of the page's text, and the title and its line above keep the column's width.
+  $pageScroll = New-RowScroll $pageList 6
+  $pageScroll.Margin = New-Gap -6 0 -6 0
+  [void]$contents.Children.Add($pageScroll)
   [System.Windows.Controls.Grid]::SetColumn($contents, 0)
 
   # Page: capped to a reading width (in ems, so it follows the text size) and centred in its
@@ -2270,9 +2274,10 @@ function Build-AskView {
   Set-ChatInputSize $askInput.box
   [void]$bottom.Children.Add($send)
   [void]$bottom.Children.Add($askInput.holder)
-  # The messages' text on the view's edge (Add-MessageSection).
+  # The messages' text on the view's edge (Add-MessageSection). The reader hangs as far past the
+  # column on the right as on the left, plus the lane, so its scrollbar is where the lists' bars are.
   $reader = New-Reader
-  $reader.Margin = New-Gap (-$MESSAGE_INSET - 2) 0 0 0
+  $reader.Margin = New-Gap (-$MESSAGE_INSET - 2) 0 (-$MESSAGE_INSET - 2 - $SCROLL_LANE) 0
   [void]$root.Children.Add($top)
   [void]$root.Children.Add($bottom)
   [void]$root.Children.Add($reader)
@@ -2517,10 +2522,22 @@ function Get-AppearanceKey {
   return '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f $current.preset, $current.colors.bg, $current.colors.accent, $current.colors.text, $current.opacity.panel, $current.opacity.learn, $current.opacity.games
 }
 
-# Called every tick while Settings shows: a swatch or a bar here changed the scheme.
+# The halo for low see-through (Chrome.ps1) in step with Learn's see-through and background, and
+# the appearance it was set for.
+$script:haloAppearance = ''
+function Update-LearnHalo {
+  $script:haloAppearance = Get-AppearanceKey
+  Update-UiHalo
+}
+
+# Called every tick. A swatch, Reset, the custom colours or a bar here changed the scheme: the halo
+# follows whatever the change, since a bar being dragged only previews (Set-ThemeAppearance) and
+# never reaches Update-Theme; and while Settings shows, its swatch ring and bars do too.
 function Sync-AppearanceSection {
+  $key = Get-AppearanceKey
+  if ($key -ne $script:haloAppearance) { Update-LearnHalo }
   if ($script:view -ne 'settings' -or -not $script:ui.swatchRow) { return }
-  if ((Get-AppearanceKey) -ne $script:shownAppearance) { Update-AppearanceSection }
+  if ($key -ne $script:shownAppearance) { Update-AppearanceSection }
 }
 
 function Update-CustomWell([string]$Key) {

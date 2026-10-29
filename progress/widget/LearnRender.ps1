@@ -296,10 +296,13 @@ function New-InputBox([string]$Hint, [bool]$Multiline = $false, [switch]$Mono) {
   $hintText.FontSize = 13
   $hintText.TextTrimming = 'CharacterEllipsis'
   $hintText.IsHitTestVisible = $false
-  # The border (1), the padding (8) and the text box's own 2 before the caret.
+  # The border (1), the padding (8) and the text box's own 2 before the caret. A tall box's hint
+  # wraps, as its text does, so a narrow chat or a larger text size never cuts it off.
   if ($Multiline) {
     $hintText.Margin = New-Gap 11 6 9 0
     $hintText.VerticalAlignment = 'Top'
+    $hintText.TextWrapping = 'Wrap'
+    $hintText.TextTrimming = 'None'
   } else {
     $hintText.Margin = New-Gap 11 0 9 0
     $hintText.VerticalAlignment = 'Center'

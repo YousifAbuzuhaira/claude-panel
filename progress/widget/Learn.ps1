@@ -449,10 +449,20 @@ $toastText.TextTrimming = 'CharacterEllipsis'
 [void]$footer.Children.Add($toastText)
 
 $body = New-Object System.Windows.Controls.Grid
-[void]$frame.Children.Add($header)
-[void]$frame.Children.Add($switcher)
-[void]$frame.Children.Add($footer)
-[void]$frame.Children.Add($body)
+
+# Below 85% see-through the parts with text stand on a halo of the card's own colour (Chrome.ps1;
+# Update-LearnHalo keeps it in step). Each part goes in where it would, in its halo frame, docked
+# as the part is. The body's frame holds its views from outside their scroll areas, so the halo
+# only ever covers what shows, and nothing in Learn animates.
+function New-DockedHalo($Element) {
+  $haloFrame = New-UiHaloFrame $Element
+  [System.Windows.Controls.DockPanel]::SetDock($haloFrame, [System.Windows.Controls.DockPanel]::GetDock($Element))
+  return $haloFrame
+}
+[void]$frame.Children.Add((New-DockedHalo $header))
+[void]$frame.Children.Add((New-DockedHalo $switcher))
+[void]$frame.Children.Add((New-DockedHalo $footer))
+[void]$frame.Children.Add((New-DockedHalo $body))
 
 # A full-width line shown when the helper can't run.
 $banner = New-Object System.Windows.Controls.Border
@@ -465,7 +475,7 @@ $bannerText = New-Text '' $ink
 $bannerText.TextWrapping = 'Wrap'
 $banner.Child = $bannerText
 [System.Windows.Controls.DockPanel]::SetDock($banner, 'Top')
-$frame.Children.Insert(2, $banner)
+$frame.Children.Insert(2, (New-DockedHalo $banner))
 
 $script:viewHosts = @{}
 foreach ($name in $VIEW_NAMES) {
@@ -496,7 +506,7 @@ $grip.Margin = New-Gap 0 0 5 3
 
 $cardBody = New-Object System.Windows.Controls.Grid
 [void]$cardBody.Children.Add($frame)
-[void]$cardBody.Children.Add($grip)
+[void]$cardBody.Children.Add((New-UiHaloFrame $grip))
 $card.Child = $cardBody
 
 $win.Content = $card
@@ -721,6 +731,12 @@ $switcher.Tag = @{ mark = $gamesMark }
 $buildChip.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
 $buildChip.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; try { Show-View 'library' } catch { Write-Failure $_ } })
 
+# Left and Right page the course unless a box you type in has them. Your own chat message is a
+# read-only text box (so it can be selected and copied): clicking it leaves the arrows to paging.
+function Test-TypingFocus($Element) {
+  return ($Element -is [System.Windows.Controls.TextBox]) -and -not $Element.IsReadOnly
+}
+
 $win.Add_PreviewKeyDown({
   param($sender, $e)
   try {
@@ -733,7 +749,7 @@ $win.Add_PreviewKeyDown({
       $e.Handled = $true
       return
     }
-    $inText = [System.Windows.Input.Keyboard]::FocusedElement -is [System.Windows.Controls.TextBox]
+    $inText = Test-TypingFocus ([System.Windows.Input.Keyboard]::FocusedElement)
     if ($script:view -eq 'course' -and -not $inText) {
       if ($e.Key -eq 'Right') { Step-Page 1; $e.Handled = $true }
       elseif ($e.Key -eq 'Left') { Step-Page -1; $e.Handled = $true }
@@ -956,6 +972,29 @@ if ($SelfTest) {
   # A list keeps its scrollbar's lane past its rows' fill, scrolling or not.
   $listScroll = New-RowScroll (New-Object System.Windows.Controls.StackPanel) 10
   $checks.rowScrollLane = $listScroll.VerticalScrollBarVisibility -eq 'Visible' -and $listScroll.Margin.Right -eq (-10 - $SCROLL_LANE) -and $listScroll.Content.Margin.Right -eq 10
+  # The arrows page the course from anywhere but a box you type in: your own message doesn't keep them.
+  $checks.arrowsPastMessage = (Test-TypingFocus (New-InputBox 'x').box) -and -not (Test-TypingFocus $selectable) -and -not (Test-TypingFocus $null)
+  # A chat box's hint wraps rather than being cut off; a one-line box's still trims.
+  $checks.hintWrapsMultiline = (New-InputBox 'x' $true).box.Tag.TextWrapping -eq 'Wrap' -and (New-InputBox 'x').box.Tag.TextTrimming -eq 'CharacterEllipsis'
+  # Below 85% see-through every part of the window stands on the halo, and above it none does. A
+  # bar dragged here only previews (it never reaches Update-Theme), and the halo still follows it.
+  $haloParts = @($header, $switcher, $banner, $footer, $body, $grip)
+  $appearanceBefore = $script:THEME.appearance
+  $preview = Copy-Appearance
+  $preview.opacity.learn = 0.4
+  Set-ThemeAppearance $preview
+  Sync-AppearanceSection
+  $haloOn = $true
+  foreach ($part in $haloParts) { if ($null -eq $part.Effect -or $null -eq $part.Parent.Effect) { $haloOn = $false } }
+  $preview = Copy-Appearance
+  $preview.opacity.learn = 0.96
+  Set-ThemeAppearance $preview
+  Sync-AppearanceSection
+  $haloOff = $true
+  foreach ($part in $haloParts) { if ($null -ne $part.Effect -or $null -ne $part.Parent.Effect) { $haloOff = $false } }
+  Set-ThemeAppearance $appearanceBefore
+  Sync-AppearanceSection
+  $checks.haloFollowsPreview = $haloOn -and $haloOff
   $failed = @($checks.Keys | Where-Object { -not $checks[$_] })
   $checks.ok = $failed.Count -eq 0
   $checks.failed = $failed
@@ -1013,9 +1052,9 @@ $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(100)
 $script:ownerTick = 0
 $timer.Add_Tick({
-  # A colour scheme or see-through change made in another window: the brushes repaint themselves;
-  # the Appearance settings move their swatch ring, bars and colour boxes to match.
-  try { if (Update-Theme) { Update-AppearanceSection } } catch { Write-Failure $_ }
+  # A colour scheme or see-through change made in another window: the brushes repaint themselves,
+  # the halo follows, and the Appearance settings move their swatch ring, bars and colour boxes.
+  try { if (Update-Theme) { Update-LearnHalo; Update-AppearanceSection } } catch { Write-Failure $_ }
   try { Step-Helper } catch { Write-Failure $_ }
   try { Step-Views } catch { Write-Failure $_ }
   if ($toastText.Text -and [DateTime]::UtcNow -gt $script:toastUntil) { $toastText.Text = '' }
@@ -1050,6 +1089,7 @@ $timer.Add_Tick({
 })
 
 Build-Views
+Update-LearnHalo
 if ($hasOwner) {
   $owned = New-Object System.Windows.Interop.WindowInteropHelper($win)
   $owned.Owner = $owner
