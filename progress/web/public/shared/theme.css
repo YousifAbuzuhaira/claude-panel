@@ -78,8 +78,8 @@ html.native { --titlebar: 28px; }
   padding: 4px 12px 5px; border: 0; border-radius: var(--radius);
   background: var(--button); color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap;
 }
-.ui-btn:hover { background: var(--pressed); }
-.ui-btn:active { background: var(--line); }
+.ui-btn:hover { background: color-mix(in srgb, var(--ink) 20%, transparent); }
+.ui-btn:active { background: color-mix(in srgb, var(--ink) 27%, transparent); }
 .ui-btn.primary { background: var(--accent); color: var(--on-accent); font-weight: 700; }
 .ui-btn.primary:hover { filter: brightness(1.08); }
 .ui-btn.primary:active { filter: brightness(0.94); }

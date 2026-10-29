@@ -41,6 +41,10 @@ $UI_SIBLINGS = @(
 
 function Get-UiBrush([string]$Role) { return $script:THEME.brushes[$Role] }
 
+# A secondary button rests on the 'button' fill; hovered and pressed it steps further toward the text.
+$UI_BUTTON_HOT = New-ThemeTint 'ink' 0.20
+$UI_BUTTON_DOWN = New-ThemeTint 'ink' 0.27
+
 function New-UiThickness([double]$Left, [double]$Top, [double]$Right, [double]$Bottom) {
   return New-Object System.Windows.Thickness($Left, $Top, $Right, $Bottom)
 }
@@ -159,8 +163,8 @@ function Set-UiButtonLook($Button, [string]$Look) {
     'primary' { if ($Look -eq 'hot') { $Button.Opacity = 0.88 } elseif ($Look -eq 'down') { $Button.Opacity = 0.76 } }
     'plain' { if ($Look -eq 'rest') { $state.label.Foreground = Get-UiBrush $state.role } else { $state.label.Foreground = Get-UiBrush 'ink' } }
     default {
-      if ($Look -eq 'hot') { $Button.Background = Get-UiBrush 'pressed' }
-      elseif ($Look -eq 'down') { $Button.Background = Get-UiBrush 'line' }
+      if ($Look -eq 'hot') { $Button.Background = $UI_BUTTON_HOT }
+      elseif ($Look -eq 'down') { $Button.Background = $UI_BUTTON_DOWN }
       else { $Button.Background = Get-UiBrush $state.fill }
     }
   }

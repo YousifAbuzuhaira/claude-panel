@@ -102,10 +102,15 @@ function Get-ThemePalette($Colors, [double]$Opacity) {
   if ($Opacity -lt $THEME_MIN_OPACITY) { $Opacity = $THEME_MIN_OPACITY }
   if ($Opacity -gt 1) { $Opacity = 1 }
 
+  # Secondary text: further from the text on a dark scheme than a light one, so both read alike;
+  # and nearer the text as the background clears, so it stays legible over whatever shows through.
+  if ($isDark) { $dimT = 0.43; $faintT = 0.62 } else { $dimT = 0.36; $faintT = 0.52 }
+  $clear = [Math]::Max(0.35, [Math]::Min(1.0, ($Opacity - 0.15) / 0.65))
+
   $p = [ordered]@{}
   $p.ink = Format-ThemeColor $text
-  $p.dim = Format-ThemeColor (Get-ThemeMix $text $bg 0.43)
-  $p.faint = Format-ThemeColor (Get-ThemeMix $text $bg 0.62)
+  $p.dim = Format-ThemeColor (Get-ThemeMix $text $bg ($dimT * $clear))
+  $p.faint = Format-ThemeColor (Get-ThemeMix $text $bg ($faintT * $clear))
   $p.accent = Format-ThemeColor $accentRgb
   $p.accentSoft = Format-ThemeColor $accentRgb 0.33
   $p.selected = Format-ThemeColor $accentRgb 0.15

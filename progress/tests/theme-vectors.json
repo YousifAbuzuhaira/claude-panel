@@ -53,8 +53,8 @@
    "opacity": 0.4,
    "expected": {
     "ink": "#FF1F1E1C",
-    "dim": "#FF7B7975",
-    "faint": "#FFA4A19C",
+    "dim": "#FF3D3B39",
+    "faint": "#FF4A4845",
     "accent": "#FFC2602F",
     "accentSoft": "#54C2602F",
     "selected": "#26C2602F",
@@ -137,8 +137,8 @@
    "opacity": 0.15,
    "expected": {
     "ink": "#FFD1D0C5",
-    "dim": "#FF8D8D88",
-    "faint": "#FF6E6F6D",
+    "dim": "#FFB9B9B0",
+    "faint": "#FFAEAEA6",
     "accent": "#FFE2B714",
     "accentSoft": "#54E2B714",
     "selected": "#26E2B714",
@@ -179,8 +179,8 @@
    "opacity": 0.05,
    "expected": {
     "ink": "#FF101010",
-    "dim": "#FF3C3C3C",
-    "faint": "#FF505050",
+    "dim": "#FF1D1D1D",
+    "faint": "#FF232323",
     "accent": "#FF3355FF",
     "accentSoft": "#543355FF",
     "selected": "#263355FF",

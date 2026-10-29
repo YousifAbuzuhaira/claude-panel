@@ -11,13 +11,17 @@ const POLL_MS = 2000;
 /** Native app windows (macOS) add class "native" to <html>; only they can be see-through. */
 export const isNative = () => document.documentElement.classList.contains('native');
 
-/** The saved appearance, every field checked (today's look where missing). */
+/**
+ * The saved appearance, every field checked (today's look where missing); null when the server
+ * could not be asked, so a page keeps what it shows rather than falling back to Ember.
+ */
 export async function loadAppearance() {
   try {
     const response = await fetch('/api/appearance', { headers: { 'X-Learn-Token': token } });
-    return T().parseAppearance(response.ok ? await response.text() : null);
+    if (!response.ok) return null;
+    return T().parseAppearance(await response.text());
   } catch {
-    return T().parseAppearance(null);
+    return null;
   }
 }
 
@@ -64,6 +68,7 @@ export function watchAppearance(group, onChange) {
   let stopped = false;
   const apply = async () => {
     const appearance = await loadAppearance();
+    if (!appearance) return;
     const text = JSON.stringify(appearance);
     if (text === lastText || stopped) return;
     lastText = text;

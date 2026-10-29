@@ -70,10 +70,14 @@
     if (contrast(onAccent, accent) < 3) onAccent = luminance(accent) > 0.3 ? [0x1c, 0x1d, 0x20] : [0xf5, 0xf3, 0xef]
 
     const op = Math.min(1, Math.max(MIN_OPACITY, Number.isFinite(opacity) ? opacity : 1))
+    // Secondary text: further from the text on a dark scheme than a light one, so both read alike;
+    // and nearer the text as the background clears, so it stays legible over whatever shows through.
+    const [dimT, faintT] = isDark ? [0.43, 0.62] : [0.36, 0.52]
+    const clear = Math.max(0.35, Math.min(1, (op - 0.15) / 0.65))
     const p = {}
     p.ink = format(text)
-    p.dim = format(mix(text, bg, 0.43))
-    p.faint = format(mix(text, bg, 0.62))
+    p.dim = format(mix(text, bg, dimT * clear))
+    p.faint = format(mix(text, bg, faintT * clear))
     p.accent = format(accent)
     p.accentSoft = format(accent, 0.33)
     p.selected = format(accent, 0.15)

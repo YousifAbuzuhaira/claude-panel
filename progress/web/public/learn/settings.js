@@ -167,7 +167,7 @@ function buildAppearance() {
 
   Promise.all([loadPresets(), loadAppearance()]).then(([presets, appearance]) => {
     A.presets = presets;
-    if (!A.saved) A.saved = appearance;
+    if (!A.saved) A.saved = appearance || globalThis.ClaudeTheme.parseAppearance(null);
     syncAppearance();
   });
 }
