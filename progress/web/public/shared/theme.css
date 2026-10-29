@@ -49,6 +49,8 @@
    solid. So no page paints an opaque background of its own: surfaces are tints of the text. */
 html { background: var(--card-fill); }
 body { background: transparent; }
+/* A native window draws its page under a clear title bar: pages leave this much room at the top. */
+html.native { --titlebar: 28px; }
 
 ::selection { background: var(--accent-soft); }
 * { scrollbar-width: thin; scrollbar-color: var(--scroll) transparent; }

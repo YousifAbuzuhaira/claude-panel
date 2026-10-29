@@ -572,7 +572,7 @@ function Update-Overlay {
     $overlay.Visibility = 'Visible'
   } elseif ($script:hasWon -and -not $script:keepPlaying) {
     $overlayText.Text = 'You win!'
-    $overlayText.Foreground = Brush '#F5C400'
+    $overlayText.Foreground = $T.gold
     $keepButton.Visibility = 'Visible'
     $overlay.Visibility = 'Visible'
   } else {

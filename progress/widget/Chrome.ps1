@@ -522,5 +522,7 @@ function New-UiSwitcherRow([string]$Current, [int64]$OwnerHwnd, [string]$Session
     })
     [void]$row.Children.Add($chip)
   }
+  # The last chip ends flush with the row, so a right-aligned row lines up with the marks above.
+  if ($row.Children.Count -gt 0) { $row.Children[$row.Children.Count - 1].Margin = New-UiThickness 0 0 0 0 }
   return $row
 }

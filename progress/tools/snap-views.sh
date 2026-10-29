@@ -46,9 +46,11 @@ views_of() {
       echo "learn|PhasesWidget.ps1 -StateFile $(fixture panel-learn.json) -SnapshotTab learn -SnapshotLook open"
       echo "empty|PhasesWidget.ps1 -StateFile $(fixture panel-empty.json) -SnapshotTab phases -SnapshotLook open"
       echo "collapsed|PhasesWidget.ps1 -StateFile $(fixture panel-full.json) -SnapshotTab phases -SnapshotLook closed"
-      if grep -q "'releases'" "$here/../widget/PhasesWidget.ps1"; then
-        echo "releases|PhasesWidget.ps1 -StateFile $(fixture panel-full.json) -SnapshotTab releases -SnapshotLook open"
-      fi
+      echo "releases|PhasesWidget.ps1 -StateFile $(fixture panel-full.json) -SnapshotTab releases -SnapshotLook open"
+      echo "look|PhasesWidget.ps1 -StateFile $(fixture panel-full.json) -SnapshotTab phases -SnapshotLook open -SnapshotStrip look"
+      echo "games|PhasesWidget.ps1 -StateFile $(fixture panel-full.json) -SnapshotTab phases -SnapshotLook open -SnapshotStrip games"
+      echo "long|PhasesWidget.ps1 -StateFile $(fixture panel-long.json) -SnapshotTab phases -SnapshotLook open"
+      echo "course|PhasesWidget.ps1 -StateFile $(fixture panel-course.json) -SnapshotTab learn -SnapshotLook open"
       ;;
     learn)
       for view in library learned ask settings; do
@@ -59,9 +61,16 @@ views_of() {
         echo "overlap|Learn.ps1 -SnapshotView overlap -SnapshotLibrary $library -SnapshotConfig $config -SnapshotCourse $course"
       fi
       ;;
-    sudoku) echo "demo|Sudoku.ps1 -SnapshotDemo" ;;
+    sudoku)
+      echo "demo|Sudoku.ps1 -SnapshotDemo"
+      echo "demo4|Sudoku.ps1 -SnapshotDemo -Size 4 -Seed 7"
+      echo "demo6|Sudoku.ps1 -SnapshotDemo -Size 6 -Seed 7"
+      ;;
     2048) echo "demo|Game2048.ps1 -SnapshotDemo" ;;
-    typing) for view in typing result themes; do echo "$view|TypeTest.ps1 -SnapshotView $view"; done ;;
+    typing)
+      for view in typing result themes; do echo "$view|TypeTest.ps1 -SnapshotView $view"; done
+      echo "monkeytype|TypeTest.ps1 -SnapshotView typing -SnapshotTheme serika_dark"
+      ;;
     chess) for view in board picker review; do echo "$view|ChessPuzzles.ps1 -SnapshotView $view -NoEngine"; done ;;
     *) echo "snap-views: no window called $1" >&2; return 1 ;;
   esac
