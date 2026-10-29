@@ -367,11 +367,11 @@ function sourceLinks(page) {
 function conceptChip(concept) {
   const glyph = concept.state === 'learned' ? GLYPH.check : concept.state === 'seen' ? GLYPH.half : GLYPH.empty;
   const tip = `${concept.definition || ''}\n\n${concept.state === 'learned' ? 'Learned. Click to unmark.' : 'Click to mark it learned.'}`.trim();
-  return h(`button.chip.concept.${concept.state}`, {
+  return h(`button.ui-chip.concept.${concept.state}`, {
     type: 'button',
     title: tip,
     onclick: () => setConceptLearned(concept.id, concept.state !== 'learned'),
-  }, `${glyph} ${concept.name}`);
+  }, h('span', null, `${glyph} ${concept.name}`));
 }
 
 function showChips() {
@@ -515,7 +515,9 @@ function renderOverlap() {
     const positions = list.map(n => positionOf(n)).filter(Boolean);
     return positions.length === 1 ? `here: page ${positions[0]}` : `here: pages ${positions.join(', ')}`;
   };
-  const line = (cls, name, detail) => h(`div.overlap-line.${cls}`, null, h('div.overlap-name', null, name), h('div.overlap-detail', null, detail));
+  // The detail's last part ('here: page 4') is kept on one line.
+  const line = (cls, name, detail, pageList) => h(`div.overlap-line.${cls}`, null, h('div.overlap-name', null, name),
+    h('div.overlap-detail', null, `${detail}  ${GLYPH.dot} `, h('span.here', null, pagesText(pageList))));
   // The same caption row as a page, so its title sits where the page's title sits.
   const out = [
     h('div.col-head', null, h('span.page-count', null, 'What I already know'), action('close', () => showOverlap(false), 'faint')),
@@ -526,18 +528,18 @@ function renderOverlap() {
     out.push(h('h3.label.green', null, `Already learned  ${data.covered.length}`));
     for (const item of data.covered) {
       const when = item.learned ? `learned ${formatDate(item.learned.at)}${item.learned.course ? ` in ${courseTitle(item.learned.course)}` : ''}` : 'learned';
-      out.push(line('green', `${GLYPH.check} ${item.name}`, `${when}  ${GLYPH.dot}  ${pagesText(item.pages)}`));
+      out.push(line('green', `${GLYPH.check} ${item.name}`, when, item.pages));
     }
   }
   if (data.partly.length) {
     out.push(h('h3.label.blue', null, `Partly covered  ${data.partly.length}`));
-    for (const item of data.partly) out.push(line('blue', `${GLYPH.half} ${item.name}`, `you have ${item.have.name}; this goes further  ${GLYPH.dot}  ${pagesText(item.pages)}`));
+    for (const item of data.partly) out.push(line('blue', `${GLYPH.half} ${item.name}`, `you have ${item.have.name}; this goes further`, item.pages));
   }
   if (data.mentioned.length) {
     out.push(h('h3.label', null, `Read before, not marked learned  ${data.mentioned.length}`));
     for (const item of data.mentioned) {
       const where = [...new Set(item.seen.map(seen => courseTitle(seen.course)))].join(', ');
-      out.push(line('dim', `${GLYPH.empty} ${item.name}`, `read in ${where}  ${GLYPH.dot}  ${pagesText(item.pages)}`));
+      out.push(line('dim', `${GLYPH.empty} ${item.name}`, `read in ${where}`, item.pages));
     }
   }
   if (data.fresh.length) {
@@ -560,7 +562,7 @@ function renderOverlap() {
     }
   }
   out.push(h('div.overlap-buttons', null,
-    h('button.button.primary', {
+    h('button.ui-btn.primary', {
       type: 'button',
       onclick: async () => {
         const skip = [...C.overlapPicks];

@@ -4,7 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  COLOR_KEYS, GROUPS, normalizeHex, percent, releaseLine, releaseMeta, shortDate, shownScheme, withColors, withOpacity, withPreset,
+  COLOR_KEYS, GROUPS, LIGHT_SEE_THROUGH_MIN, customColours, normalizeHex, percent, releaseLine, releaseMeta, sameColours, seeThroughWarning,
+  shortDate, shownScheme, withColors, withOpacity, withPreset,
 } from '../public/learn/appearance.js';
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -55,6 +56,29 @@ test('the marked swatch is the preset, or Custom for colours no preset has', () 
   assert.equal(shownScheme({ ...saved, preset: 'gone', colors: { bg: '#000000', accent: '#FFD400', text: '#FFFFFF' } }, presets), 'custom');
 });
 
+test('your own colours keep their swatch after a preset is picked', () => {
+  const mine = { bg: '#10141A', accent: '#4FD1C5', text: '#DDE6EE' };
+  // In use: the swatch shows them.
+  assert.deepEqual(customColours({ ...saved, preset: 'custom', colors: mine }, presets, null), mine);
+  // A preset picked since: the last ones used are still offered.
+  assert.deepEqual(customColours(withPreset(saved, paper), presets, mine), mine);
+  // Never used any: no Custom swatch.
+  assert.equal(customColours(saved, presets, null), null);
+  // A copy, never the remembered object itself.
+  assert.notEqual(customColours(saved, presets, mine), mine);
+  assert.ok(sameColours(mine, { bg: '#10141a', accent: '#4fd1c5', text: '#dde6ee' }));
+  assert.ok(!sameColours(mine, { ...mine, text: '#FFFFFF' }));
+  assert.ok(!sameColours(mine, null));
+});
+
+test('a light scheme made too clear says so; a dark one, or a clear-enough light one, does not', () => {
+  const light = withPreset(saved, paper);
+  assert.equal(seeThroughWarning(light, false), '');
+  assert.match(seeThroughWarning(withOpacity(light, 'games', LIGHT_SEE_THROUGH_MIN - 0.01), false), /light scheme.*60%/);
+  assert.equal(seeThroughWarning(withOpacity(light, 'learn', LIGHT_SEE_THROUGH_MIN), false), '');
+  assert.equal(seeThroughWarning(withOpacity(saved, 'panel', 0.2), true), '');
+});
+
 test('percent and dates read the way the panel shows them', () => {
   assert.equal(percent(0.96), '96%');
   assert.equal(percent(0.4), '40%');
@@ -90,13 +114,75 @@ test('hiding the contents keeps the page in its own column', () => {
   assert.match(css, /@media \(max-width: 980px\)/);
 });
 
-test('the page loads the shared look first', () => {
+test('the page loads the shared look first, and the saved scheme before it paints', () => {
   const html = read('../public/learn/index.html');
   const at = text => html.indexOf(text);
   assert.ok(at('/shared/theme.css') > 0 && at('/shared/theme.css') < at('href="style.css"'));
+  // The server's /look.css (the saved scheme) right after the defaults, so it wins over them.
+  const links = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)">/g)].map(match => match[1]);
+  assert.deepEqual(links, ['/shared/theme.css', '/look.css?group=learn', 'style.css']);
   assert.ok(at('/shared/theme.js') > 0 && at('/shared/theme.js') < at('src="app.js"'));
-  // The remembered scheme is painted after theme.js defines it and before anything draws.
-  assert.ok(at('src="first-look.js"') > at('/shared/theme.js') && at('src="first-look.js"') < at('<body>'));
+  // No per-origin cache of its own any more: the server's port changes, so it was often empty.
+  assert.doesNotMatch(html, /first-look/);
+  assert.doesNotMatch(read('../public/learn/app.js'), /claude-learn-look/);
   assert.doesNotMatch(html, /name="color-scheme"/);
   assert.match(html, /id="games-mark"[^>]*class="ui-mark"/);
+});
+
+test('every view starts on the header\'s left edge, and the chat ends where the marks end', () => {
+  const css = read('../public/learn/style.css');
+  const rule = selector => {
+    const match = new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(css);
+    return match ? match[1] : '';
+  };
+  // The header spans the window: no centred frame of its own.
+  assert.doesNotMatch(rule('.top-in'), /margin:\s*0 auto|max-width/);
+  assert.match(rule('.top-in'), /padding:\s*0 var\(--gutter\)/);
+  // Library, Learned, Settings and Ask: capped, but on the left, never centred.
+  assert.match(rule('.library-view, .learned-view, .settings-view'), /margin:\s*0;/);
+  assert.match(rule('.ask-view'), /margin:\s*0;/);
+  for (const selector of ['.chat-head', '.chat-scroll', '.chat-compose']) assert.match(rule(selector), /var\(--gutter\)/, selector);
+});
+
+test('the controls are the shared ones, not copies that drift', () => {
+  const css = read('../public/learn/style.css');
+  for (const copy of ['.input', '.button', '.chip']) {
+    assert.doesNotMatch(css, new RegExp(`(^|\\n)\\${copy}(,|\\s*\\{)`), copy);
+  }
+  for (const file of ['app.js', 'ask.js', 'chat.js', 'core.js', 'course.js', 'learned.js', 'library.js', 'settings.js']) {
+    const js = read(`../public/learn/${file}`);
+    assert.doesNotMatch(js, /h\(['`](button\.button|input\.input|textarea\.input|button\.chip)\b/, file);
+  }
+  assert.match(read('../public/learn/core.js'), /button\.ui-chip/);
+});
+
+test('secondary text a person reads is dim; nothing fades row actions below faint', () => {
+  const css = read('../public/learn/style.css');
+  for (const selector of ['.concept-definition', '.overlap-detail', '.where', '.meta', '.look-note', '.job-error']) {
+    const match = new RegExp(`\\${selector}\\s*\\{[^}]*color:\\s*var\\(--(\\w+)\\)`).exec(css);
+    assert.equal(match && match[1], 'dim', selector);
+  }
+  assert.doesNotMatch(css, /\.course-foot \.action\s*\{[^}]*opacity/);
+  // Text on green takes its own role when the theme has one.
+  assert.match(css, /\.ui-btn\.green\s*\{[^}]*var\(--on-green, var\(--on-accent\)\)/);
+});
+
+test('in the window app the page clears the title bar the app measured', () => {
+  const css = read('../public/learn/style.css');
+  assert.match(css, /html\.native body\s*\{\s*padding-top:\s*var\(--titlebar, 28px\)/);
+});
+
+test('a narrow window keeps the header marks in view: the tabs scroll instead', () => {
+  const css = read('../public/learn/style.css');
+  const narrow = /@media \(max-width: 520px\)\s*\{([\s\S]*?)\n\}/.exec(css);
+  assert.ok(narrow, 'a 520px block');
+  assert.match(narrow[1], /\.tabs\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(narrow[1], /\.tabs\s*\{[^}]*min-width:\s*0/);
+});
+
+test('a deep link\'s query leaves the address once its view is shown', () => {
+  const app = read('../public/learn/app.js');
+  assert.match(app, /showAsked\(.*\);\n\s*if \(location\.search\) history\.replaceState\(null, '', location\.pathname\);/);
+  // The Library reads ?pick as the page loads, before the query is cleared.
+  assert.match(read('../public/learn/library.js'), /^const ASKED_PICK = new URLSearchParams\(location\.search\)\.has\('pick'\);/m);
 });

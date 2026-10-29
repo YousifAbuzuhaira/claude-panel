@@ -1,6 +1,6 @@
 // What every Learn view shares: the app state, a tiny DOM builder, the toast, the banner,
 // the helper call, two-click removes and inline edits. Pure DOM; no framework.
-import { rpc } from '../shared/api.js';
+import { rpc, token } from '../shared/api.js';
 
 export const VIEW_NAMES = ['library', 'course', 'learned', 'ask', 'settings'];
 export const MIN_SCALE = 0.8;
@@ -26,25 +26,53 @@ export const S = {
   pageData: null, // page.get
   textScale: 1,
   showContents: true,
+  customColors: null, // the last colours of your own, so Settings can offer them again
 };
 
-// --- Remembered in the browser: the view, the open course, text size, the contents column.
+// --- Remembered: the view, the open course, text size, the contents column, your own colours.
+// Kept by the server (/api/prefs), because the browser's storage is per origin and the server's
+// port changes with each start. The browser's copy stands in when the server can't answer.
 const PREFS_KEY = 'claude-learn-prefs';
+const SAVE_PREFS_MS = 300;
 
-export function loadPrefs() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
-    if (VIEW_NAMES.includes(saved.view)) S.view = saved.view;
-    if (typeof saved.courseId === 'string') S.courseId = saved.courseId;
-    if (Number.isFinite(saved.textScale)) S.textScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, saved.textScale));
-    if (typeof saved.showContents === 'boolean') S.showContents = saved.showContents;
-  } catch {}
+function usePrefs(saved) {
+  if (!saved || typeof saved !== 'object') return;
+  if (VIEW_NAMES.includes(saved.view)) S.view = saved.view;
+  if (typeof saved.courseId === 'string') S.courseId = saved.courseId;
+  if (Number.isFinite(saved.textScale)) S.textScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, saved.textScale));
+  if (typeof saved.showContents === 'boolean') S.showContents = saved.showContents;
+  const custom = saved.customColors;
+  if (custom && ['bg', 'accent', 'text'].every(key => /^#[0-9A-Fa-f]{6}$/.test(custom[key] || ''))) {
+    S.customColors = { bg: custom.bg.toUpperCase(), accent: custom.accent.toUpperCase(), text: custom.text.toUpperCase() };
+  }
 }
 
-export function savePrefs() {
+export async function loadPrefs() {
+  let saved = null;
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ view: S.view, courseId: S.courseId, textScale: S.textScale, showContents: S.showContents }));
+    const response = await fetch('/api/prefs', { headers: { 'X-Learn-Token': token } });
+    if (response.ok) saved = await response.json();
   } catch {}
+  if (!saved) {
+    try { saved = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); } catch {}
+  }
+  usePrefs(saved);
+}
+
+let prefsTimer = null;
+export function savePrefs() {
+  const value = { view: S.view, courseId: S.courseId, textScale: S.textScale, showContents: S.showContents, customColors: S.customColors };
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(value)); } catch {}
+  // Text size steps come in bursts (a held Ctrl+=): one write for the lot.
+  clearTimeout(prefsTimer);
+  prefsTimer = setTimeout(() => {
+    fetch('/api/prefs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Learn-Token': token },
+      body: JSON.stringify(value),
+      keepalive: true,
+    }).catch(() => {});
+  }, SAVE_PREFS_MS);
 }
 
 // --- DOM ----------------------------------------------------------------------------------
@@ -76,7 +104,7 @@ function append(el, kids) {
   }
 }
 
-/** A text link that acts: `link('rename', () => ...)`. Stops the click reaching the row. */
+/** A text link that acts: `action('rename', () => ...)`. Stops the click reaching the row. */
 export function action(text, onClick, cls = '') {
   return h(`button.action${cls ? `.${cls}` : ''}`, {
     type: 'button',
@@ -87,14 +115,15 @@ export function action(text, onClick, cls = '') {
   }, text);
 }
 
+/** shared/theme.css's chip; its text in a span, so a long one ends in an ellipsis. */
 export function chip(text, on, onClick, extra = '') {
-  return h(`button.chip${on ? '.on' : ''}${extra ? `.${extra}` : ''}`, {
+  return h(`button.ui-chip${on ? '.on' : ''}${extra ? `.${extra}` : ''}`, {
     type: 'button',
     onclick: event => {
       event.stopPropagation();
       onClick(event);
     },
-  }, text);
+  }, h('span', null, text));
 }
 
 export const short = (text, max) => {
@@ -191,7 +220,7 @@ export function armed(key, el, prompt = 'remove? click again') {
 // --- Inline edits: Enter saves, Shift+Enter adds a line, Esc cancels -------------------------
 
 export function inlineEdit({ value = '', placeholder = '', multiline = false, onSave, onCancel, cls = '' }) {
-  const box = h(`textarea.inline-edit${cls ? `.${cls}` : ''}`, { placeholder, rows: multiline ? 3 : 1 });
+  const box = h(`textarea.ui-input.inline-edit${cls ? `.${cls}` : ''}`, { placeholder, rows: multiline ? 3 : 1 });
   box.value = value;
   let done = false;
   const fit = () => {

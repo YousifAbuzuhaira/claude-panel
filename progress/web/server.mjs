@@ -10,16 +10,21 @@
 // courses, and any page they have open can reach 127.0.0.1. So it listens on 127.0.0.1
 // only, wants a per-launch token on every API request (X-Learn-Token, or ?token= for the
 // event stream, which can't set headers), and refuses any foreign Host or Origin, which
-// also stops DNS rebinding. The token travels only in the URL's #hash.
+// also stops DNS rebinding. The token travels only in the URL's #hash. One thing needs no
+// token: /look.css, the colour scheme for a page's first paint (colours are not secret).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, extname, join, normalize, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+// The pages' own colour arithmetic (a classic script that sets globalThis.ClaudeTheme), so the
+// first paint and every page agree to the byte.
+import './public/shared/theme.js';
 
+const THEME = globalThis.ClaudeTheme;
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(HERE, 'public');
 const WIDGET = join(HERE, '..', 'widget');
@@ -27,6 +32,9 @@ const LEARN_SH = join(HERE, '..', 'learn', 'learn.sh');
 const LEARN_MJS = join(HERE, '..', 'learn', 'learn.mjs');
 const CONFIG_DIR = process.env.LEARN_CONFIG_DIR || join(homedir(), '.config', 'claude-learn');
 const WEB_FILE = join(CONFIG_DIR, 'web.json');
+// Learn's page prefs (view, course, text size, contents, custom colours). Kept here rather than
+// in the browser, whose storage is per origin: the port, and so the origin, changes each start.
+const PREFS_FILE = join(CONFIG_DIR, 'web-prefs.json');
 const SAVES_DIR = process.env.CLAUDE_PANEL_SAVES || join(homedir(), '.config', 'claude-panel', 'games');
 // The colour scheme and see-through every window shares (the shape is in shared/theme.js).
 const APPEARANCE_FILE = process.env.CLAUDE_PANEL_APPEARANCE || join(homedir(), '.config', 'claude-panel', 'appearance.json');
@@ -41,6 +49,8 @@ const WINDOWS_DIR = join(homedir(), '.cache', 'claude-panel', 'windows');
 const IDLE_MS = 30 * 60_000;
 const RPC_TIMEOUT_MS = 10 * 60_000;
 const MAX_BODY = 4 * 1024 * 1024;
+// The appearance and the prefs are a few hundred bytes; every window re-reads the appearance.
+const MAX_SMALL_BODY = 4 * 1024;
 
 // The game data the WPF games read, served as is.
 const DATA_FILES = new Set(['ChessPuzzles.txt', 'ChessThemes.txt', 'ChessPieces.txt', 'TypeThemes.txt', 'Presets.json']);
@@ -75,6 +85,79 @@ export function pagePath(page, { view, course } = {}) {
   }
   const search = query.toString();
   return { key, path: `${key}/${search ? `?${search}` : ''}`, view: query.get('view'), course: query.get('course') };
+}
+
+// --- The look, Learn's prefs, and the terminal a window follows (pure, for the tests) ---------
+
+const declarations = (palette, roles) => roles.map(role => `${THEME.cssName(role)}:${THEME.cssColor(palette[role])}`).join(';');
+
+/**
+ * GET /look.css: the saved colour scheme (the appearance file's text, or null) as the CSS every
+ * role takes, so a page's first paint is already in it. On :root at full opacity, as a plain
+ * browser shows it; and for a native window (html.native, set before the page draws) the
+ * group's see-through as well. shared/look.js takes over once the page runs.
+ */
+export function lookCss(saved, group) {
+  const appearance = THEME.parseAppearance(saved);
+  const solid = THEME.derivePalette(appearance.colors, 1);
+  const clear = THEME.derivePalette(appearance.colors, appearance.opacity[group] ?? 1);
+  const changed = THEME.ROLES.filter(role => clear[role] !== solid[role]);
+  const root = `:root{${declarations(solid, THEME.ROLES)};color-scheme:${solid.isDark ? 'dark' : 'light'}}\n`;
+  return changed.length ? `${root}html.native{${declarations(clear, changed)}}\n` : root;
+}
+
+const round2 = value => Math.round(value * 100) / 100;
+
+/**
+ * What POST /api/appearance writes: only the four fields every window reads, each checked, and
+ * anything missing or malformed kept from the file as it was (as the Mac app's cleanAppearance
+ * does). `saved` is the file's text, or null.
+ */
+export function cleanAppearance(value, saved = null) {
+  const base = THEME.parseAppearance(saved);
+  const given = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const colors = { ...base.colors };
+  for (const key of ['bg', 'accent', 'text']) {
+    const hex = given.colors?.[key];
+    if (THEME.parseHex(hex)) colors[key] = hex.toUpperCase();
+  }
+  const opacity = {};
+  for (const key of ['panel', 'learn', 'games']) {
+    const number = given.opacity?.[key];
+    const chosen = typeof number === 'number' && Number.isFinite(number) ? number : base.opacity[key];
+    opacity[key] = round2(Math.min(1, Math.max(THEME.MIN_OPACITY, chosen)));
+  }
+  const preset = typeof given.preset === 'string' ? given.preset.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) : '';
+  return { v: 1, preset: preset || base.preset, colors, opacity };
+}
+
+const PREF_VIEWS = new Set(['library', 'course', 'learned', 'ask', 'settings']);
+
+/** What POST /api/prefs keeps: the fields web Learn remembers, each checked; the rest dropped. */
+export function cleanPrefs(value) {
+  const out = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  if (PREF_VIEWS.has(value.view)) out.view = value.view;
+  if (typeof value.courseId === 'string' && COURSE_ID.test(value.courseId)) out.courseId = value.courseId;
+  else if (value.courseId === null) out.courseId = null;
+  if (typeof value.textScale === 'number' && Number.isFinite(value.textScale)) out.textScale = round2(Math.min(3, Math.max(0.5, value.textScale)));
+  if (typeof value.showContents === 'boolean') out.showContents = value.showContents;
+  const custom = value.customColors;
+  if (custom && typeof custom === 'object' && ['bg', 'accent', 'text'].every(key => THEME.parseHex(custom[key]))) {
+    out.customColors = { bg: custom.bg.toUpperCase(), accent: custom.accent.toUpperCase(), text: custom.text.toUpperCase() };
+  }
+  return out;
+}
+
+/**
+ * A terminal a window follows ({ program: TERM_PROGRAM, itermSession: ITERM_SESSION_ID }), or {}
+ * when it doesn't look like one. They go to the window app as arguments (never through a shell).
+ */
+export function cleanTerminal(value) {
+  const program = typeof value?.program === 'string' && /^[\w.+ -]{1,64}$/.test(value.program) ? value.program : '';
+  if (!program) return {};
+  const session = typeof value.itermSession === 'string' && /^[\w.:-]{0,128}$/.test(value.itermSession) ? value.itermSession : '';
+  return { program, itermSession: session };
 }
 
 // WebAssembly and a worker for Stockfish; YouTube frames for Learn's videos; inline styles only.
@@ -195,13 +278,13 @@ function stockfishFile(name) {
 
 // --- HTTP ---------------------------------------------------------------------------------
 
-function readBody(req) {
+function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on('data', chunk => {
       size += chunk.length;
-      if (size > MAX_BODY) {
+      if (size > limit) {
         reject(new Error('too large'));
         req.destroy();
       } else chunks.push(chunk);
@@ -209,6 +292,16 @@ function readBody(req) {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
+}
+
+/** A small JSON object from the body (MAX_SMALL_BODY), or null for anything else. */
+async function readJsonObject(req) {
+  try {
+    const value = JSON.parse(await readBody(req, MAX_SMALL_BODY));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 // Only 64 hex digits are ever compared: anything else (other bytes, another length) can't throw.
@@ -224,6 +317,11 @@ function serve() {
   const token = randomBytes(32).toString('hex');
   const clients = new Set();
   let lastActive = Date.now();
+  // The terminal each native window follows, by page key, as `open` reported it (POST
+  // /api/opened): with two Claude sessions in two terminal windows, a page opening another page
+  // hands on its own terminal, not the one that first started this server.
+  const terminals = new Map();
+  let lastTerminal = cleanTerminal({ program: process.env.TERM_PROGRAM, itermSession: process.env.ITERM_SESSION_ID });
   const broadcast = value => {
     const text = `data: ${JSON.stringify(value)}\n\n`;
     for (const res of clients) res.write(text);
@@ -274,13 +372,30 @@ function serve() {
       // A page in a native window opening another page in its own window (Learn's games mark):
       // one window per page, as `open` gives. Only where the window app is already built.
       if (path === '/api/open' && req.method === 'POST') {
-        const { page, view, course } = JSON.parse((await readBody(req)) || '{}') || {};
+        const { page, view, course, from } = JSON.parse((await readBody(req, MAX_SMALL_BODY)) || '{}') || {};
         const target = typeof page === 'string' && page ? pagePath(page, { view, course }) : null;
         if (!target) return send(400, { error: 'no such page' });
         const app = nativeApp({ build: false });
         if (!app) return send(200, { ok: false, error: 'no window app here' });
-        startWindow(app, { port, token }, target, { program: process.env.TERM_PROGRAM, itermSession: process.env.ITERM_SESSION_ID });
+        // The asking page's own terminal (`from` is its page, e.g. 'learn'), so both stick to one.
+        const opener = typeof from === 'string' ? pagePath(from) : null;
+        const terminal = (opener && terminals.get(opener.key)) || lastTerminal;
+        terminals.set(target.key, terminal);
+        startWindow(app, { port, token }, target, terminal);
         return send(200, { ok: true, shown: 'window' });
+      }
+
+      // `open` started a native window that follows this terminal (see open() below).
+      if (path === '/api/opened' && req.method === 'POST') {
+        const { page, program, itermSession } = JSON.parse((await readBody(req, MAX_SMALL_BODY)) || '{}') || {};
+        const target = typeof page === 'string' && page ? pagePath(page) : null;
+        if (!target) return send(400, { error: 'no such page' });
+        const terminal = cleanTerminal({ program, itermSession });
+        if (terminal.program) {
+          terminals.set(target.key, terminal);
+          lastTerminal = terminal;
+        }
+        return send(200, { ok: true });
       }
 
       if (path === '/api/events' && req.method === 'GET') {
@@ -328,18 +443,28 @@ function serve() {
         }
       }
 
+      // The shared appearance file. Every window (PowerShell, Swift, these pages) re-reads it on
+      // each change, so only its four checked fields are ever written, never the body as sent.
       if (path === '/api/appearance') {
         if (req.method === 'GET') return send(200, existsSync(APPEARANCE_FILE) ? readFileSync(APPEARANCE_FILE, 'utf8') : 'null');
         if (req.method === 'POST') {
-          let text;
-          try {
-            text = await readBody(req);
-            const value = JSON.parse(text);
-            if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object');
-          } catch {
-            return send(400, { error: 'the body is not a JSON object' });
-          }
-          writeAtomic(APPEARANCE_FILE, text);
+          const value = await readJsonObject(req);
+          if (!value) return send(400, { error: 'the body is not a small JSON object' });
+          const saved = existsSync(APPEARANCE_FILE) ? readFileSync(APPEARANCE_FILE, 'utf8') : null;
+          const clean = cleanAppearance(value, saved);
+          writeAtomic(APPEARANCE_FILE, JSON.stringify(clean));
+          return send(200, { ok: true, appearance: clean });
+        }
+      }
+
+      // Learn's prefs, kept on this machine rather than per browser origin.
+      if (path === '/api/prefs') {
+        if (req.method === 'GET') return send(200, existsSync(PREFS_FILE) ? readFileSync(PREFS_FILE, 'utf8') : 'null');
+        if (req.method === 'POST') {
+          const value = await readJsonObject(req);
+          if (!value) return send(400, { error: 'the body is not a small JSON object' });
+          const clean = cleanPrefs(value);
+          writeAtomic(PREFS_FILE, JSON.stringify(clean));
           return send(200, { ok: true });
         }
       }
@@ -358,6 +483,22 @@ function serve() {
     }
 
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, { error: 'GET only' });
+
+    // The colour scheme for a page's first paint, linked right after /shared/theme.css. No token
+    // (a stylesheet can't send one, and colours aren't secret), but only for this server's own
+    // pages: a browser that says where a request comes from must say it's from here.
+    if (path === '/look.css') {
+      const site = req.headers['sec-fetch-site'];
+      if (site !== undefined && site !== 'same-origin' && site !== 'none') return send(403, '/* this server\'s own pages only */', TYPES['.css']);
+      const group = url.searchParams.get('group') === 'games' ? 'games' : 'learn';
+      let saved = null;
+      try {
+        saved = readFileSync(APPEARANCE_FILE, 'utf8');
+      } catch {
+        // Nothing saved yet: Ember.
+      }
+      return send(200, lookCss(saved, group), TYPES['.css']);
+    }
 
     const launch = /^\/launch\/([0-9a-f]{32})$/.exec(path);
     if (launch) {
@@ -545,13 +686,20 @@ function nativeApp({ build = true } = {}) {
 /** The window app's id for a page: 'games/chess' is 'games-chess'. */
 export const windowId = key => key.replace('/', '-');
 
-/** True when the window app already shows this page for this server (its pid file, ClaudePanel.swift). */
+/**
+ * True when the window app already shows this page for this server (its pid file,
+ * ClaudePanel.swift): that pid is alive and is the window app, not another process that was
+ * given the number after the window closed.
+ */
 function windowShowing(key, port) {
   try {
     const [pid, shownPort] = readFileSync(join(WINDOWS_DIR, `${windowId(key)}.pid`), 'utf8').trim().split(/\s+/).map(Number);
     if (!(pid > 0) || shownPort !== port) return false;
     process.kill(pid, 0);
-    return true;
+    const ps = spawnSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8', timeout: 2000 });
+    // Where ps can't be run, the live pid is trusted, as before.
+    if (ps.error) return true;
+    return ps.status === 0 && /ClaudePanel\s*$/.test(ps.stdout);
   } catch {
     return false;
   }
@@ -565,13 +713,14 @@ function windowShowing(key, port) {
 function startWindow(app, record, target, terminal = {}) {
   // A window that's already open and asked for a view (`open learn --view settings`) gets the
   // path in its mailbox and loads it (no token: the page keeps it for the session); the new
-  // process below only brings that window forward.
-  if (target.path !== `${target.key}/` && windowShowing(target.key, record.port)) {
-    try {
-      writeAtomic(join(WINDOWS_DIR, `${windowId(target.key)}.open`), `/${target.path}\n`);
-    } catch {
-      // No mailbox: the window still comes forward, on the page it shows.
-    }
+  // process below only brings that window forward. With no such window, a mailbox left behind
+  // by one that's gone is removed, so it can't send the new window to an old link.
+  const mailbox = join(WINDOWS_DIR, `${windowId(target.key)}.open`);
+  try {
+    if (!windowShowing(target.key, record.port)) rmSync(mailbox, { force: true });
+    else if (target.path !== `${target.key}/`) writeAtomic(mailbox, `/${target.path}\n`);
+  } catch {
+    // No mailbox: the window still comes forward, on the page it shows.
   }
   const url = `http://127.0.0.1:${record.port}/${target.path}`;
   const follow = terminal.program ? ['--terminal', terminal.program, '--iterm-session', terminal.itermSession || ''] : [];
@@ -617,8 +766,11 @@ async function open(page, terminal = {}, deep = {}) {
   if (process.env.CLAUDE_PANEL_NO_BROWSER !== '1') {
     const app = nativeApp();
     if (app) {
-      startWindow(app, record, target, terminal);
+      const follow = cleanTerminal(terminal);
+      startWindow(app, record, target, follow);
       shown = 'window';
+      // So a page in this window that opens another (Learn's games mark) hands on this terminal.
+      if (follow.program) await postJson(record, '/api/opened', { page: target.key, ...follow }).catch(() => {});
     } else {
       // A one-time link, so the token never sits on the browser's command line.
       const nonce = await launchNonce(record, target);

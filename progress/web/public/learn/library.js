@@ -12,18 +12,21 @@ const L = {
   lastAt: 0,
 };
 
+// Read as the page loads: app.js clears the address's query once the asked view is shown.
+const ASKED_PICK = new URLSearchParams(location.search).has('pick');
+
 let ui = null;
 
 export function buildLibraryView(host) {
-  const topic = h('input.input.grow', { type: 'text', placeholder: 'A topic to learn, or a YouTube video, playlist or docs link', 'aria-label': 'Topic or link' });
-  const category = h('input.input.category', { type: 'text', placeholder: 'Category', 'aria-label': 'Category' });
+  const topic = h('input.ui-input.grow', { type: 'text', placeholder: 'A topic to learn, or a YouTube video, playlist or docs link', 'aria-label': 'Topic or link' });
+  const category = h('input.ui-input.category', { type: 'text', placeholder: 'Category', 'aria-label': 'Category' });
   const pickChip = chip('Let me pick', true, () => setMode('pick'));
   pickChip.title = 'Research first, then you tick which videos and pages the course is built from';
   const autoChip = chip('Just build it', false, () => setMode('auto'));
   autoChip.title = 'Claude picks the sources and builds the course straight away';
-  const build = h('button.button.primary', { type: 'button', onclick: submitNewCourse }, 'Build');
+  const build = h('button.ui-btn.primary', { type: 'button', onclick: submitNewCourse }, 'Build');
   const categoryChips = h('div.chips.category-chips');
-  const search = h('input.input.search', { type: 'search', placeholder: 'Search your courses', 'aria-label': 'Search courses' });
+  const search = h('input.ui-input.search', { type: 'search', placeholder: 'Search your courses', 'aria-label': 'Search courses' });
   const jobs = h('section.jobs');
   const courses = h('section.courses');
   onEnter(topic, submitNewCourse);
@@ -88,7 +91,7 @@ function showLibrary() {
     return item;
   }));
   // A snapshot (?pick) shows the source picker open, when a build is waiting for one.
-  if (!L.pickingJob && new URLSearchParams(location.search).has('pick')) {
+  if (!L.pickingJob && ASKED_PICK) {
     const waiting = (S.library.jobs || []).find(job => job.state === 'waiting-picks');
     if (waiting) {
       L.pickingJob = waiting.id;
@@ -183,7 +186,7 @@ function picker(job) {
     open));
   }
   const count = L.picks.size;
-  panel.append(h('button.button.primary', {
+  panel.append(h('button.ui-btn.primary', {
     type: 'button',
     onclick: async () => {
       if (!L.picks.size) {
@@ -314,7 +317,7 @@ function courseRow(course) {
   row.append(foot);
 
   if (L.movingCourse === id) {
-    const newCategory = h('input.input.small', { type: 'text', placeholder: 'New category', onclick: event => event.stopPropagation() });
+    const newCategory = h('input.ui-input.small', { type: 'text', placeholder: 'New category', onclick: event => event.stopPropagation() });
     onEnter(newCategory, async () => {
       const name = newCategory.value.trim();
       if (!name) return;

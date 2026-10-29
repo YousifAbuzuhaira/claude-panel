@@ -105,8 +105,8 @@ function redraw(key) {
  */
 export function chatPanel({ title, placeholder, newLabel, fields }) {
   const log = h('div.chat-scroll');
-  const input = h('textarea.input.chat-input', { placeholder, rows: 3, 'aria-label': 'Message' });
-  const send = h('button.button.primary.send', { type: 'button' }, 'Send');
+  const input = h('textarea.ui-input.chat-input', { placeholder, rows: 3, 'aria-label': 'Message' });
+  const send = h('button.ui-btn.primary.send', { type: 'button' }, 'Send');
   const clear = h('button.action.dim', { type: 'button' }, newLabel);
   const head = h('div.chat-head', null, title ? h('h3.chat-title', null, title) : null, clear);
   const root = h('div.chat-panel', null, head, log, h('div.chat-compose', null, input, send));

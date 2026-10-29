@@ -16,13 +16,13 @@ const M = {
 let ui = null;
 
 export function buildLearnedView(host) {
-  const addBox = h('input.input.grow', { type: 'text', placeholder: 'Add something you already know, e.g. "Git rebase" (Claude files it)', 'aria-label': 'Add a concept' });
-  const addButton = h('button.button.green', { type: 'button', onclick: addKnown }, 'Add as learned');
+  const addBox = h('input.ui-input.grow', { type: 'text', placeholder: 'Add something you already know, e.g. "Git rebase" (Claude files it)', 'aria-label': 'Add a concept' });
+  const addButton = h('button.ui-btn.green', { type: 'button', onclick: addKnown }, 'Add as learned');
   onEnter(addBox, addKnown);
   const filters = h('div.chips.filters');
   const tidyLink = action('Tidy concepts', startTidy, 'blue');
   tidyLink.title = 'Claude looks for concepts that are the same idea under two names, and suggests merges';
-  const newCategory = h('input.input.small', { type: 'text', placeholder: 'New category', 'aria-label': 'New category' });
+  const newCategory = h('input.ui-input.small', { type: 'text', placeholder: 'New category', 'aria-label': 'New category' });
   onEnter(newCategory, async () => {
     const name = newCategory.value.trim();
     if (!name) return;
@@ -32,7 +32,7 @@ export function buildLearnedView(host) {
     toast(`Category: ${made.name}`);
     refreshLearned();
   });
-  const search = h('input.input.search', { type: 'search', placeholder: 'Search concepts', 'aria-label': 'Search concepts' });
+  const search = h('input.ui-input.search', { type: 'search', placeholder: 'Search concepts', 'aria-label': 'Search concepts' });
   search.addEventListener('input', showLearned);
   const tidyPanel = h('div.tidy');
   const note = h('div.mode-note');

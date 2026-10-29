@@ -58,13 +58,15 @@ export async function writeSave(game, value) {
 /**
  * In the macOS window app: opens another page ('learn', 'games', 'games/chess') in a window of
  * its own, or brings it forward. False where there's no window app; the page then links.
+ * `from` is this page ('learn', 'games/chess'), so the new window follows this one's terminal.
  */
 export async function openWindow(page) {
+  const from = location.pathname.replace(/^\/+|\/+$/g, '');
   try {
     const response = await fetch('/api/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Learn-Token': token },
-      body: JSON.stringify({ page }),
+      body: JSON.stringify({ page, from }),
     });
     return response.ok && (await response.json()).ok === true;
   } catch {

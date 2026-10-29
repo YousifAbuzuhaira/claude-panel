@@ -1,8 +1,10 @@
 // Settings: the colour scheme and see-through every window shares, then the library folder,
 // the models, the Advisor's work folders, text size, usage, yt-dlp, and what's new.
 import { isNative, loadAppearance, loadPresets, loadReleases, previewAppearance, saveAppearance } from '../shared/look.js';
-import { COLOR_KEYS, GROUPS, normalizeHex, percent, releaseMeta, shownScheme, withColors, withOpacity, withPreset } from './appearance.js';
-import { S, act, action, chip, formatDate, h, nav, toast } from './core.js';
+import {
+  COLOR_KEYS, GROUPS, customColours, normalizeHex, percent, releaseMeta, sameColours, seeThroughWarning, shownScheme, withColors, withOpacity, withPreset,
+} from './appearance.js';
+import { S, act, action, chip, formatDate, h, nav, savePrefs, toast } from './core.js';
 
 const MODEL_CHOICES = [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['haiku', 'Haiku']];
 const theme = () => globalThis.ClaudeTheme;
@@ -58,17 +60,17 @@ export function showSettings() {
   const settings = S.settings;
   const out = [];
 
-  const libraryBox = h('input.input.grow.mono', { type: 'text', 'aria-label': 'Library folder' });
+  const libraryBox = h('input.ui-input.grow.mono', { type: 'text', 'aria-label': 'Library folder' });
   libraryBox.value = settings.library || '';
   out.push(title('Library folder', 'Where your courses, concepts and chats are kept (~/... or a full path). Changing it starts using that folder; nothing is moved.'),
-    h('div.add-row', null, libraryBox, h('button.button', { type: 'button', onclick: () => save({ library: libraryBox.value.trim() }) }, 'Use this folder')));
+    h('div.add-row', null, libraryBox, h('button.ui-btn', { type: 'button', onclick: () => save({ library: libraryBox.value.trim() }) }, 'Use this folder')));
 
   for (const [key, label, note] of [['build', 'Model that builds courses', 'Research, planning and writing the pages.'], ['chat', 'Model for chat', 'The page chats, the Advisor, and filing concepts you add.']]) {
     const current = settings.models?.[key];
     out.push(title(label, note), h('div.chips', null, MODEL_CHOICES.map(([model, name]) => chip(name, current === model, () => save({ models: { [key]: model } })))));
   }
 
-  const folderBox = h('input.input.grow.mono', { type: 'text', placeholder: 'A folder, e.g. ~/code/my-app', 'aria-label': 'Work folder' });
+  const folderBox = h('input.ui-input.grow.mono', { type: 'text', placeholder: 'A folder, e.g. ~/code/my-app', 'aria-label': 'Work folder' });
   const addFolder = () => {
     const path = folderBox.value.trim();
     if (path) save({ workFolders: [...(settings.workFolders || []), path] });
@@ -77,7 +79,7 @@ export function showSettings() {
   out.push(title('Work folders the Advisor may read', 'It reads them (never writes) to see the stack you really use: package.json, Dockerfiles, CI config, source.'),
     h('div.folders', null, (settings.workFolders || []).map(folder => h('div.folder', null, h('span.mono', { title: folder }, folder),
       action('remove', () => save({ workFolders: settings.workFolders.filter(other => other !== folder) }), 'faint')))),
-    h('div.add-row', null, folderBox, h('button.button', { type: 'button', onclick: addFolder }, 'Add')));
+    h('div.add-row', null, folderBox, h('button.ui-btn', { type: 'button', onclick: addFolder }, 'Add')));
 
   const size = h('span.size', null, `${Math.round(S.textScale * 100)}%`);
   const step = delta => () => {
@@ -86,9 +88,9 @@ export function showSettings() {
   };
   out.push(title('Text size', 'The page, its title and the chats. Also Ctrl+= and Ctrl+-.'),
     h('div.size-row', null,
-      h('button.button', { type: 'button', title: 'Smaller (Ctrl+-)', 'aria-label': 'Smaller text', onclick: step(-0.1) }, 'A−'),
+      h('button.ui-btn', { type: 'button', title: 'Smaller (Ctrl+-)', 'aria-label': 'Smaller text', onclick: step(-0.1) }, 'A−'),
       size,
-      h('button.button', { type: 'button', title: 'Larger (Ctrl+=)', 'aria-label': 'Larger text', onclick: step(0.1) }, 'A+')));
+      h('button.ui-btn', { type: 'button', title: 'Larger (Ctrl+=)', 'aria-label': 'Larger text', onclick: step(0.1) }, 'A+')));
 
   ui.usage = h('p', null, usageText());
   out.push(title('Your Claude usage', 'Builds and chats run on your own Claude subscription, through your logged-in Claude Code. They count toward the same limits as your work.'), ui.usage);
@@ -124,7 +126,7 @@ function buildAppearance() {
   const boxes = {};
   const wells = {};
   const colours = COLOR_KEYS.map(([key, label]) => {
-    const box = h('input.input', { type: 'text', maxlength: '7', spellcheck: 'false', autocomplete: 'off', 'aria-label': `${label} colour, as #RRGGBB` });
+    const box = h('input.ui-input', { type: 'text', maxlength: '7', spellcheck: 'false', autocomplete: 'off', 'aria-label': `${label} colour, as #RRGGBB` });
     const well = h('input.well', { type: 'color', title: `Pick the ${label.toLowerCase()} colour`, 'aria-label': `Pick the ${label.toLowerCase()} colour` });
     box.addEventListener('input', typedColours);
     box.addEventListener('keydown', event => {
@@ -137,9 +139,9 @@ function buildAppearance() {
     });
     boxes[key] = box;
     wells[key] = well;
-    return h('div.colour', null, h('span.caption', null, label), h('span.colour-boxes', null, box, well));
+    return h('div.colour', null, h('span.colour-label', null, label), h('span.colour-boxes', null, box, well));
   });
-  const use = h('button.button', { type: 'button', disabled: true, title: 'Give these colours to every window', onclick: useColours }, 'Use these');
+  const use = h('button.ui-btn', { type: 'button', disabled: true, title: 'Give these colours to every window', onclick: useColours }, 'Use these');
   const note = h('p.look-note');
 
   const native = isNative();
@@ -152,8 +154,10 @@ function buildAppearance() {
     range.addEventListener('change', () => slide(group, range, out, true));
     return { group, range, out, row: h('div.ui-opacity', null, h('label', { for: id }, label), range, out) };
   });
-  const reset = h('button.button', { type: 'button', onclick: resetLook }, 'Reset to Ember');
+  const reset = h('button.ui-btn', { type: 'button', onclick: resetLook }, 'Reset to Ember');
   reset.title = 'Ember colours and the usual see-through, in every window';
+  // Only where see-through works: a light scheme made too clear over a dark terminal.
+  const warning = h('p.look-note.warn', { role: 'note' });
 
   ui.look.append(
     title('Appearance', 'The colours and see-through of every window: Learn, the panel and the games.'),
@@ -161,15 +165,24 @@ function buildAppearance() {
     h('div.look-part', null, h('span.caption', null, 'Custom colours'), h('div.colours', null, colours, use), note),
     h('div.look-part', null, h('span.caption', null, 'See-through'),
       h(`div.opacities${native ? '' : '.off'}`, null, sliders.map(slider => slider.row)),
-      h('p.look-note', null, native ? 'The background only: text stays sharp.' : 'See-through needs the app window.')),
+      h('p.look-note', null, native ? 'The background only: text stays sharp.' : 'See-through needs the app window.'),
+      warning),
     h('div.look-reset', null, reset));
-  A.parts = { schemes, boxes, wells, use, note, sliders };
+  A.parts = { schemes, boxes, wells, use, note, sliders, warning, native };
 
+  // An appearance that couldn't be asked for (null) is not Ember: the editor waits, and the
+  // page's watcher (appearanceChanged) fills it in on its next successful check.
   Promise.all([loadPresets(), loadAppearance()]).then(([presets, appearance]) => {
     A.presets = presets;
-    if (!A.saved) A.saved = appearance || globalThis.ClaudeTheme.parseAppearance(null);
+    if (!A.saved && appearance) A.saved = appearance;
     syncAppearance();
   });
+}
+
+/** The light-scheme note, for `appearance` as it's shown (saved, or a slider held). */
+function showWarning(appearance) {
+  if (!A.parts.native || !appearance) return;
+  A.parts.warning.textContent = seeThroughWarning(appearance, theme().derivePalette(appearance.colors, 1).isDark);
 }
 
 function schemeButton(label, colors, on, onClick, tip) {
@@ -183,8 +196,19 @@ function syncAppearance() {
   if (!A.parts || !A.saved || !A.presets.length) return;
   const on = shownScheme(A.saved, A.presets);
   const items = A.presets.map(preset => schemeButton(preset.label || preset.name, preset, on === preset.name, () => commit(withPreset(A.saved, preset)), `${preset.label || preset.name}: every window`));
-  if (on === 'custom') items.push(schemeButton('Custom', A.saved.colors, true, () => A.parts.boxes.bg.focus(), 'Your own colours, below'));
+  // Your own colours keep a swatch once used, so a preset tried on the way never loses them.
+  const custom = customColours(A.saved, A.presets, S.customColors);
+  if (on === 'custom' && !sameColours(custom, S.customColors)) {
+    S.customColors = custom;
+    savePrefs();
+  }
+  if (custom) {
+    items.push(on === 'custom'
+      ? schemeButton('Custom', custom, true, () => A.parts.boxes.bg.focus(), 'Your own colours, below')
+      : schemeButton('Custom', custom, false, () => commit(withColors(A.saved, custom, A.presets)), 'Your own colours again: every window'));
+  }
   A.parts.schemes.replaceChildren(...items);
+  showWarning(A.saved);
   if (!A.typing) {
     for (const [key] of COLOR_KEYS) {
       const hex = A.saved.colors[key];
@@ -255,6 +279,7 @@ function slide(group, range, out, done) {
     A.sliding = group;
     if (group === 'learn') previewAppearance(next, 'learn');
   }
+  showWarning(next);
 }
 
 function resetLook() {
@@ -296,10 +321,12 @@ function buildAbout() {
   ui.about.append(title('About'), body);
   loadReleases().then(({ version, releases }) => {
     const newest = (releases || [])[0];
-    body.replaceChildren(
-      h('div.about-version', null, `claude-panel ${version || ''}`.trim()),
-      newest ? h('div.release', null,
-        h('div.release-head', null, h('b', null, newest.version), releaseMeta(newest) ? ` · ${releaseMeta(newest)}` : ''),
-        h('ul.release-notes', null, (newest.notes || []).map(note => h('li', null, note)))) : null);
+    // The plugin's version on a line of its own only when the newest release doesn't already say it.
+    const versionLine = version && version !== newest?.version ? h('div.about-version', null, `claude-panel ${version}`) : null;
+    const release = newest ? h('div.release', null,
+      h('div.release-head', null, h('b', null, newest.version), releaseMeta(newest) ? ` · ${releaseMeta(newest)}` : ''),
+      h('ul.release-notes', null, (newest.notes || []).map(note => h('li', null, note)))) : null;
+    // replaceChildren would write a null as the text 'null'.
+    body.replaceChildren(...[versionLine, release].filter(Boolean));
   });
 }

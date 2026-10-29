@@ -49,6 +49,27 @@ export function shownScheme(appearance, presets) {
   return withColors(appearance, appearance.colors, presets).preset;
 }
 
+/**
+ * The colours the Custom swatch shows: the current ones when they are your own, else the last
+ * of your own that were used (`remembered`), so picking a preset never loses them. Null: none yet.
+ */
+export function customColours(appearance, presets, remembered) {
+  if (shownScheme(appearance, presets) === 'custom') return { ...appearance.colors };
+  return remembered ? { bg: remembered.bg, accent: remembered.accent, text: remembered.text } : null;
+}
+
+export const sameColours = (a, b) => Boolean(a && b) && COLOR_KEYS.every(([key]) => String(a[key]).toUpperCase() === String(b[key]).toUpperCase());
+
+/** Below this a light scheme loses its text against a dark terminal showing through. */
+export const LIGHT_SEE_THROUGH_MIN = 0.6;
+
+/** The see-through note for a light scheme that is clearer than reads well, else ''. */
+export function seeThroughWarning(appearance, isDark) {
+  if (isDark) return '';
+  const low = GROUPS.some(([group]) => Number(appearance?.opacity?.[group]) < LIGHT_SEE_THROUGH_MIN);
+  return low ? `A light scheme over a dark terminal reads best above ${percent(LIGHT_SEE_THROUGH_MIN)}.` : '';
+}
+
 /** 0.96 to '96%'. */
 export const percent = value => `${Math.round(Number(value) * 100)}%`;
 

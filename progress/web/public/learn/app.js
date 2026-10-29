@@ -173,7 +173,7 @@ document.addEventListener('keydown', event => {
 
 // --- Start -----------------------------------------------------------------------------------
 
-loadPrefs();
+await loadPrefs();
 document.documentElement.style.setProperty('--scale', String(S.textScale));
 buildLibraryView(hosts.library);
 buildCourseView(hosts.course);
@@ -197,13 +197,8 @@ gamesMark.addEventListener('click', async event => {
   if (!(await openWindow('games'))) location.href = gamesMark.href;
 });
 
-// Every change is also kept for first-look.js, which paints it before the next load.
-watchAppearance('learn', appearance => {
-  try {
-    localStorage.setItem('claude-learn-look', JSON.stringify(appearance));
-  } catch {}
-  appearanceChanged(appearance);
-});
+// The first paint came from /look.css; from here the page follows every change, from any window.
+watchAppearance('learn', appearanceChanged);
 
 const events = onEvents(onEvent);
 let lost = false;
@@ -231,10 +226,13 @@ function showAsked(view, courseId, page = null) {
 }
 
 // A view to open straight away, for snapshots and links: ?view=<name>[&course=<id>&page=<n>],
-// or ?view=overlap to open the course's overlap screen.
+// or ?view=overlap to open the course's overlap screen. Once shown, the query leaves the
+// address, so a reload (Cmd+R in the window app) opens where the person is, not the old link:
+// the prefs remember the view and the course.
 const params = new URLSearchParams(location.search);
 if (await hello()) {
   showAsked(params.get('view'), params.get('course'), Number(params.get('page')) || null);
+  if (location.search) history.replaceState(null, '', location.pathname);
 } else {
   for (const key of VIEW_NAMES) hosts[key].hidden = key !== 'library';
 }
