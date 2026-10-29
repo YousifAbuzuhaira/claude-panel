@@ -221,8 +221,6 @@ $puzzleLoader = [ChessCore.PuzzleLoader]::Begin((Join-Path $PSScriptRoot 'ChessP
 $owner = [IntPtr]$OwnerHwnd
 $hasOwner = $owner -ne [IntPtr]::Zero -and [ChessCore.ChessWin32]::IsWindow($owner)
 
-$GLYPH_CLOSE = [string][char]0x2715
-$GLYPH_GRIP = [string][char]0x25E2
 $GLYPH_DOT = [string][char]0x00B7
 $GLYPH_DOWN = [string][char]0x25BE
 $GLYPH_LEFT = [string][char]0x2190
@@ -233,6 +231,19 @@ $MAX_SCALE = 2.2
 $SQUARE_PX = 52
 $BOARD_PX = 8 * $SQUARE_PX
 $SIDE_W = 292
+$BOARD_RADIUS = 4
+# The side column: the gap between the board and it, the label column of the mode rows, the gap
+# between choices in a row, the height of the theme and board-colour controls.
+$SIDE_GAP = 14
+$LABEL_W = 34
+$CHOICE_GAP = 6
+$SETTING_H = 24
+# The puzzle-theme picker: two chips a row, this far apart.
+$CHIP_GAP = 4
+$CHIP_H = 26
+# The width of a themed scrollbar (Theme.ps1): the feed's and the picker's sit in the card's
+# right margin, so their content keeps the column's full width whether or not they scroll.
+$SCROLL_W = 9
 $SLIDE_MS = 170
 $SETUP_MS = 450
 $REPLY_MS = 400
@@ -379,17 +390,24 @@ function Save-Prefs {
 
 function Brush([string]$Hex) { return [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex) }
 function ConvertTo-Color([string]$Hex) { return [System.Windows.Media.ColorConverter]::ConvertFromString($Hex) }
-$ink = Brush '#E8E6E3'
-$dim = Brush '#8B8A88'
-$faint = Brush '#5E5D5B'
-$accent = Brush '#E08A5F'
-$green = Brush '#5FB98A'
-$red = Brush '#E0696B'
-$gold = Brush '#E6BE47'
-$blue = Brush '#7FB2E5'
-$surface = Brush '#2B2C31'
+
+# The colour scheme and see-through every window shares (appearance.json), and the shared pieces.
+# Everything off the board paints with these brushes, which recolour in place on a change. The
+# board itself (square colours, Lichess's highlights, the pieces, the check glow) is the game's own.
+. (Join-Path $PSScriptRoot 'Theme.ps1')
+$T = Initialize-Theme 'games'
+. (Join-Path $PSScriptRoot 'Chrome.ps1')
+$ink = $T.ink
+$dim = $T.dim
+$faint = $T.faint
+$accent = $T.accent
+$green = $T.green
+$red = $T.red
+$gold = $T.gold
+$blue = $T.blue
+$surface = $T.surface
 $noFill = [System.Windows.Media.Brushes]::Transparent
-$font = New-Object System.Windows.Media.FontFamily('Cascadia Mono, Consolas')
+$font = $UI_MONO
 # The squares' brushes change colour in place, so a new board colour repaints at once.
 $lightBrush = New-Object System.Windows.Media.SolidColorBrush (ConvertTo-Color '#F0D9B5')
 $darkBrush = New-Object System.Windows.Media.SolidColorBrush (ConvertTo-Color '#B58863')
@@ -413,27 +431,37 @@ function New-Gap([double]$Left, [double]$Top, [double]$Right, [double]$Bottom) {
   return New-Object System.Windows.Thickness($Left, $Top, $Right, $Bottom)
 }
 
-# A piece of text that acts as a button: it never takes focus, so the keys keep
-# going to the window.
-function New-Pressable([string]$Text, $Tag) {
+# One of a row of text choices (a mode, a difficulty, a move in the review): dim, ink on hover,
+# ink Bold while it is the one chosen. It never takes focus, so the keys keep going to the window.
+# .Tag.value is what it stands for; Set-ChoiceOn marks it chosen.
+function New-Choice([string]$Text, $Value, [string]$Tip) {
   $block = New-Text $Text $dim
-  $block.Tag = $Tag
+  $block.Tag = @{ value = $Value; on = $false }
   $block.Cursor = [System.Windows.Input.Cursors]::Hand
-  $block.Padding = New-Gap 4 2 4 2
+  $block.VerticalAlignment = 'Center'
+  if ($Tip) { $block.ToolTip = $Tip }
+  $block.Add_MouseEnter({ param($sender, $e) $sender.Foreground = Get-UiBrush 'ink' })
+  $block.Add_MouseLeave({ param($sender, $e) if ($sender.Tag.on) { $sender.Foreground = Get-UiBrush 'ink' } else { $sender.Foreground = Get-UiBrush 'dim' } })
+  $block.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
   return $block
 }
 
-function New-Button([string]$Text, $Background, $Foreground) {
-  $button = New-Object System.Windows.Controls.Border
-  $button.Background = $Background
-  $button.CornerRadius = New-Object System.Windows.CornerRadius(5)
-  $button.Padding = New-Gap 12 5 12 6
-  $button.Cursor = [System.Windows.Input.Cursors]::Hand
-  $label = New-Text $Text $Foreground
-  $label.FontWeight = 'Bold'
-  $label.HorizontalAlignment = 'Center'
-  $button.Child = $label
-  return $button
+function Set-ChoiceOn($Choice, [bool]$On) {
+  $Choice.Tag.on = $On
+  if ($On) { $Choice.FontWeight = 'Bold' } else { $Choice.FontWeight = 'Normal' }
+  if ($On -or $Choice.IsMouseOver) { $Choice.Foreground = $ink } else { $Choice.Foreground = $dim }
+}
+
+# A link out to the browser: blue, underlined on hover.
+function New-Link([string]$Text, [string]$Tip) {
+  $block = New-Text $Text $blue
+  $block.FontSize = 11.5
+  $block.Cursor = [System.Windows.Input.Cursors]::Hand
+  $block.VerticalAlignment = 'Center'
+  if ($Tip) { $block.ToolTip = $Tip }
+  $block.Add_MouseEnter({ param($sender, $e) $sender.TextDecorations = [System.Windows.TextDecorations]::Underline })
+  $block.Add_MouseLeave({ param($sender, $e) $sender.TextDecorations = $null })
+  return $block
 }
 
 $win = New-Object System.Windows.Window
@@ -454,44 +482,33 @@ if ($hasOwner) {
 }
 
 $card = New-Object System.Windows.Controls.Border
-$card.CornerRadius = New-Object System.Windows.CornerRadius(10)
-$card.Background = Brush '#F21C1D20'
-$card.BorderBrush = Brush '#33FFFFFF'
+$card.CornerRadius = New-Object System.Windows.CornerRadius($UI_CARD_RADIUS)
+$card.Background = $T.cardFill
+$card.BorderBrush = $T.edge
 $card.BorderThickness = New-Object System.Windows.Thickness(1)
-$card.Padding = New-Gap 14 10 14 12
 
-# Header: the name, the rating with its recent curve, the close mark. Dragging it moves the window.
+# Header: the name, the rating with its recent curve, the other windows (games mark) and the
+# close mark, all on one centre line. Dragging it moves the window.
 $header = New-Object System.Windows.Controls.DockPanel
 $header.Cursor = [System.Windows.Input.Cursors]::SizeAll
 $header.Background = $noFill
-$titleText = New-Text 'Puzzles' $accent
-$titleText.FontSize = 22
-$titleText.FontWeight = 'Bold'
-$titleText.VerticalAlignment = 'Center'
+$titleText = New-UiTitle 'Puzzles'
 [System.Windows.Controls.DockPanel]::SetDock($titleText, 'Left')
-$closeText = New-Text $GLYPH_CLOSE $dim
-$closeText.Margin = New-Gap 12 0 0 0
-$closeText.VerticalAlignment = 'Top'
-$closeText.Cursor = [System.Windows.Input.Cursors]::Hand
+$closeText = New-UiMark $UI_GLYPHS.close 'Close'
+$closeText.Margin = New-Gap 4 0 0 0
 [System.Windows.Controls.DockPanel]::SetDock($closeText, 'Right')
+$gamesMark = New-UiMark $UI_GLYPHS.games 'Learn and the other games'
+$gamesMark.Margin = New-Gap 8 0 0 0
+[System.Windows.Controls.DockPanel]::SetDock($gamesMark, 'Right')
 
-$ratingBox = New-Object System.Windows.Controls.Border
-$ratingBox.Background = $surface
-$ratingBox.CornerRadius = New-Object System.Windows.CornerRadius(5)
-$ratingBox.Padding = New-Gap 10 3 10 4
-$ratingBox.MinWidth = 70
+# The rating (the shared stat box), and the change that rises out of it after each result.
+$ratingBox = New-UiStatBox 'RATING' '1500'
 $ratingBox.ToolTip = 'Your puzzle rating (Glicko-2, as on Lichess). A ? means it is still settling.'
 [System.Windows.Controls.DockPanel]::SetDock($ratingBox, 'Right')
-$ratingInside = New-Object System.Windows.Controls.StackPanel
-$ratingLabel = New-Text 'RATING' $dim
-$ratingLabel.FontSize = 9
-$ratingLabel.HorizontalAlignment = 'Center'
-$ratingNumber = New-Text '1500' $ink
-$ratingNumber.FontSize = 15
-$ratingNumber.FontWeight = 'Bold'
-$ratingNumber.HorizontalAlignment = 'Center'
-[void]$ratingInside.Children.Add($ratingLabel)
-[void]$ratingInside.Children.Add($ratingNumber)
+$ratingLabel = $ratingBox.Tag.label
+$ratingNumber = $ratingBox.Tag.value
+$ratingInside = $ratingBox.Child
+$ratingBox.Child = $null
 $ratingLayers = New-Object System.Windows.Controls.Grid
 [void]$ratingLayers.Children.Add($ratingInside)
 $ratingFlash = New-Text '' $green
@@ -508,8 +525,9 @@ $ratingBox.Child = $ratingLayers
 $sparkHost = New-Object System.Windows.Controls.Canvas
 $sparkHost.Width = 96
 $sparkHost.Height = 26
-$sparkHost.Margin = New-Gap 0 0 10 0
+$sparkHost.Margin = New-Gap 0 0 12 0
 $sparkHost.VerticalAlignment = 'Center'
+$sparkHost.Background = $noFill
 $sparkHost.ToolTip = 'Your rating over the last puzzles'
 [System.Windows.Controls.DockPanel]::SetDock($sparkHost, 'Right')
 $sparkLine = New-Object System.Windows.Shapes.Polyline
@@ -520,20 +538,35 @@ $sparkLine.StrokeLineJoin = 'Round'
 
 [void]$header.Children.Add($titleText)
 [void]$header.Children.Add($closeText)
+[void]$header.Children.Add($gamesMark)
 [void]$header.Children.Add($ratingBox)
 [void]$header.Children.Add($sparkHost)
 [void]$header.Children.Add((New-Object System.Windows.Controls.Border))
+
+# Under the games mark: Learn and the other games, a click away.
+$switcher = New-UiSwitcherRow 'chess' $OwnerHwnd $SessionId
+# Right-aligned: the last chip gives back its gap, so the row ends on the column's right edge.
+if ($switcher.Children.Count -gt 0) { $switcher.Children[$switcher.Children.Count - 1].Margin = New-Gap 0 0 0 0 }
+$switcher.Margin = New-Gap 0 10 0 0
+$switcher.HorizontalAlignment = 'Right'
+$switcher.Visibility = 'Collapsed'
 
 # --- The board: squares, coordinates, marks, dots, pieces, arrow, pickers -----------
 
 $boardHost = New-Object System.Windows.Controls.Grid
 $boardHost.Width = $BOARD_PX
 $boardHost.Height = $BOARD_PX
-$boardHost.ClipToBounds = $true
 $boardHost.Background = $noFill
+# Rounded corners need a real clip: a Border's CornerRadius doesn't clip what is inside it.
+# The clip follows the board's size, and also holds a dragged piece and the pickers inside.
+function Set-BoardClip {
+  $rect = New-Object System.Windows.Rect(0, 0, [Math]::Max(0.0, $boardHost.ActualWidth), [Math]::Max(0.0, $boardHost.ActualHeight))
+  if ($rect.Width -le 0) { $rect = New-Object System.Windows.Rect(0, 0, $BOARD_PX, $BOARD_PX) }
+  $boardHost.Clip = New-Object System.Windows.Media.RectangleGeometry($rect, $BOARD_RADIUS, $BOARD_RADIUS)
+}
+Set-BoardClip
+$boardHost.Add_SizeChanged({ param($sender, $e) try { Set-BoardClip } catch { Write-Failure $_ } })
 $boardFrame = New-Object System.Windows.Controls.Border
-$boardFrame.CornerRadius = New-Object System.Windows.CornerRadius(4)
-$boardFrame.ClipToBounds = $true
 $boardFrame.Child = $boardHost
 $boardFrame.Margin = New-Gap 0 12 0 0
 $boardFrame.VerticalAlignment = 'Top'
@@ -555,8 +588,10 @@ $promoLayer = New-Layer
 foreach ($layer in @($markLayer, $coordLayer, $dotLayer, $arrowLayer)) { $layer.IsHitTestVisible = $false }
 $pieceLayer.IsHitTestVisible = $false
 
+# While Stockfish thinks: the board dimmed (still readable, so the wrong move stays in view)
+# under a small box that says so. Both follow the colour scheme.
 $veil = New-Object System.Windows.Controls.Border
-$veil.Background = Brush '#661C1D20'
+$veil.Background = New-ThemeTint 'veil' 0.4
 $veil.Visibility = 'Collapsed'
 $veil.IsHitTestVisible = $false
 $veilText = New-Text '' $ink
@@ -565,9 +600,11 @@ $veilText.FontWeight = 'Bold'
 $veilText.HorizontalAlignment = 'Center'
 $veilText.VerticalAlignment = 'Center'
 $veilBack = New-Object System.Windows.Controls.Border
-$veilBack.Background = Brush '#E61C1D20'
-$veilBack.CornerRadius = New-Object System.Windows.CornerRadius(6)
-$veilBack.Padding = New-Gap 14 8 14 9
+$veilBack.Background = $T.popup
+$veilBack.BorderBrush = $T.line
+$veilBack.BorderThickness = New-Object System.Windows.Thickness(1)
+$veilBack.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+$veilBack.Padding = New-Gap 16 8 16 9
 $veilBack.HorizontalAlignment = 'Center'
 $veilBack.VerticalAlignment = 'Center'
 $veilBack.Child = $veilText
@@ -879,6 +916,8 @@ function Complete-Animation {
 }
 
 # --- The side column: status, explanations, hints, settings -------------------------
+# Everything in it starts on one left edge. Text sits at 0; a box whose text needs an inset
+# (a feed line) hangs its fill out into the gap beside the board instead, so its text is at 0 too.
 
 $side = New-Object System.Windows.Controls.DockPanel
 $side.Width = $SIDE_W
@@ -887,13 +926,13 @@ $side.LastChildFill = $true
 
 $infoLine = New-Object System.Windows.Controls.TextBlock
 $infoLine.Foreground = $dim
-$infoLine.FontSize = 11
+$infoLine.FontSize = 11.5
 $infoLine.TextTrimming = 'CharacterEllipsis'
 [System.Windows.Controls.DockPanel]::SetDock($infoLine, 'Top')
 
 $statusRow = New-Object System.Windows.Controls.StackPanel
 $statusRow.Orientation = 'Horizontal'
-$statusRow.Margin = New-Gap 0 4 0 6
+$statusRow.Margin = New-Gap 0 4 0 8
 [System.Windows.Controls.DockPanel]::SetDock($statusRow, 'Top')
 $sideDot = New-Object System.Windows.Shapes.Ellipse
 $sideDot.Width = 13
@@ -905,6 +944,7 @@ $sideDot.VerticalAlignment = 'Center'
 $statusText = New-Text '' $ink
 $statusText.FontSize = 16
 $statusText.FontWeight = 'Bold'
+$statusText.VerticalAlignment = 'Center'
 [void]$statusRow.Children.Add($sideDot)
 [void]$statusRow.Children.Add($statusText)
 
@@ -912,7 +952,7 @@ $statusText.FontWeight = 'Bold'
 $bottom = New-Object System.Windows.Controls.StackPanel
 [System.Windows.Controls.DockPanel]::SetDock($bottom, 'Bottom')
 $moveStrip = New-Object System.Windows.Controls.WrapPanel
-$moveStrip.Margin = New-Gap 0 6 0 2
+$moveStrip.Margin = New-Gap 0 8 0 0
 $moveStrip.Visibility = 'Collapsed'
 $buttonRow = New-Object System.Windows.Controls.Grid
 $buttonRow.Margin = New-Gap 0 8 0 0
@@ -920,103 +960,135 @@ foreach ($k in 0, 1) {
   $column = New-Object System.Windows.Controls.ColumnDefinition
   [void]$buttonRow.ColumnDefinitions.Add($column)
 }
-$hintButton = New-Button 'Hint' (Brush '#3A3B41') $ink
+$hintButton = New-UiButton 'Hint' 'secondary' -Mono -Tip 'H. First the idea (half credit), then the piece, then the move (no credit).'
+$hintButton.Tag.label.FontWeight = 'Bold'
 $hintButton.Margin = New-Gap 0 0 4 0
-$hintButton.ToolTip = 'H. First the idea (half credit), then the piece, then the move (no credit).'
-$nextButton = New-Button 'Next puzzle' $accent (Brush '#1C1D20')
+$nextButton = New-UiButton 'Next puzzle' 'primary' -Mono -Tip 'N or Enter'
 $nextButton.Margin = New-Gap 4 0 0 0
-$nextButton.ToolTip = 'N or Enter'
 [System.Windows.Controls.Grid]::SetColumn($nextButton, 1)
 [void]$buttonRow.Children.Add($hintButton)
 [void]$buttonRow.Children.Add($nextButton)
 
 # Normal: puzzles near your rating. Climb: start low and work your way up.
+# Two rows on one grid: the label in its own column, the choices of both rows on one edge.
+# The difficulty only applies to Normal, so it sits under the modes; in Climb, the climb's
+# own note takes its place.
+$choiceGrid = New-Object System.Windows.Controls.Grid
+$choiceGrid.Margin = New-Gap 0 12 0 0
+$labelColumn = New-Object System.Windows.Controls.ColumnDefinition
+$labelColumn.Width = New-Object System.Windows.GridLength($LABEL_W)
+[void]$choiceGrid.ColumnDefinitions.Add($labelColumn)
+[void]$choiceGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition))
+foreach ($k in 0, 1) {
+  $choiceLine = New-Object System.Windows.Controls.RowDefinition
+  $choiceLine.Height = [System.Windows.GridLength]::Auto
+  [void]$choiceGrid.RowDefinitions.Add($choiceLine)
+}
+$modeLabel = New-UiCaption 'Mode'
+[void]$choiceGrid.Children.Add($modeLabel)
 $modeRow = New-Object System.Windows.Controls.StackPanel
 $modeRow.Orientation = 'Horizontal'
-$modeRow.Margin = New-Gap 0 10 0 0
-$modeLabel = New-Text 'Mode' $faint
-$modeLabel.FontSize = 11
-$modeLabel.Margin = New-Gap 0 2 4 2
-[void]$modeRow.Children.Add($modeLabel)
+[System.Windows.Controls.Grid]::SetColumn($modeRow, 1)
+[void]$choiceGrid.Children.Add($modeRow)
 $script:modeViews = @()
 foreach ($choice in @(
     @{ key = 'normal'; label = 'Normal'; tip = 'Puzzles near your rating; the rating moves with each result.' }
     @{ key = 'climb'; label = 'Climb'; tip = "Start at $CLIMB_START and work up: +$CLIMB_UP for a clean solve, -$CLIMB_DOWN for a miss." })) {
-  $pick = New-Pressable $choice.label $choice.key
-  $pick.ToolTip = $choice.tip
+  $pick = New-Choice $choice.label $choice.key $choice.tip
+  $pick.Margin = New-Gap 0 0 $CHOICE_GAP 0
   [void]$modeRow.Children.Add($pick)
   $script:modeViews += $pick
 }
-$climbNote = New-Text '' $dim
-$climbNote.FontSize = 11
-$climbNote.Margin = New-Gap 0 4 0 0
-$climbNote.Visibility = 'Collapsed'
 
 $difficultyRow = New-Object System.Windows.Controls.StackPanel
 $difficultyRow.Orientation = 'Horizontal'
 $difficultyRow.Margin = New-Gap 0 4 0 0
-$difficultyRow.ToolTip = 'How far from your rating the next puzzle is picked'
+[System.Windows.Controls.Grid]::SetRow($difficultyRow, 1)
+[System.Windows.Controls.Grid]::SetColumn($difficultyRow, 1)
+[void]$choiceGrid.Children.Add($difficultyRow)
 $script:difficultyViews = @()
 foreach ($level in $DIFFICULTIES) {
-  $pick = New-Pressable $level.label $level.key
-  $pick.FontSize = 11
-  $pick.Padding = New-Gap 3 2 3 2
+  if ($level.offset -lt 0) { $levelTip = "Puzzles about $(-$level.offset) below your rating" }
+  elseif ($level.offset -gt 0) { $levelTip = "Puzzles about $($level.offset) above your rating" }
+  else { $levelTip = 'Puzzles at your rating' }
+  $pick = New-Choice $level.label $level.key $levelTip
+  $pick.Margin = New-Gap 0 0 $CHOICE_GAP 0
   [void]$difficultyRow.Children.Add($pick)
   $script:difficultyViews += $pick
 }
 
+$climbNote = New-Text '' $dim
+$climbNote.FontSize = 11.5
+$climbNote.Margin = New-Gap 0 4 0 0
+$climbNote.TextTrimming = 'CharacterEllipsis'
+$climbNote.VerticalAlignment = 'Center'
+$climbNote.Visibility = 'Collapsed'
+[System.Windows.Controls.Grid]::SetRow($climbNote, 1)
+[System.Windows.Controls.Grid]::SetColumn($climbNote, 1)
+[void]$choiceGrid.Children.Add($climbNote)
+
+# The puzzle theme to practise (opens the picker), and the board colour beside it.
 $settingsRow = New-Object System.Windows.Controls.DockPanel
-$settingsRow.Margin = New-Gap 0 6 0 0
-$boardSwatch = New-Object System.Windows.Controls.StackPanel
-$boardSwatch.Orientation = 'Horizontal'
+$settingsRow.Margin = New-Gap 0 8 0 0
+$boardSwatch = New-Object System.Windows.Controls.Border
+$boardSwatch.Width = $SETTING_H
+$boardSwatch.Height = $SETTING_H
+$boardSwatch.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+$boardSwatch.BorderThickness = New-Object System.Windows.Thickness(1)
+$boardSwatch.BorderBrush = $T.line
 $boardSwatch.Cursor = [System.Windows.Input.Cursors]::Hand
-$boardSwatch.ToolTip = 'Board colour'
+$boardSwatch.ToolTip = 'Board colour: click for the next one'
 $boardSwatch.VerticalAlignment = 'Center'
 $boardSwatch.Margin = New-Gap 8 0 0 0
 [System.Windows.Controls.DockPanel]::SetDock($boardSwatch, 'Right')
+$swatchHalves = New-Object System.Windows.Controls.StackPanel
+$swatchHalves.Orientation = 'Horizontal'
+$swatchHalves.IsHitTestVisible = $false
 $boardSwatchLight = New-Object System.Windows.Controls.Border
 $boardSwatchDark = New-Object System.Windows.Controls.Border
 foreach ($half in @($boardSwatchLight, $boardSwatchDark)) {
-  $half.Width = 10
-  $half.Height = 16
-  [void]$boardSwatch.Children.Add($half)
+  $half.Width = ($SETTING_H - 2) / 2
+  $half.Height = $SETTING_H - 2
 }
-$boardSwatchLight.CornerRadius = New-Object System.Windows.CornerRadius(3, 0, 0, 3)
-$boardSwatchDark.CornerRadius = New-Object System.Windows.CornerRadius(0, 3, 3, 0)
-$themeChip = New-Object System.Windows.Controls.Border
-$themeChip.Background = $surface
-$themeChip.CornerRadius = New-Object System.Windows.CornerRadius(5)
-$themeChip.Padding = New-Gap 8 3 8 4
-$themeChip.Cursor = [System.Windows.Input.Cursors]::Hand
-$themeChip.ToolTip = 'Practise one theme, or a mix (T)'
-$themeLabel = New-Text '' $ink
+$boardSwatchLight.CornerRadius = New-Object System.Windows.CornerRadius(($UI_RADIUS - 1), 0, 0, ($UI_RADIUS - 1))
+$boardSwatchDark.CornerRadius = New-Object System.Windows.CornerRadius(0, ($UI_RADIUS - 1), ($UI_RADIUS - 1), 0)
+[void]$swatchHalves.Children.Add($boardSwatchLight)
+[void]$swatchHalves.Children.Add($boardSwatchDark)
+$boardSwatch.Child = $swatchHalves
+$boardSwatch.Add_MouseEnter({ param($sender, $e) $sender.BorderBrush = Get-UiBrush 'dim' })
+$boardSwatch.Add_MouseLeave({ param($sender, $e) $sender.BorderBrush = Get-UiBrush 'line' })
+$themeChip = New-UiButton '' 'secondary' -Mono -Tip 'Practise one theme, or a mix (T)'
+$themeChip.Height = $SETTING_H
+$themeChip.Padding = New-Gap 10 0 10 0
+$themeLabel = $themeChip.Tag.label
+$themeLabel.HorizontalAlignment = 'Left'
 $themeLabel.TextTrimming = 'CharacterEllipsis'
-$themeChip.Child = $themeLabel
 [void]$settingsRow.Children.Add($boardSwatch)
 [void]$settingsRow.Children.Add($themeChip)
 
 $linkRow = New-Object System.Windows.Controls.StackPanel
 $linkRow.Orientation = 'Horizontal'
-$linkRow.Margin = New-Gap 0 6 0 0
-$puzzleLink = New-Pressable "Lichess puzzle $GLYPH_LINK" 'puzzle'
-$gameLink = New-Pressable "Source game $GLYPH_LINK" 'game'
-foreach ($link in @($puzzleLink, $gameLink)) {
-  $link.FontSize = 11
-  $link.Padding = New-Gap 0 2 12 2
-  [void]$linkRow.Children.Add($link)
-}
+$linkRow.Margin = New-Gap 0 8 0 0
+$puzzleLink = New-Link "Lichess puzzle $GLYPH_LINK" 'This puzzle on lichess.org'
+$puzzleLink.Margin = New-Gap 0 0 16 0
+$gameLink = New-Link "Source game $GLYPH_LINK" 'The game it comes from, on lichess.org'
+[void]$linkRow.Children.Add($puzzleLink)
+[void]$linkRow.Children.Add($gameLink)
 
 [void]$bottom.Children.Add($moveStrip)
 [void]$bottom.Children.Add($buttonRow)
-[void]$bottom.Children.Add($modeRow)
-[void]$bottom.Children.Add($difficultyRow)
-[void]$bottom.Children.Add($climbNote)
+[void]$bottom.Children.Add($choiceGrid)
 [void]$bottom.Children.Add($settingsRow)
 [void]$bottom.Children.Add($linkRow)
 
+# The feed scrolls with a thin scrollbar. The scroller reaches into the gap beside the board by a
+# feed line's inset, and its scrollbar sits in the card's right margin, so feed text starts at 0
+# and the lines keep one width whether the bar shows or not.
+$FEED_PAD = 6
 $feedScroll = New-Object System.Windows.Controls.ScrollViewer
-$feedScroll.VerticalScrollBarVisibility = 'Hidden'
+$feedScroll.VerticalScrollBarVisibility = 'Visible'
 $feedScroll.Focusable = $false
+$feedScroll.Margin = New-Gap (-$FEED_PAD) 0 (-($FEED_PAD + $SCROLL_W)) 0
 $feedPanel = New-Object System.Windows.Controls.StackPanel
 $feedScroll.Content = $feedPanel
 
@@ -1025,31 +1097,57 @@ $feedScroll.Content = $feedPanel
 [void]$side.Children.Add($bottom)
 [void]$side.Children.Add($feedScroll)
 
-# The theme picker covers the side column while open.
+# The theme picker takes the side column's place while open (the column is hidden under it, so
+# the picker needs no fill of its own and fades with the card).
 $picker = New-Object System.Windows.Controls.DockPanel
 $picker.Width = $SIDE_W
 $picker.Height = $BOARD_PX
-$picker.Background = Brush '#1C1D20'
+$picker.Background = $noFill
 $picker.Visibility = 'Collapsed'
 $searchHost = New-Object System.Windows.Controls.Grid
 [System.Windows.Controls.DockPanel]::SetDock($searchHost, 'Top')
+
+# A rounded, themed text box: the accent ring while it has the keys. (The text box applies its
+# own Padding inside the content host, so the template doesn't.)
+$SEARCH_TEMPLATE_XAML = @'
+<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="TextBox">
+  <Border x:Name="Frame" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="6">
+    <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" Focusable="False" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+  </Border>
+  <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Frame" Property="BorderBrush" Value="{DynamicResource Theme.faint}"/></Trigger>
+    <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Frame" Property="BorderBrush" Value="{DynamicResource Theme.accent}"/></Trigger>
+  </ControlTemplate.Triggers>
+</ControlTemplate>
+'@
 $searchBox = New-Object System.Windows.Controls.TextBox
-$searchBox.Background = $surface
+$searchBox.Template = [System.Windows.Markup.XamlReader]::Parse($SEARCH_TEMPLATE_XAML)
+$searchBox.Height = 30
+$searchBox.Background = $T.surface2
+$searchBox.BorderBrush = $T.line
 $searchBox.Foreground = $ink
 $searchBox.CaretBrush = $accent
-$searchBox.BorderThickness = New-Object System.Windows.Thickness(0)
+$searchBox.SelectionBrush = $accent
 $searchBox.FontFamily = $font
-$searchBox.FontSize = 13
-$searchBox.Padding = New-Gap 8 5 8 5
-$searchHint = New-Text 'search themes...' $dim
-$searchHint.FontSize = 13
-$searchHint.Margin = New-Gap 11 5 0 0
+$searchBox.FontSize = 12
+# Text 9px in, on the chips' text below (the box adds 1 for its border and 2 of its own);
+# room on the right for the close mark.
+$searchBox.Padding = New-Gap 6 0 30 0
+$searchHint = New-Text 'Search themes' $faint
+$searchHint.FontSize = 12
+$searchHint.Margin = New-Gap 9 0 30 0
+$searchHint.VerticalAlignment = 'Center'
+$searchHint.TextTrimming = 'CharacterEllipsis'
 $searchHint.IsHitTestVisible = $false
+$pickerClose = New-UiMark $UI_GLYPHS.close 'Close (Esc)'
+$pickerClose.HorizontalAlignment = 'Right'
+$pickerClose.Margin = New-Gap 0 0 4 0
 [void]$searchHost.Children.Add($searchBox)
 [void]$searchHost.Children.Add($searchHint)
+[void]$searchHost.Children.Add($pickerClose)
 $pickerScroll = New-Object System.Windows.Controls.ScrollViewer
-$pickerScroll.VerticalScrollBarVisibility = 'Hidden'
-$pickerScroll.Margin = New-Gap 0 8 0 0
+$pickerScroll.VerticalScrollBarVisibility = 'Visible'
+$pickerScroll.Margin = New-Gap 0 4 (-$SCROLL_W) 0
 $pickerScroll.Focusable = $false
 $pickerList = New-Object System.Windows.Controls.StackPanel
 $pickerScroll.Content = $pickerList
@@ -1057,7 +1155,7 @@ $pickerScroll.Content = $pickerList
 [void]$picker.Children.Add($pickerScroll)
 
 $sideHost = New-Object System.Windows.Controls.Grid
-$sideHost.Margin = New-Gap 14 12 0 0
+$sideHost.Margin = New-Gap $SIDE_GAP 12 0 0
 [void]$sideHost.Children.Add($side)
 [void]$sideHost.Children.Add($picker)
 
@@ -1066,39 +1164,50 @@ $body.Orientation = 'Horizontal'
 [void]$body.Children.Add($boardFrame)
 [void]$body.Children.Add($sideHost)
 
-$footer = New-Object System.Windows.Controls.DockPanel
-$footer.Margin = New-Gap 0 10 0 0
-$credits = New-Text 'Puzzles: Lichess (CC0) - Pieces: cburnett (GPLv2+)' $faint
-$credits.FontSize = 10
-$credits.VerticalAlignment = 'Center'
-[System.Windows.Controls.DockPanel]::SetDock($credits, 'Right')
+# Footer: the keys under the board, the credits under the side column (on its edge, clear of the
+# resize grip in the corner).
+$footer = New-Object System.Windows.Controls.Grid
+$footer.Margin = New-Gap 0 12 0 0
+$keysColumn = New-Object System.Windows.Controls.ColumnDefinition
+$keysColumn.Width = New-Object System.Windows.GridLength(($BOARD_PX + $SIDE_GAP))
+[void]$footer.ColumnDefinitions.Add($keysColumn)
+[void]$footer.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition))
 $keysText = New-Text "Drag or click $GLYPH_DOT H hint $GLYPH_DOT N next $GLYPH_DOT $GLYPH_LEFT $GLYPH_RIGHT replay $GLYPH_DOT T themes" $dim
-$keysText.FontSize = 11
-[void]$footer.Children.Add($credits)
+$keysText.TextTrimming = 'CharacterEllipsis'
+$keysText.VerticalAlignment = 'Center'
+$credits = New-Text "Lichess puzzles CC0 $GLYPH_DOT cburnett pieces GPLv2+" $faint
+$credits.FontSize = 11
+$credits.TextTrimming = 'CharacterEllipsis'
+$credits.VerticalAlignment = 'Center'
+$credits.ToolTip = 'Puzzles from the Lichess puzzle database (CC0). Pieces: the cburnett set (GPLv2+).'
+[System.Windows.Controls.Grid]::SetColumn($credits, 1)
 [void]$footer.Children.Add($keysText)
+[void]$footer.Children.Add($credits)
 
 $stack = New-Object System.Windows.Controls.StackPanel
+$stack.Margin = New-Gap 16 12 16 14
 [void]$stack.Children.Add($header)
+[void]$stack.Children.Add($switcher)
 [void]$stack.Children.Add($body)
 [void]$stack.Children.Add($footer)
-$card.Child = $stack
+
+# The resize grip sits in the card's bottom-right corner, so it scales with the card. The
+# window is pinned by its top-left corner, so pulling the grip out (right or down) grows it.
+$grip = New-UiGrip 'right'
+$grip.Margin = New-Gap 0 0 5 3
+
+$cardBody = New-Object System.Windows.Controls.Grid
+[void]$cardBody.Children.Add($stack)
+[void]$cardBody.Children.Add($grip)
+$card.Child = $cardBody
 
 $cardScale = New-Object System.Windows.Media.ScaleTransform($script:scale, $script:scale)
 $card.LayoutTransform = $cardScale
 
-# The resize grip, bottom-right: the window is pinned by its top-left corner,
-# so pulling the grip out (right or down) grows it.
-$grip = New-Text $GLYPH_GRIP $dim
-$grip.FontSize = 11
-$grip.Margin = New-Gap 0 0 7 5
-$grip.HorizontalAlignment = 'Right'
-$grip.VerticalAlignment = 'Bottom'
-$grip.Cursor = [System.Windows.Input.Cursors]::SizeNWSE
-$grip.ToolTip = 'Drag to resize'
-
 $cardHost = New-Object System.Windows.Controls.Grid
 [void]$cardHost.Children.Add($card)
-[void]$cardHost.Children.Add($grip)
+# Themed scrollbars, tooltips and the search box ring ({DynamicResource Theme.*}).
+Add-ThemeResources $win
 $win.Content = $cardHost
 
 # --- The puzzles, the glossary -------------------------------------------------------
@@ -1172,8 +1281,18 @@ function Update-Rating {
 function Show-RatingFlash([int]$Delta) {
   $ratingFlash.Text = $(if ($Delta -ge 0) { "+$Delta" } else { "$Delta" })
   $ratingFlash.Foreground = $(if ($Delta -ge 0) { $green } else { $red })
-  # A snapshot shows the change beside the number instead of rising out of it.
-  if ($script:isInstant) { $ratingFlash.Opacity = 1; $ratingFlash.RenderTransform.X = -58; $ratingFlash.RenderTransform.Y = -12; return }
+  # A snapshot shows the change beside the number instead of rising out of it, in room made
+  # for it between the curve and the box.
+  if ($script:isInstant) {
+    $ratingFlash.Opacity = 1
+    $ratingFlash.Measure((New-Object System.Windows.Size([double]::PositiveInfinity, [double]::PositiveInfinity)))
+    $room = [Math]::Ceiling($ratingFlash.DesiredSize.Width) + 16
+    $sparkHost.Margin = New-Gap 0 0 $room 0
+    $boxWidth = [Math]::Max([double]$ratingBox.MinWidth, [double]$ratingBox.ActualWidth)
+    $ratingFlash.RenderTransform.X = -($boxWidth / 2 + $room / 2)
+    $ratingFlash.RenderTransform.Y = -1
+    return
+  }
   $time = New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(1600))
   $rise = New-Object System.Windows.Media.Animation.DoubleAnimation(0.0, -26.0, $time)
   $rise.EasingFunction = New-Object System.Windows.Media.Animation.QuadraticEase
@@ -1228,20 +1347,21 @@ $FEED_LOOKS = @{
   progress = @{ san = $dim; text = $dim; back = $null }
   move = @{ san = $accent; text = $ink; back = $null }
   reply = @{ san = $dim; text = $dim; back = $null }
-  wrong = @{ san = $red; text = $red; back = (Brush '#1FE0696B') }
-  engine = @{ san = $blue; text = $ink; back = (Brush '#1A7FB2E5') }
-  hint = @{ san = $gold; text = $gold; back = (Brush '#1AE6BE47') }
+  wrong = @{ san = $red; text = $red; back = (New-ThemeTint 'red' 0.12) }
+  engine = @{ san = $blue; text = $ink; back = (New-ThemeTint 'blue' 0.10) }
+  hint = @{ san = $gold; text = $gold; back = (New-ThemeTint 'gold' 0.10) }
   summary = @{ san = $ink; text = $ink; back = $surface }
   theme = @{ san = $accent; text = $dim; back = $null }
 }
 
+# A feed line: its text on the column's edge, its fill (when it has one) hanging out by $FEED_PAD.
 function Add-FeedView($Entry) {
   $look = $FEED_LOOKS[[string]$Entry.kind]
   if (-not $look) { $look = $FEED_LOOKS.info }
   $box = New-Object System.Windows.Controls.Border
-  $box.Padding = New-Gap 6 3 6 4
-  $box.Margin = New-Gap 0 0 4 3
-  $box.CornerRadius = New-Object System.Windows.CornerRadius(5)
+  $box.Padding = New-Gap $FEED_PAD 3 $FEED_PAD 4
+  $box.Margin = New-Gap 0 0 0 2
+  $box.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
   if ($look.back) { $box.Background = $look.back } else { $box.Background = $noFill }
   $block = New-Object System.Windows.Controls.TextBlock
   $block.TextWrapping = 'Wrap'
@@ -1256,10 +1376,11 @@ function Add-FeedView($Entry) {
   $block.Inlines.Add($rest)
   $box.Child = $block
   $squares = [int[]]@($Entry.squares | Where-Object { $null -ne $_ } | ForEach-Object { [int]$_ })
+  # A line about squares lights them on the board while hovered; a plain line also lights up itself.
   if ($squares.Length -gt 0) {
-    $box.Tag = $squares
-    $box.Add_MouseEnter({ param($sender, $e) try { $script:hoverSquares = [int[]]$sender.Tag; Update-Marks } catch { Write-Failure $_ } })
-    $box.Add_MouseLeave({ param($sender, $e) try { $script:hoverSquares = @(); Update-Marks } catch { Write-Failure $_ } })
+    $box.Tag = @{ squares = $squares; plain = -not $look.back }
+    $box.Add_MouseEnter({ param($sender, $e) try { if ($sender.Tag.plain) { $sender.Background = Get-UiBrush 'hover' }; $script:hoverSquares = [int[]]$sender.Tag.squares; Update-Marks } catch { Write-Failure $_ } })
+    $box.Add_MouseLeave({ param($sender, $e) try { if ($sender.Tag.plain) { $sender.Background = [System.Windows.Media.Brushes]::Transparent }; $script:hoverSquares = @(); Update-Marks } catch { Write-Failure $_ } })
   }
   [void]$feedPanel.Children.Add($box)
   while ($feedPanel.Children.Count -gt $FEED_MAX) { $feedPanel.Children.RemoveAt(0) }
@@ -1303,23 +1424,26 @@ function Update-Info {
   $themeLabel.Text = "Theme: $(Get-ThemeTitle $script:settings.theme) $GLYPH_DOWN"
 }
 
+function Set-HintEnabled([bool]$Enabled) {
+  if ($hintButton.Tag.enabled -ne $Enabled) { Set-UiEnabled $hintButton $Enabled }
+  # Still under the mouse after a click: keep its hover look.
+  if ($Enabled -and $hintButton.IsMouseOver) { Set-UiButtonLook $hintButton 'hot' }
+}
+
 function Update-HintButton {
-  $label = $hintButton.Child
   $p = $script:p
-  if (-not $p -or $p.phase -ne 'play') { $hintButton.Opacity = 0.4; $label.Text = 'Hint'; return }
-  $hintButton.Opacity = 1
+  if (-not $p -or $p.phase -ne 'play') { Set-HintEnabled $false; Set-UiButtonText $hintButton 'Hint'; return }
+  Set-HintEnabled $true
   switch ([int]$p.hintNow) {
-    0 { $label.Text = 'Hint' }
-    1 { $label.Text = 'Hint: piece' }
-    2 { $label.Text = 'Hint: move' }
-    default { $label.Text = 'No more hints'; $hintButton.Opacity = 0.4 }
+    0 { Set-UiButtonText $hintButton 'Hint' }
+    1 { Set-UiButtonText $hintButton 'Hint: piece' }
+    2 { Set-UiButtonText $hintButton 'Hint: move' }
+    default { Set-UiButtonText $hintButton 'No more hints'; Set-HintEnabled $false }
   }
 }
 
 function Update-Mode {
-  foreach ($view in $script:modeViews) {
-    if ($view.Tag -eq $script:settings.mode) { $view.Foreground = $accent; $view.FontWeight = 'Bold' } else { $view.Foreground = $dim; $view.FontWeight = 'Normal' }
-  }
+  foreach ($view in $script:modeViews) { Set-ChoiceOn $view ($view.Tag.value -eq $script:settings.mode) }
   if ($script:settings.mode -eq 'climb') {
     $difficultyRow.Visibility = 'Collapsed'
     $climbNote.Visibility = 'Visible'
@@ -1331,9 +1455,7 @@ function Update-Mode {
 }
 
 function Update-Difficulty {
-  foreach ($view in $script:difficultyViews) {
-    if ($view.Tag -eq $script:settings.difficulty) { $view.Foreground = $accent; $view.FontWeight = 'Bold' } else { $view.Foreground = $dim; $view.FontWeight = 'Normal' }
-  }
+  foreach ($view in $script:difficultyViews) { Set-ChoiceOn $view ($view.Tag.value -eq $script:settings.difficulty) }
 }
 
 # --- A puzzle from start to end ----------------------------------------------------------
@@ -1388,7 +1510,7 @@ function Set-PuzzleView {
   Update-Rating
   $moveStrip.Visibility = 'Collapsed'
   $moveStrip.Children.Clear()
-  $nextButton.Child.Text = 'Next puzzle'
+  Set-UiButtonText $nextButton 'Next puzzle'
   Update-HintButton
 }
 
@@ -1845,9 +1967,9 @@ function Complete-Puzzle {
   }
   [void](Add-Feed 'summary' $heading $summary @())
   $hasMateIn = @($p.puzzle.Themes | Where-Object { $_ -like 'mateIn*' }).Count -gt 0
-  foreach ($theme in $p.puzzle.Themes) {
-    if (-not $script:glossary.Contains($theme) -or ($theme -eq 'mate' -and $hasMateIn)) { continue }
-    $entry = $script:glossary[$theme]
+  foreach ($tag in $p.puzzle.Themes) {
+    if (-not $script:glossary.Contains($tag) -or ($tag -eq 'mate' -and $hasMateIn)) { continue }
+    $entry = $script:glossary[$tag]
     if ($entry.group -notin @('tactics', 'mates')) { continue }
     [void](Add-Feed 'theme' $entry.title $entry.line @())
   }
@@ -1862,7 +1984,7 @@ function Show-Review {
   elseif ($result -and $result.score -ge 1) { Set-Status 'Solved!' $green }
   elseif ($result -and $result.score -gt 0) { Set-Status 'Solved, half credit' $gold }
   else { Set-Status 'Solved, no credit' $dim }
-  $nextButton.Child.Text = 'Next puzzle'
+  Set-UiButtonText $nextButton 'Next puzzle'
   Update-HintButton
   Build-MoveStrip
   $moveStrip.Visibility = 'Visible'
@@ -1880,11 +2002,10 @@ function Build-MoveStrip {
     if (-not $move) { break }
     $label = $position.San($move)
     if ($position.WhiteToMove) { $label = "$($position.FullMove). $label" } elseif ($k -eq 0) { $label = "$($position.FullMove)... $label" }
-    $chip = New-Pressable $label ($k + 1)
-    $chip.FontSize = 11
-    if ($k + 1 -eq $p.reviewPly) { $chip.Foreground = $accent; $chip.FontWeight = 'Bold' }
-    $chip.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
-    $chip.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; try { Set-ReviewPly ([int]$sender.Tag) } catch { Write-Failure $_ } })
+    $chip = New-Choice $label ($k + 1)
+    $chip.Margin = New-Gap 0 0 $CHOICE_GAP 0
+    Set-ChoiceOn $chip ($k + 1 -eq $p.reviewPly)
+    $chip.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; try { Set-ReviewPly ([int]$sender.Tag.value) } catch { Write-Failure $_ } })
     [void]$moveStrip.Children.Add($chip)
     $position = $position.Play($move)
   }
@@ -2043,7 +2164,20 @@ $script:chips = @()
 $script:shownChips = @()
 $script:pickIndex = -1
 $script:groupHeadings = @{}
-$CHIP_W = [Math]::Floor(($SIDE_W - 16) / 2)
+
+# Two chips a row, sized from the list's real width so the grid fills it edge to edge, its sides
+# on the search box's. Each chip keeps $CHIP_GAP on its right; the row gives the last one back.
+function Get-ChipWidth {
+  $width = [double]$pickerList.ActualWidth
+  if ($width -le 0) { $width = [double]$SIDE_W }
+  return [Math]::Floor(($width - $CHIP_GAP) / 2)
+}
+
+function Update-ChipWidths {
+  $chipWidth = Get-ChipWidth
+  foreach ($entry in $script:chips) { if ($entry.chip.Width -ne $chipWidth) { $entry.chip.Width = $chipWidth } }
+}
+$pickerList.Add_SizeChanged({ param($sender, $e) try { Update-ChipWidths } catch { Write-Failure $_ } })
 
 function Build-Chips {
   if ($script:chips.Count -gt 0) { return }
@@ -2060,33 +2194,36 @@ function Build-Chips {
   foreach ($groupKey in $groupNames.Keys) {
     $members = @($entries | Where-Object { $_.group -eq $groupKey })
     if ($members.Count -eq 0) { continue }
-    $heading = New-Text $groupNames[$groupKey].ToUpperInvariant() $dim
-    $heading.FontSize = 10
-    $heading.Margin = New-Gap 2 8 0 3
+    $heading = New-UiCaption $groupNames[$groupKey]
+    $heading.Margin = New-Gap 0 8 0 4
     [void]$pickerList.Children.Add($heading)
     $wrap = New-Object System.Windows.Controls.WrapPanel
+    $wrap.Margin = New-Gap 0 0 (-$CHIP_GAP) 0
     [void]$pickerList.Children.Add($wrap)
     $script:groupHeadings[$groupKey] = @{ heading = $heading; wrap = $wrap }
     foreach ($entry in $members) {
       $chip = New-Object System.Windows.Controls.Border
-      $chip.Width = $CHIP_W
-      $chip.Margin = New-Gap 2 2 2 2
-      $chip.Padding = New-Gap 7 4 7 5
-      $chip.CornerRadius = New-Object System.Windows.CornerRadius(5)
+      $chip.Width = Get-ChipWidth
+      $chip.Height = $CHIP_H
+      $chip.Margin = New-Gap 0 0 $CHIP_GAP $CHIP_GAP
+      $chip.Padding = New-Gap 8 0 8 0
+      $chip.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
       $chip.Background = $surface
-      $chip.BorderThickness = New-Object System.Windows.Thickness(1.5)
+      $chip.BorderThickness = New-Object System.Windows.Thickness(1)
       $chip.BorderBrush = $noFill
       $chip.Cursor = [System.Windows.Input.Cursors]::Hand
-      $chip.ToolTip = $entry.line
+      $chip.ToolTip = "$($entry.title): $($entry.line)"
       $chip.Tag = $built.Count
       $inside = New-Object System.Windows.Controls.DockPanel
+      $inside.VerticalAlignment = 'Center'
       $count = New-Text $(if ($entry.key -eq 'mix') { [string]$store.Count } else { [string]$store.ThemeCount($entry.key) }) $faint
-      $count.FontSize = 10
+      $count.FontSize = 11
       $count.Margin = New-Gap 6 0 0 0
       $count.VerticalAlignment = 'Center'
       [System.Windows.Controls.DockPanel]::SetDock($count, 'Right')
       $title = New-Text $entry.title $ink
-      $title.FontSize = 11
+      $title.FontSize = 11.5
+      $title.VerticalAlignment = 'Center'
       $title.TextTrimming = 'CharacterEllipsis'
       [void]$inside.Children.Add($count)
       [void]$inside.Children.Add($title)
@@ -2134,6 +2271,9 @@ function Open-Picker {
   $script:isPicking = $true
   $searchBox.Text = ''
   Update-ChipFilter
+  # The theme in use is filled in; the one the keys are on is ringed.
+  foreach ($entry in $script:chips) { if ($entry.key -eq $script:settings.theme) { $entry.chip.Background = $T.selected } else { $entry.chip.Background = $surface } }
+  $side.Visibility = 'Hidden'
   $picker.Visibility = 'Visible'
   $win.UpdateLayout()
   for ($k = 0; $k -lt $script:shownChips.Count; $k++) { if ($script:shownChips[$k].key -eq $script:settings.theme) { Select-Chip $k; break } }
@@ -2144,6 +2284,7 @@ function Close-Picker([bool]$Keep) {
   if (-not $script:isPicking) { return }
   $script:isPicking = $false
   $picker.Visibility = 'Collapsed'
+  $side.Visibility = 'Visible'
   if ($Keep -and $script:pickIndex -ge 0 -and $script:pickIndex -lt $script:shownChips.Count) {
     $chosen = $script:shownChips[$script:pickIndex].key
     if ($chosen -ne $script:settings.theme) {
@@ -2363,6 +2504,14 @@ foreach ($control in @($hintButton, $nextButton, $closeText, $themeChip, $boardS
 $hintButton.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; try { Show-Hint } catch { Write-Failure $_ } })
 $nextButton.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; try { Select-NextPuzzle } catch { Write-Failure $_ } })
 $closeText.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $win.Close() })
+$gamesMark.Add_MouseLeftButtonUp({
+  param($sender, $e)
+  $e.Handled = $true
+  $isOpen = $switcher.Visibility -ne 'Visible'
+  $switcher.Visibility = if ($isOpen) { 'Visible' } else { 'Collapsed' }
+  Set-UiMarkOn $gamesMark $isOpen
+})
+$pickerClose.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; try { Close-Picker $false } catch { Write-Failure $_ } })
 $themeChip.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; try { if ($script:isPicking) { Close-Picker $false } else { Open-Picker } } catch { Write-Failure $_ } })
 $boardSwatch.Add_MouseLeftButtonUp({
   param($sender, $e)
@@ -2381,7 +2530,7 @@ foreach ($view in $script:modeViews) {
     param($sender, $e)
     $e.Handled = $true
     try {
-      $chosen = [string]$sender.Tag
+      $chosen = [string]$sender.Tag.value
       if ($chosen -eq $script:settings.mode) { return }
       $script:settings.mode = $chosen
       Update-Mode
@@ -2398,7 +2547,7 @@ foreach ($view in $script:difficultyViews) {
     param($sender, $e)
     $e.Handled = $true
     try {
-      $script:settings.difficulty = [string]$sender.Tag
+      $script:settings.difficulty = [string]$sender.Tag.value
       Update-Difficulty
       Save-Prefs
       if ($script:p -and $script:p.phase -ne 'review') { [void](Add-Feed 'info' '' "The next puzzle will be $($sender.Text.ToLowerInvariant())." @()) }
@@ -2625,9 +2774,13 @@ function Test-Play {
   $ratingAfterMiss = $script:rating.r
   Show-Hint; Show-Hint; Show-Hint
   $checks.hintsWalk = $script:p.hintNow -eq 3 -and $null -ne $script:arrow -and $script:hintSquare -ge 0
+  $checks.hintButtonSpent = -not $hintButton.Tag.enabled -and $hintButton.Tag.label.Text -eq 'No more hints'
   $checks.noDoubleRating = $script:rating.r -eq $ratingAfterMiss
   Invoke-Until { Invoke-SolutionClick }
   $checks.solvedToReview = $script:p.phase -eq 'review' -and $script:p.reviewPly -eq $script:p.line.Count
+  $checks.reviewHintOff = -not $hintButton.Tag.enabled
+  $litMove = @($moveStrip.Children | Where-Object { $_.Tag.on })
+  $checks.reviewMoveLit = $litMove.Count -eq 1 -and [int]$litMove[0].Tag.value -eq $script:p.line.Count
   $checks.retryQueued = @($script:retry | Where-Object { $_.id -eq $script:p.puzzle.Id }).Count -eq 1
   Set-ReviewPly 1
   $checks.reviewSteps = $script:p.reviewPly -eq 1
@@ -2645,6 +2798,8 @@ function Test-Play {
   $script:settings.mode = 'climb'
   Select-NextPuzzle -Fresh
   $checks.climbStartsLow = $script:p.mode -eq 'climb' -and $script:p.puzzle.Rating -le $CLIMB_START + 400
+  $litMode = @($script:modeViews | Where-Object { $_.Tag.on })
+  $checks.climbChoiceLit = $litMode.Count -eq 1 -and $litMode[0].Tag.value -eq 'climb' -and $climbNote.Visibility -eq 'Visible' -and $difficultyRow.Visibility -eq 'Collapsed'
   $level = $script:climb.level
   $ratingNow = $script:rating.r
   Invoke-Until { Invoke-SolutionClick }
@@ -2653,6 +2808,20 @@ function Test-Play {
   Invoke-WrongClick
   $checks.climbDownOnMiss = $script:climb.level -eq [Math]::Max($CLIMB_MIN, $level + $CLIMB_UP - $CLIMB_DOWN) -and $script:rating.r -eq $ratingNow
   $checks.climbSaved = ((Get-PuzzleSave).mode -eq 'climb')
+  # The look: a rounded board clip, a chip grid that fills the column edge to edge, and the
+  # picker in the side column's place while open.
+  $checks.boardRounded = $boardHost.Clip -is [System.Windows.Media.RectangleGeometry] -and $boardHost.Clip.RadiusX -eq $BOARD_RADIUS
+  try {
+    $chipRow = 2 * (Get-ChipWidth) + $CHIP_GAP
+    $checks.chipGridFills = $chipRow -le $SIDE_W -and $chipRow -ge $SIDE_W - 1
+    Open-Picker
+    $checks.pickerHidesSide = $side.Visibility -eq 'Hidden' -and $picker.Visibility -eq 'Visible' -and $script:chips.Count -gt 0
+    Close-Picker $false
+    $checks.pickerGivesSideBack = $side.Visibility -eq 'Visible' -and $picker.Visibility -eq 'Collapsed'
+  } catch {
+    Write-Failure $_
+    $checks.pickerHidesSide = $false
+  }
   $failed = @($checks.Keys | Where-Object { -not $checks[$_] })
   $checks.ok = $failed.Count -eq 0
   $checks.failed = $failed
@@ -2694,6 +2863,8 @@ $win.Add_ContentRendered({
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(150)
 $timer.Add_Tick({
+  # A colour scheme or see-through change made in another window: the brushes repaint themselves.
+  [void](Update-Theme)
   if (-not $hasOwner) { return }
   if (-not [ChessCore.ChessWin32]::IsWindow($owner)) { $win.Close(); return }
   if ($script:moving -or $script:resizing -or [ChessCore.ChessWin32]::IsIconic($owner)) { return }
