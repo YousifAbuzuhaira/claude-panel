@@ -1,0 +1,34 @@
+{
+  "v": 1,
+  "releases": [
+    {
+      "version": "0.2.0",
+      "date": "2026-10-29",
+      "by": "Mahmood",
+      "notes": [
+        "macOS: the panel floats with the terminal; Learn and games in windows",
+        "Linux and other terminals: a Claude Code pane plus browser pages",
+        "Test tracking under zsh; the web server shrugs off bad requests"
+      ]
+    },
+    {
+      "version": "0.1.1",
+      "date": "2026-10-27",
+      "by": "Yousif",
+      "notes": [
+        "Removing a course takes the concepts only it taught",
+        "A porting guide for macOS, Linux and other terminals"
+      ]
+    },
+    {
+      "version": "0.1.0",
+      "date": "2026-10-27",
+      "by": "Yousif",
+      "notes": [
+        "The floating panel: Phases, Tests and Learn over WezTerm",
+        "Learn: courses from free videos and docs, with a chat per page",
+        "Sudoku, 2048, Typing and Chess puzzles"
+      ]
+    }
+  ]
+}

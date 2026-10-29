@@ -278,9 +278,14 @@ function Save-Prefs {
 # --- The window ---------------------------------------------------------------
 
 function Brush([string]$Hex) { return [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex) }
-$ink = Brush '#E8E6E3'
-$dim = Brush '#8B8A88'
-$accent = Brush '#E08A5F'
+
+# The colour scheme and see-through every window shares (appearance.json), and the shared pieces.
+. (Join-Path $PSScriptRoot 'Theme.ps1')
+$T = Initialize-Theme 'games'
+. (Join-Path $PSScriptRoot 'Chrome.ps1')
+$ink = $T.ink
+$dim = $T.dim
+$accent = $T.accent
 $noFill = [System.Windows.Media.Brushes]::Transparent
 $font = New-Object System.Windows.Media.FontFamily('Cascadia Mono, Consolas')
 
@@ -324,30 +329,18 @@ if ($hasOwner) {
 }
 
 $card = New-Object System.Windows.Controls.Border
-$card.CornerRadius = New-Object System.Windows.CornerRadius(10)
-$card.Background = Brush '#F21C1D20'
-$card.BorderBrush = Brush '#33FFFFFF'
+$card.CornerRadius = New-Object System.Windows.CornerRadius($UI_CARD_RADIUS)
+$card.Background = $T.cardFill
+$card.BorderBrush = $T.edge
 $card.BorderThickness = New-Object System.Windows.Thickness(1)
-$card.Padding = New-Gap 14 10 14 12
 
-# A score box: its label, its number, and the "+N" that rises out of it.
+# A score box (the shared stat box), and the "+N" that rises out of it.
 function New-ScoreBox([string]$Label) {
-  $box = New-Object System.Windows.Controls.Border
-  $box.Background = Brush '#2B2C31'
-  $box.CornerRadius = New-Object System.Windows.CornerRadius(5)
-  $box.Padding = New-Gap 10 3 10 4
+  $box = New-UiStatBox $Label
   $box.Margin = New-Gap 6 0 0 0
-  $box.MinWidth = 64
-  $inside = New-Object System.Windows.Controls.StackPanel
-  $name = New-Text $Label $dim
-  $name.FontSize = 9
-  $name.HorizontalAlignment = 'Center'
-  $number = New-Text '0' $ink
-  $number.FontSize = 15
-  $number.FontWeight = 'Bold'
-  $number.HorizontalAlignment = 'Center'
-  [void]$inside.Children.Add($name)
-  [void]$inside.Children.Add($number)
+  $number = $box.Tag.value
+  $inside = $box.Child
+  $box.Child = $null
   $layers = New-Object System.Windows.Controls.Grid
   [void]$layers.Children.Add($inside)
   $rise = New-Text '' $accent
@@ -364,32 +357,38 @@ function New-ScoreBox([string]$Label) {
   return @{ box = $box; number = $number; rise = $rise }
 }
 
-# Header: the name, the score and best, the close mark. Dragging it moves the window.
+# Header: the name, the score and best, the other windows (games mark) and the close mark.
+# Dragging it moves the window.
 $header = New-Object System.Windows.Controls.DockPanel
 $header.Cursor = [System.Windows.Input.Cursors]::SizeAll
 $header.Background = $noFill
-$titleText = New-Text '2048' $accent
-$titleText.FontSize = 22
-$titleText.FontWeight = 'Bold'
-$titleText.VerticalAlignment = 'Center'
+$titleText = New-UiTitle '2048'
 [System.Windows.Controls.DockPanel]::SetDock($titleText, 'Left')
-$closeText = New-Text $GLYPH_CLOSE $dim
-$closeText.Margin = New-Gap 12 0 0 0
-$closeText.VerticalAlignment = 'Top'
-$closeText.Cursor = [System.Windows.Input.Cursors]::Hand
+$closeText = New-UiMark $UI_GLYPHS.close 'Close'
+$closeText.Margin = New-Gap 4 0 0 0
 [System.Windows.Controls.DockPanel]::SetDock($closeText, 'Right')
+$gamesMark = New-UiMark $UI_GLYPHS.games 'Learn and the other games'
+$gamesMark.Margin = New-Gap 8 0 0 0
+[System.Windows.Controls.DockPanel]::SetDock($gamesMark, 'Right')
 $bestBox = New-ScoreBox 'BEST'
 $scoreBox = New-ScoreBox 'SCORE'
 [void]$header.Children.Add($titleText)
 [void]$header.Children.Add($closeText)
+[void]$header.Children.Add($gamesMark)
 [void]$header.Children.Add($bestBox.box)
 [void]$header.Children.Add($scoreBox.box)
 [void]$header.Children.Add((New-Object System.Windows.Controls.Border))
 
+# Under the games mark: Learn and the other games, a click away.
+$switcher = New-UiSwitcherRow '2048' $OwnerHwnd $SessionId
+$switcher.Margin = New-Gap 0 10 0 0
+$switcher.HorizontalAlignment = 'Right'
+$switcher.Visibility = 'Collapsed'
+
 # The board: empty cells drawn once, tiles on a layer above them, and the
 # win / game-over message over both.
 $boardBack = New-Object System.Windows.Controls.Border
-$boardBack.Background = Brush '#202125'
+$boardBack.Background = $T.well
 $boardBack.CornerRadius = New-Object System.Windows.CornerRadius(8)
 $boardBack.Width = $BOARD_PX
 $boardBack.Height = $BOARD_PX
@@ -408,14 +407,14 @@ for ($i = 0; $i -lt 16; $i++) {
   $slot.Width = $TILE_PX
   $slot.Height = $TILE_PX
   $slot.CornerRadius = New-Object System.Windows.CornerRadius(6)
-  $slot.Background = Brush '#2B2C31'
+  $slot.Background = $T.surface
   [System.Windows.Controls.Canvas]::SetLeft($slot, (Get-CellX $i))
   [System.Windows.Controls.Canvas]::SetTop($slot, (Get-CellY $i))
   [void]$cellLayer.Children.Add($slot)
 }
 
 $overlay = New-Object System.Windows.Controls.Border
-$overlay.Background = Brush '#D91C1D20'
+$overlay.Background = $T.veil
 $overlay.CornerRadius = New-Object System.Windows.CornerRadius(8)
 $overlay.Visibility = 'Collapsed'
 $overlayStack = New-Object System.Windows.Controls.StackPanel
@@ -430,21 +429,14 @@ $overlayButtons.Orientation = 'Horizontal'
 $overlayButtons.HorizontalAlignment = 'Center'
 $overlayButtons.Margin = New-Gap 0 14 0 0
 
-function New-Button([string]$Text, $Background, $Foreground) {
-  $button = New-Object System.Windows.Controls.Border
-  $button.Background = $Background
-  $button.CornerRadius = New-Object System.Windows.CornerRadius(5)
-  $button.Padding = New-Gap 12 5 12 6
-  $button.Margin = New-Gap 5 0 5 0
-  $button.Cursor = [System.Windows.Input.Cursors]::Hand
-  $label = New-Text $Text $Foreground
-  $label.FontWeight = 'Bold'
-  $button.Child = $label
-  return $button
-}
-
-$keepButton = New-Button 'Keep going' (Brush '#F5C400') (Brush '#26231C')
-$againButton = New-Button 'Try again' (Brush '#3A3B41') $ink
+# "Keep going" wears the 2048 tile's gold, the game's own colour; "Try again" is a plain button.
+$keepButton = New-UiButton 'Keep going' 'primary' -Mono
+$keepButton.Background = Brush '#F5C400'
+$keepButton.Tag.label.Foreground = Brush '#26231C'
+$keepButton.Margin = New-Gap 5 0 5 0
+$againButton = New-UiButton 'Try again' 'secondary' -Mono
+$againButton.Tag.label.FontWeight = 'Bold'
+$againButton.Margin = New-Gap 5 0 5 0
 [void]$overlayButtons.Children.Add($keepButton)
 [void]$overlayButtons.Children.Add($againButton)
 [void]$overlayStack.Children.Add($overlayText)
@@ -458,39 +450,37 @@ $boardBack.Child = $boardLayers
 
 # Footer: how to play, and a new game.
 $footer = New-Object System.Windows.Controls.DockPanel
-$footer.Margin = New-Gap 0 10 0 0
-$newButton = New-Text 'New game' $ink
-$newButton.FontWeight = 'Bold'
-$newButton.Cursor = [System.Windows.Input.Cursors]::Hand
-$newButton.ToolTip = 'Start over (R)'
-$newButton.Margin = New-Gap 12 0 12 0
+$footer.Margin = New-Gap 0 12 0 0
+$newButton = New-UiButton 'New game' 'secondary' -Mono -Tip 'Start over (R)'
 [System.Windows.Controls.DockPanel]::SetDock($newButton, 'Right')
 $hintText = New-Text "Arrows, WASD or HJKL $GLYPH_DOT R restarts" $dim
+$hintText.VerticalAlignment = 'Center'
 [void]$footer.Children.Add($newButton)
 [void]$footer.Children.Add($hintText)
 
 $stack = New-Object System.Windows.Controls.StackPanel
+$stack.Margin = New-Gap 16 12 16 14
 [void]$stack.Children.Add($header)
+[void]$stack.Children.Add($switcher)
 [void]$stack.Children.Add($boardBack)
 [void]$stack.Children.Add($footer)
-$card.Child = $stack
+
+# The resize grip sits in the card's bottom-right corner, so it scales with the card. The
+# window is pinned by its top-left corner, so pulling the grip out (right or down) grows it.
+$grip = New-UiGrip 'right'
+$grip.Margin = New-Gap 0 0 5 3
+
+$cardBody = New-Object System.Windows.Controls.Grid
+[void]$cardBody.Children.Add($stack)
+[void]$cardBody.Children.Add($grip)
+$card.Child = $cardBody
 
 $cardScale = New-Object System.Windows.Media.ScaleTransform($script:scale, $script:scale)
 $card.LayoutTransform = $cardScale
 
-# The resize grip, bottom-right: the window is pinned by its top-left corner,
-# so pulling the grip out (right or down) grows it.
-$grip = New-Text $GLYPH_GRIP $dim
-$grip.FontSize = 11
-$grip.Margin = New-Gap 0 0 7 5
-$grip.HorizontalAlignment = 'Right'
-$grip.VerticalAlignment = 'Bottom'
-$grip.Cursor = [System.Windows.Input.Cursors]::SizeNWSE
-$grip.ToolTip = 'Drag to resize'
-
 $cardHost = New-Object System.Windows.Controls.Grid
 [void]$cardHost.Children.Add($card)
-[void]$cardHost.Children.Add($grip)
+Add-ThemeResources $win
 $win.Content = $cardHost
 
 # --- The game -----------------------------------------------------------------
@@ -679,6 +669,13 @@ $keepButton.Add_MouseLeftButtonUp({
 $againButton.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; New-Game })
 $newButton.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; New-Game })
 $closeText.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $win.Close() })
+$gamesMark.Add_MouseLeftButtonUp({
+  param($sender, $e)
+  $e.Handled = $true
+  $isOpen = $switcher.Visibility -ne 'Visible'
+  $switcher.Visibility = if ($isOpen) { 'Visible' } else { 'Collapsed' }
+  Set-UiMarkOn $gamesMark $isOpen
+})
 
 # --- Placement: over the WezTerm window, where the person last dragged it -------
 
@@ -809,6 +806,8 @@ $win.Add_ContentRendered({
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(150)
 $timer.Add_Tick({
+  # A colour scheme or see-through change made in another window: the brushes repaint themselves.
+  [void](Update-Theme)
   if (-not $hasOwner) { return }
   if (-not [G2048Win32]::IsWindow($owner)) { $win.Close(); return }
   if ($script:dragging -or $script:resizing -or [G2048Win32]::IsIconic($owner)) { return }

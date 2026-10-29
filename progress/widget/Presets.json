@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "presets": [
+    { "name": "ember", "label": "Ember", "bg": "#1C1D20", "accent": "#E08A5F", "text": "#E8E6E3" },
+    { "name": "graphite", "label": "Graphite", "bg": "#1A1C20", "accent": "#7FB2E5", "text": "#E3E6EA" },
+    { "name": "moss", "label": "Moss", "bg": "#181C19", "accent": "#6FC08F", "text": "#E1E6DF" },
+    { "name": "serika", "label": "Serika", "bg": "#323437", "accent": "#E2B714", "text": "#D1D0C5" },
+    { "name": "paper", "label": "Paper", "bg": "#F5F2EB", "accent": "#C2602F", "text": "#1F1E1C" }
+  ]
+}
