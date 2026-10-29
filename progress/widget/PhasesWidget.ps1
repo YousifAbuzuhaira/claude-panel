@@ -249,16 +249,24 @@ $script:scale = 1.0
 $script:manualTab = $null
 # The newest version whose notes the person has seen in the Releases tab.
 $script:seenRelease = $null
+# What the panel last showed: the plan's title and the newest run. Saved with the tab, so a start
+# whose first state brings neither one new keeps that tab (a plain restart), and one that does is
+# news (a relaunch for a new plan or run) and brings its tab forward (see Show-State).
+$script:seenPlan = $null
+$script:seenFocus = $null
 if (-not $SnapshotPath) {
   try {
     if (Test-Path $prefsFile) {
-      $saved = Get-Content $prefsFile -Raw | ConvertFrom-Json
+      # UTF-8, as Save-Prefs writes it: a plan's title may be any text.
+      $saved = [System.IO.File]::ReadAllText($prefsFile, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
       $script:offset = @{ dx = [int]$saved.dx; dy = [int]$saved.dy }
       if ($null -ne $saved.expanded) { $script:isExpanded = [bool]$saved.expanded }
       if ($saved.scale) { $script:scale = [Math]::Max([double]$MIN_SCALE, [Math]::Min([double]$MAX_SCALE, [double]$saved.scale)) }
       # Releases is a look, not a place to come back to: only the other tabs reopen.
       if ($PICKABLE_TABS -contains [string]$saved.tab) { $script:manualTab = [string]$saved.tab }
       if ($saved.seenRelease) { $script:seenRelease = [string]$saved.seenRelease }
+      if ($saved.seenPlan) { $script:seenPlan = [string]$saved.seenPlan }
+      if ($saved.seenFocus) { $script:seenFocus = [string]$saved.seenFocus }
     }
   } catch {}
 }
@@ -267,17 +275,20 @@ function Save-Prefs {
   if ($SnapshotPath) { return }
   try {
     New-Item -ItemType Directory -Force -Path (Split-Path $prefsFile) | Out-Null
-    # Where, how big and which tab are this panel's own; the release seen is the newest any
-    # panel saw, so one started before Releases was opened elsewhere can't bring the mark back.
+    # Where, how big, which tab and what it showed are this panel's own; the release seen is the
+    # newest any panel saw, so one started before Releases was opened elsewhere can't bring the
+    # mark back.
     $onDisk = Read-JsonFile $prefsFile
     if ($onDisk -and $onDisk.seenRelease) {
       $seenElsewhere = [string]$onDisk.seenRelease
       if (-not $script:seenRelease -or (Compare-Version $seenElsewhere $script:seenRelease) -gt 0) { $script:seenRelease = $seenElsewhere }
     }
-    @{
+    $json = @{
       dx = $script:offset.dx; dy = $script:offset.dy; expanded = $script:isExpanded; scale = [Math]::Round($script:scale, 3)
-      tab = $script:manualTab; seenRelease = $script:seenRelease
-    } | ConvertTo-Json -Compress | Set-Content -Path $prefsFile -Encoding ASCII
+      tab = $script:manualTab; seenRelease = $script:seenRelease; seenPlan = $script:seenPlan; seenFocus = $script:seenFocus
+    } | ConvertTo-Json -Compress
+    # UTF-8 without a BOM, so a plan's title comes back as it was and still matches.
+    [System.IO.File]::WriteAllText($prefsFile, $json, (New-Object System.Text.UTF8Encoding($false)))
   } catch {}
 }
 
@@ -513,8 +524,9 @@ if ($swatchCount -gt 0) {
     $swatchBox.Margin = New-Gap 0 0 $SWATCH_GAP $SWATCH_GAP
     $swatchBox.Add_MouseEnter({ param($sender, $e) Set-SchemeCaption $sender.Tag.preset.label })
     $swatchBox.Add_MouseLeave({ param($sender, $e) Set-SchemeCaption '' })
-    # After the swatch's own click (which marks the press handled): the custom link follows.
-    $swatchBox.AddHandler([System.Windows.UIElement]::MouseLeftButtonUpEvent, [System.Windows.Input.MouseButtonEventHandler]{ param($sender, $e) Update-LookStrip }, $true)
+    # After the swatch's own click (which marks the press handled): the custom link follows, and
+    # the halo takes the new card colour.
+    $swatchBox.AddHandler([System.Windows.UIElement]::MouseLeftButtonUpEvent, [System.Windows.Input.MouseButtonEventHandler]{ param($sender, $e) Update-LookStrip; Update-UiHalo }, $true)
   }
   $swatchRow.Children[$swatchCount - 1].Margin = New-Gap 0 0 0 $SWATCH_GAP
 }
@@ -623,37 +635,28 @@ $grip.Cursor = $gripGlyph.Cursor
 $grip.ToolTip = $gripGlyph.ToolTip
 $grip.Child = $gripGlyph
 $grip.Tag = $gripGlyph
-$grip.Add_MouseEnter({ param($sender, $e) $sender.Tag.Foreground = Get-UiBrush 'dim' })
-$grip.Add_MouseLeave({ param($sender, $e) $sender.Tag.Foreground = Get-UiBrush 'faint' })
+# The glyph takes no mouse, so the box does what the shared grip does: dim at rest, ink hovered.
+$grip.Add_MouseEnter({ param($sender, $e) $sender.Tag.Foreground = Get-UiBrush 'ink' })
+$grip.Add_MouseLeave({ param($sender, $e) $sender.Tag.Foreground = Get-UiBrush 'dim' })
 
+# Low see-through: the shared halo (Chrome.ps1) round the content and the grip, so the text stands
+# off a backdrop of the other lightness as it does in Learn and the games.
 $cardBody = New-Object System.Windows.Controls.Grid
-[void]$cardBody.Children.Add($stack)
-[void]$cardBody.Children.Add($grip)
+[void]$cardBody.Children.Add((New-UiHaloFrame $stack))
+[void]$cardBody.Children.Add((New-UiHaloFrame $grip))
 $card.Child = $cardBody
+Update-UiHalo
 
-# Below 80% the terminal shows through the card, and over a backdrop of the other lightness even
-# the text colour sinks into it. A soft halo of the card's own colour round every glyph and line
-# keeps them off whatever is behind, strongest where the card is clearest; the gaps between the
-# lines stay see-through. Above 80% there is none.
-$HALO_FROM = 0.8
-$HALO_FULL_AT = 0.5
-$halo = New-Object System.Windows.Media.Effects.DropShadowEffect
-$halo.ShadowDepth = 0
-$halo.BlurRadius = 3
-$script:haloKey = ''
-
-function Update-Halo {
-  $opacity = [double]$script:THEME.appearance.opacity.panel
-  $fill = $script:THEME.brushes.cardFill.Color
-  $key = '{0}/{1}' -f $opacity, $fill
-  if ($key -eq $script:haloKey) { return }
-  $script:haloKey = $key
-  if ($opacity -ge $HALO_FROM) { $cardBody.Effect = $null; return }
-  $halo.Color = [System.Windows.Media.Color]::FromRgb($fill.R, $fill.G, $fill.B)
-  $halo.Opacity = [Math]::Min([double]1, ($HALO_FROM - $opacity) / ($HALO_FROM - $HALO_FULL_AT))
-  $cardBody.Effect = $halo
+# The panel's own bar changes its see-through here at once, past the file's stamp that
+# Update-Theme reads, so the halo follows it: as the bar previews (after the bar's own handlers,
+# which mark the press handled) and when it is let go. A swatch does the same for the colour.
+foreach ($opacityRow in $opacityRows) {
+  $opacityBar = $opacityRow.Tag
+  if ($opacityBar.Tag.key -ne $script:THEME.group) { continue }
+  $opacityBar.AddHandler([System.Windows.UIElement]::MouseLeftButtonDownEvent, [System.Windows.Input.MouseButtonEventHandler]{ param($sender, $e) Update-UiHalo }, $true)
+  $opacityBar.Add_MouseMove({ param($sender, $e) if ($sender.IsMouseCaptured) { Update-UiHalo } })
+  $opacityBar.Add_LostMouseCapture({ param($sender, $e) Update-UiHalo })
 }
-Update-Halo
 
 $cardHost = New-Object System.Windows.Controls.Grid
 [void]$cardHost.Children.Add($card)
@@ -664,11 +667,6 @@ $win.Content = $cardHost
 $script:state = $null
 $script:activeTab = 'phases'
 if ($script:manualTab) { $script:activeTab = $script:manualTab }
-$script:seenFocus = $null
-$script:seenPlan = $null
-# Until the first state is read: what that state holds is where the panel starts, not news, so a
-# tab saved from last time stands (see Show-State).
-$script:isSeeded = $false
 # The strip open under the header: '', 'look' or 'games'.
 $script:strip = ''
 
@@ -991,26 +989,31 @@ function Show-State {
 
   # Which tab is in front. Something new (a new test run, a new plan) brings its tab forward and
   # ends the person's pick. Otherwise the tab they clicked stays; with no pick, the panel shows
-  # what there is. Two picks outlast news: the tab saved from last time, against what the first
-  # state holds (that is where the panel starts, not news); and Releases, which stays until another
-  # tab is clicked. Releases is only ever a click.
-  $planTitle = $null
-  if ($plan) { $planTitle = [string]$plan.title }
+  # what there is. What is new is measured against what the panel last showed, saved with the tab:
+  # a restart whose first state shows the same plan and run keeps the tab, and a relaunch for a
+  # new plan or run brings that one forward. Releases outlasts news (it stays until another tab is
+  # clicked, or the card closes) and is only ever a click.
   $isNewRun = $false
   $isNewPlan = $false
-  if ($state.focus -and $state.focus -ne $script:seenFocus) {
-    if ($null -ne $script:seenFocus -or $live.Count -gt 0) { $isNewRun = $true }
-    $script:seenFocus = $state.focus
+  # Show-State also runs before anything is read (a missing file): that is no news, and what was
+  # last shown stands.
+  if ($null -ne $script:state) {
+    $planTitle = $null
+    if ($plan) { $planTitle = [string]$plan.title }
+    $focus = $null
+    if ($state.focus) { $focus = [string]$state.focus }
+    if ($focus -and $focus -ne $script:seenFocus) {
+      if ($null -ne $script:seenFocus -or $live.Count -gt 0) { $isNewRun = $true }
+      $script:seenFocus = $focus
+    }
+    if ($planTitle -and $planTitle -ne $script:seenPlan -and -not $isNewRun) { $isNewPlan = $true }
+    $script:seenPlan = $planTitle
   }
-  if ($planTitle -and $planTitle -ne $script:seenPlan -and -not $isNewRun) { $isNewPlan = $true }
-  $script:seenPlan = $planTitle
-  $isPickKept = $script:manualTab -and ($script:manualTab -eq 'releases' -or -not $script:isSeeded)
-  if (-not $isPickKept) {
-    if ($isNewRun) { $script:activeTab = 'tests'; $script:manualTab = $null }
-    elseif ($isNewPlan) { $script:activeTab = 'phases'; $script:manualTab = $null }
+  if ($script:manualTab -ne 'releases' -and ($isNewRun -or $isNewPlan)) {
+    if ($isNewRun) { $script:activeTab = 'tests' } else { $script:activeTab = 'phases' }
+    # The pick news ended is gone from disk too, so the next start doesn't bring it back.
+    if ($script:manualTab) { $script:manualTab = $null; Save-Prefs }
   }
-  # Show-State also runs before anything is read (a missing file): that is not the first state.
-  if ($null -ne $script:state) { $script:isSeeded = $true }
   if ($script:manualTab) {
     $script:activeTab = $script:manualTab
   } else {
@@ -1094,17 +1097,13 @@ function Show-State {
     'releases' { Add-ReleaseRows }
     default { Add-PhaseRows $plan }
   }
-  # A footer sits a little higher, clear of the grip in the corner below its first letters. (Its
-  # Text reads empty when it was built from runs, as the tests footer is.)
+  # The footer shows when the tab wrote one. (Its Text reads empty when it was built from runs, as
+  # the tests footer is.)
   $hasFooter = [bool]$footer.Text
   foreach ($inline in $footer.Inlines) { if ($inline -is [System.Windows.Documents.Run] -and $inline.Text) { $hasFooter = $true } }
-  if ($hasFooter) {
-    $footer.Visibility = 'Visible'
-    $stack.Margin = New-Gap 12 $STACK_PAD 12 ($STACK_PAD + 2)
-  } else {
-    $footer.Visibility = 'Collapsed'
-    $stack.Margin = New-Gap 12 $STACK_PAD 12 $STACK_PAD
-  }
+  if ($hasFooter) { $footer.Visibility = 'Visible' } else { $footer.Visibility = 'Collapsed' }
+  # The last line, footer or not, sits a little higher, clear of the grip in the corner below it.
+  $stack.Margin = New-Gap 12 $STACK_PAD 12 ($STACK_PAD + 2)
 }
 
 function Update-Panel {
@@ -1180,8 +1179,12 @@ function Get-Cursor {
 
 function Switch-Expanded {
   $script:isExpanded = -not $script:isExpanded
-  # A strip belongs to the open card: closing the card closes it.
-  if (-not $script:isExpanded) { Set-Strip '' }
+  # A strip belongs to the open card: closing the card closes it. So does Releases, a look for the
+  # open card: closed, the one line follows what is live, and no news is hidden behind it.
+  if (-not $script:isExpanded) {
+    Set-Strip ''
+    if ($script:manualTab -eq 'releases') { $script:manualTab = $null }
+  }
   Save-Prefs
   Update-Panel
 }
@@ -1381,11 +1384,10 @@ $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(100)
 $timer.Add_Tick({
   # A colour scheme or see-through change made in another window (at most one look a second):
-  # the brushes repaint themselves; the strip's swatches and bars follow and the tab is redrawn,
-  # once no drag is under way.
-  if (Update-Theme) { $script:isThemeStale = $true }
-  # Also after a change made here (a swatch, the panel's own bar), which the stamp doesn't show.
-  Update-Halo
+  # the brushes repaint themselves and the halo follows at once; the strip's swatches and bars
+  # follow and the tab is redrawn, once no drag is under way. (A change made here moves the halo
+  # itself: see the panel's bar and the swatches.)
+  if (Update-Theme) { $script:isThemeStale = $true; Update-UiHalo }
   if ($script:isThemeStale -and -not $script:dragging -and -not $script:resizing) {
     $script:isThemeStale = $false
     Update-LookStrip
