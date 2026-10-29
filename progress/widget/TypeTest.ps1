@@ -208,6 +208,14 @@ function Get-ThemeLook($Colors, [double]$Opacity) {
   return $look
 }
 
+# The letters still to type, in 'auto': the scheme's dim at full opacity. The shared dim moves
+# toward the text as the card clears, so labels read on their own over what shows through; the
+# letters keep the full step from the typed ones, the window's main cue, and the halo carries
+# their legibility. A Monkeytype theme paints them in its own sub (Get-ThemeLook's dim).
+function Get-SchemeUntypedColor($SchemeColors) {
+  return ConvertTo-Color (Get-ThemePalette $SchemeColors 1.0).dim
+}
+
 # --- Self-test: the scoring, on small cases, and the theme colours ----------------------
 
 function Test-Near([double]$Value, [double]$Expected) { return [Math]::Abs($Value - $Expected) -lt 0.001 }
@@ -246,6 +254,18 @@ if ($SelfTest) {
   $checks.autoSubAltIsAStepTowardTheText = $auto[4] -eq '#FF2C2D30'
   $checks.autoTextIsInkErrorIsRed = $auto[5] -eq '#FFE8E6E3' -and $auto[6] -eq '#FFE0696B'
   $checks.autoErrorExtraIsRedTowardTheCard = $auto[7] -eq '#FF884749'
+  # The letters still to type keep the full-opacity dim, so they stay a clear step (2.2:1 or
+  # more) off the typed ink at 40% see-through, where the shared dim has moved up to the ink.
+  $emberColors = @{ bg = '#1C1D20'; accent = '#E08A5F'; text = '#E8E6E3' }
+  $paperColors = @{ bg = '#F5F2EB'; accent = '#C2602F'; text = '#1F1E1C' }
+  $emberUntyped = Get-SchemeUntypedColor $emberColors
+  $paperUntyped = Get-SchemeUntypedColor $paperColors
+  $checks.untypedIsTheFullOpacityDim = $emberUntyped.ToString() -eq '#FF90908F' -and $paperUntyped.ToString() -eq '#FF6C6A67'
+  $emberShared = ConvertTo-Color (Get-ThemePalette $emberColors 0.4).dim
+  $checks.sharedDimStillMovesForLabels = $emberShared.ToString() -eq '#FFC6C5C3'
+  $emberGap = Get-ThemeContrast (Get-Rgb '#E8E6E3') (Get-Rgb $emberUntyped.ToString())
+  $paperGap = Get-ThemeContrast (Get-Rgb '#1F1E1C') (Get-Rgb $paperUntyped.ToString())
+  $checks.untypedStandsOffTheTypedInk = $emberGap -ge 2.2 -and $paperGap -ge 2.2
   $look = Get-ThemeLook $SERIKA_DARK 0.4
   $checks.cardTakesTheGamesSeeThrough = $look.cardFill.ToString() -eq '#66323437'
   $checks.textAndMainStaySolid = $look.ink.ToString() -eq '#FFD1D0C5' -and $look.accent.ToString() -eq '#FFE2B714'
@@ -387,6 +407,9 @@ $errorBrush = $T.red
 $edgeBrush = $T.edge
 $caretBrush = Brush $SERIKA_DARK[2]
 $extraBrush = Brush $SERIKA_DARK[7]
+# The letters still to type: a brush of their own, a full step off the typed ones at any
+# see-through (Get-SchemeUntypedColor). Labels and hints stay on the shared dim.
+$untypedBrush = Brush $SERIKA_DARK[3]
 # The key chips' and search box's fill: subAlt at the card's see-through, so it fades with it.
 $subAltBrush = Brush $SERIKA_DARK[4]
 $gridBrush = Brush $SERIKA_DARK[4]
@@ -419,6 +442,7 @@ function Set-Colors([string]$Name) {
   if ($Name -eq $AUTO_THEME) {
     # The scheme's brushes, as every other window wears them.
     Set-ThemeAppearance $script:THEME.appearance
+    $untypedBrush.Color = Get-SchemeUntypedColor $script:THEME.appearance.colors
     $subAltBrush.Color = $T.surface.Color
     $gridBrush.Color = $T.rule.Color
     Sync-ThemeResources
@@ -434,6 +458,7 @@ function Set-Colors([string]$Name) {
     $script:themeLooks[$key] = $look
   }
   foreach ($role in $THEME_ROLES) { $T[$role].Color = $look[$role] }
+  $untypedBrush.Color = $look.dim
   $subAltBrush.Color = $look.subAlt
   $gridBrush.Color = $look.subAlt
   Sync-ThemeResources
@@ -768,7 +793,8 @@ $escChip.Margin = New-Gap 18 0 0 0
 $themeButton = New-Object System.Windows.Controls.DockPanel
 $themeButton.HorizontalAlignment = 'Right'
 $themeButton.VerticalAlignment = 'Center'
-$themeButton.Margin = New-Gap 16 0 0 0
+# The right margin keeps the label clear of the resize grip in the card's corner.
+$themeButton.Margin = New-Gap 16 0 10 0
 $themeButton.Cursor = [System.Windows.Input.Cursors]::Hand
 $themeButton.Background = $noFill
 $themeDot = New-Object System.Windows.Shapes.Ellipse
@@ -882,7 +908,7 @@ function Update-Word([int]$Index) {
   $typed = $script:typedWords[$Index]
   $view.letters.Children.Clear()
   for ($j = 0; $j -lt $target.Length; $j++) {
-    $color = $subBrush
+    $color = $untypedBrush
     if ($j -lt $typed.Length) {
       if ($typed[$j] -ceq $target[$j]) { $color = $textBrush } else { $color = $errorBrush }
     }
