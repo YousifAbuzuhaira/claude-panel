@@ -1,9 +1,12 @@
 // The typing page: words, caret, result screen and theme picker, in Monkeytype's image.
+// The first theme, 'auto' (the default), is the colour scheme every window shares; a Monkeytype
+// theme repaints the whole window in its colours, as widget/TypeTest.ps1 does.
 import { loadSave, writeSave, withToken } from '../../shared/api.js';
+import { isNative, loadPresets, previewAppearance, watchAppearance } from '../../shared/look.js';
 import { rngFor, seedFromUrl } from '../rng.js';
 import {
-  DEFAULT_THEME, SERIKA_DARK, THEME_KEYS, TypeTest, WORD_COUNT,
-  filterThemes, graphScale, isBest, parseThemes, readSave, saveOf, themeTitle,
+  AUTO_THEME, DEFAULT_THEME, THEME_KEYS, TypeTest, WORD_COUNT,
+  filterThemes, graphScale, isBest, parseThemes, readSave, saveOf, schemeAsTheme, schemeName, themeTitle, withAlpha,
 } from './logic.js';
 
 const $ = id => document.getElementById(id);
@@ -15,8 +18,15 @@ const rng = rngFor(seedFromUrl());
 
 document.querySelector('a.back').href = withToken('../');
 
-let themes = [{ name: DEFAULT_THEME, colors: [...SERIKA_DARK] }];
+const Theme = globalThis.ClaudeTheme;
+// The colour scheme, as the shared watcher last saw it, and the presets that name it.
+let appearance = Theme.parseAppearance(null);
+let presets = [];
+const schemeTheme = () => ({ name: AUTO_THEME, colors: schemeAsTheme(Theme.derivePalette(appearance.colors, 1)) });
+
+let themes = [schemeTheme()];
 let themeName = DEFAULT_THEME;
+let shownTheme = DEFAULT_THEME; // the one on screen: the chosen one, or the picker's preview
 let best = 0;
 let test = null;
 let wordEls = [];
@@ -31,10 +41,45 @@ function save() {
 
 // --- Themes --------------------------------------------------------------------------
 
+/** Paints the window in a theme: 'auto' is the scheme's roles; any other repaints them. */
 function setColors(name) {
   const theme = themes.find(t => t.name === name);
   if (!theme) return;
-  THEME_KEYS.forEach((key, k) => document.documentElement.style.setProperty(`--${key}`, theme.colors[k]));
+  shownTheme = name;
+  const root = document.documentElement.style;
+  const colors = theme.colors;
+  if (name === AUTO_THEME) {
+    // The scheme's roles back on the page, and Monkeytype's names for them.
+    previewAppearance(appearance, 'games');
+    THEME_KEYS.forEach((key, k) => root.setProperty(`--${key}`, colors[k]));
+    // subAlt fills (the key chips, the search box): a tint of the text, so it fades with the window.
+    root.setProperty('--subAlt', 'var(--surface)');
+    return;
+  }
+  // Every shared role worked out from the theme's bg, main and text the way the scheme's are (so
+  // the background takes the see-through and text stays solid), then its own sub, error and edge.
+  const opacity = isNative() ? appearance.opacity.games : 1;
+  const solid = hex => hex.slice(0, 7);
+  const look = Theme.derivePalette({ bg: solid(colors[0]), accent: solid(colors[1]), text: solid(colors[5]) }, opacity);
+  for (const role of Theme.ROLES) root.setProperty(Theme.cssName(role), Theme.cssColor(look[role]));
+  root.setProperty('color-scheme', look.isDark ? 'dark' : 'light');
+  root.setProperty('--dim', colors[3]);
+  root.setProperty('--red', colors[6]);
+  root.setProperty('--edge', withAlpha(colors[3], 80 / 255));
+  THEME_KEYS.forEach((key, k) => root.setProperty(`--${key}`, colors[k]));
+  // subAlt is meant as a shade barely off the background: on a see-through window it fades too.
+  root.setProperty('--subAlt', withAlpha(colors[4], opacity));
+}
+
+/** The colour scheme changed (in this window or another): 'auto' takes it, and so does the
+    see-through of whichever theme is on screen. */
+function schemeChanged(next) {
+  appearance = next;
+  const auto = schemeTheme();
+  themes[0] = auto;
+  const entry = swatches.find(e => e.name === AUTO_THEME);
+  if (entry) paintSwatch(entry, auto);
+  setColors(shownTheme);
 }
 
 function setTheme(name) {
@@ -230,24 +275,42 @@ let swatches = []; // { name, el }
 let shown = [];
 let pickIndex = -1;
 
+/** A swatch's colours: the theme's background, its name in its main colour, dots of text and sub. */
+function paintSwatch(entry, theme) {
+  entry.el.style.background = theme.colors[0];
+  entry.title.style.color = theme.colors[1];
+  entry.dots[0].style.background = theme.colors[5];
+  entry.dots[1].style.background = theme.colors[3];
+  if (entry.note) {
+    entry.note.textContent = schemeName(appearance, presets);
+    entry.note.style.color = theme.colors[3];
+  }
+}
+
 function buildSwatches() {
   if (swatches.length) return;
   const host = $('swatches');
   swatches = themes.map(theme => {
     const el = document.createElement('div');
-    el.className = 'swatch';
-    el.style.background = theme.colors[0];
+    el.className = theme.name === AUTO_THEME ? 'swatch auto' : 'swatch';
     const title = document.createElement('span');
     title.className = 'title';
     title.textContent = themeTitle(theme.name);
-    title.style.color = theme.colors[1];
     el.append(title);
-    for (const index of [5, 3]) {
-      const dot = document.createElement('i');
-      dot.style.background = theme.colors[index];
-      el.append(dot);
+    let note = null;
+    if (theme.name === AUTO_THEME) {
+      el.title = 'The colour scheme every window shares';
+      note = document.createElement('span');
+      note.className = 'note';
+      el.append(note);
     }
-    const entry = { name: theme.name, el };
+    const dots = [5, 3].map(() => {
+      const dot = document.createElement('i');
+      el.append(dot);
+      return dot;
+    });
+    const entry = { name: theme.name, el, title, dots, note };
+    paintSwatch(entry, theme);
     el.addEventListener('mouseenter', () => selectSwatch(shown.indexOf(entry), false));
     el.addEventListener('click', () => closePicker(true));
     host.append(el);
@@ -324,13 +387,27 @@ function closePicker(keep) {
   }
 }
 
-/** Arrows walk the swatch grid: a row is as many swatches as fit across. */
+/**
+ * Arrows walk the swatch grid: left and right go one swatch, up and down a row, keeping the
+ * column. A row is as many swatches as fit across, and 'auto' is a row of its own.
+ */
 function movePick(columns, rows) {
   if (shown.length === 0) return;
-  const firstTop = shown[0].el.offsetTop;
-  let perRow = shown.findIndex(entry => entry.el.offsetTop !== firstTop);
-  if (perRow <= 0) perRow = shown.length;
-  selectSwatch(Math.max(0, Math.min(shown.length - 1, pickIndex + columns + rows * perRow)));
+  if (columns) {
+    selectSwatch(Math.max(0, Math.min(shown.length - 1, pickIndex + columns)));
+    return;
+  }
+  const grid = [];
+  let lastTop = null;
+  shown.forEach((entry, i) => {
+    const top = entry.el.offsetTop;
+    if (top !== lastTop) { grid.push([]); lastTop = top; }
+    grid[grid.length - 1].push(i);
+  });
+  const row = Math.max(0, grid.findIndex(r => r.includes(pickIndex)));
+  const column = Math.max(0, grid[row].indexOf(pickIndex));
+  const target = grid[Math.max(0, Math.min(grid.length - 1, row + rows))];
+  selectSwatch(target[Math.min(column, target.length - 1)]);
 }
 
 $('search').addEventListener('input', () => { if (picking) updateFilter(); });
@@ -403,11 +480,13 @@ function showDemo() {
 
 async function start() {
   newTest();
-  const [text, saved] = await Promise.all([
+  const [text, saved, presetList] = await Promise.all([
     fetch('/data/TypeThemes.txt').then(r => (r.ok ? r.text() : '')).catch(() => ''),
     demoView ? null : loadSave('typetest'),
+    loadPresets(),
   ]);
-  themes = parseThemes(text);
+  presets = presetList;
+  themes = [schemeTheme(), ...parseThemes(text)];
   const prefs = readSave(saved, themes.map(t => t.name));
   best = prefs.pb;
   setTheme(prefs.theme);
@@ -416,4 +495,5 @@ async function start() {
   else moveCaret(true);
 }
 
+watchAppearance('games', schemeChanged);
 start();

@@ -1,13 +1,17 @@
 // The typing test: Monkeytype's scoring (the WPF self-test's cases), input rules,
-// words, themes and the save.
+// words, themes ('auto', the colour scheme, among them) and the save.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  EXTRA_LIMIT, TypeTest, WORD_COUNT, WORD_LIST, consistency, count, cssColor, filterThemes, graphScale,
-  isBest, kogasa, parseThemes, pickWords, raw, readSave, saveOf, wpm,
+  AUTO_THEME, DEFAULT_THEME, EXTRA_LIMIT, FALLBACK_THEME, TypeTest, WORD_COUNT, WORD_LIST, consistency, count, cssColor,
+  filterThemes, graphScale, isBest, kogasa, parseThemes, pickWords, raw, readSave, saveOf, schemeAsTheme, schemeName,
+  themeTitle, withAlpha, wpm,
 } from '../public/games/typing/logic.js';
 import { seeded } from '../public/games/rng.js';
+
+await import('../public/shared/theme.js');
+const Theme = globalThis.ClaudeTheme;
 
 const near = (value, expected) => assert.ok(Math.abs(value - expected) < 0.001, `${value} vs ${expected}`);
 
@@ -165,6 +169,53 @@ test('the save: {pb, theme}, each part checked on its own', () => {
   assert.deepEqual(saveOf(87.456, 'nord'), { pb: 87.46, theme: 'nord' });
   assert.deepEqual(readSave({ pb: 87.46, theme: 'nord' }, ['nord']), { pb: 87.46, theme: 'nord' });
   assert.deepEqual(readSave({ pb: 'fast', theme: 'nord' }, ['nord']), { pb: 0, theme: 'nord' });
-  assert.deepEqual(readSave({ pb: 50, theme: 'gone' }, ['nord']), { pb: 50, theme: 'serika_dark' });
-  assert.deepEqual(readSave(null), { pb: 0, theme: 'serika_dark' });
+  assert.deepEqual(readSave({ pb: 50, theme: 'gone' }, ['nord']), { pb: 50, theme: 'auto' });
+  assert.deepEqual(readSave(null), { pb: 0, theme: 'auto' });
+  assert.deepEqual(readSave({ pb: 50, theme: 'auto' }, ['auto', 'nord']), { pb: 50, theme: 'auto' });
+});
+
+test("'auto' follows the colour scheme, and is the theme with none saved", () => {
+  assert.equal(AUTO_THEME, 'auto');
+  assert.equal(DEFAULT_THEME, AUTO_THEME);
+  assert.equal(FALLBACK_THEME, 'serika_dark');
+  // The same eight colours widget/TypeTest.ps1's self-test pins for Ember (Get-SchemeAsTheme).
+  const ember = Theme.derivePalette(Theme.DEFAULT_COLORS, 0.95);
+  assert.deepEqual(schemeAsTheme(ember), ['#1C1D20', '#E08A5F', '#E08A5F', '#90908F', '#2C2D30', '#E8E6E3', '#E0696B', '#884749']);
+  // The background is solid whatever the see-through: only its colour comes from cardFill.
+  assert.equal(schemeAsTheme(Theme.derivePalette(Theme.DEFAULT_COLORS, 0.4))[0], '#1C1D20');
+  // A light scheme takes the light status colours.
+  const paper = schemeAsTheme(Theme.derivePalette({ bg: '#F5F2EB', accent: '#C2602F', text: '#1F1E1C' }, 1));
+  assert.equal(paper[0], '#F5F2EB');
+  assert.equal(paper[1], '#C2602F');
+  assert.equal(paper[5], '#1F1E1C');
+  assert.equal(paper[6], '#C23B3E');
+});
+
+test("'auto' in the picker: its title, its search words, and never a file line", () => {
+  assert.equal(themeTitle(AUTO_THEME), 'follow colour scheme');
+  assert.equal(themeTitle('serika_dark'), 'serika dark');
+  const themes = [{ name: AUTO_THEME, colors: [] }, ...parseThemes('nord|#242933|#88C0D0|#ECEFF4|#929AAA|#2E3440|#D8DEE9|#BF616A|#793E44')];
+  for (const query of ['follow', 'colour', 'color', 'auto', 'DEFAULT']) assert.deepEqual(filterThemes(themes, query).map(t => t.name), ['auto'], query);
+  assert.deepEqual(filterThemes(themes, 'nord').map(t => t.name), ['nord']);
+  // A theme file line named 'auto' can't take the scheme's place.
+  assert.deepEqual(parseThemes('auto|#000000|#111111|#222222|#333333|#444444|#555555|#666666|#777777').map(t => t.name), ['serika_dark']);
+});
+
+test('withAlpha: a theme colour at the see-through, its own alpha kept', () => {
+  assert.equal(withAlpha('#2C2E31', 0.5), 'rgba(44, 46, 49, 0.5)');
+  assert.equal(withAlpha('#646669', 80 / 255), 'rgba(100, 102, 105, 0.314)');
+  // slambook's sub is #1C82ADC4 in CSS order: its own alpha times the one asked for.
+  assert.equal(withAlpha('#1C82ADC4', 1), 'rgba(28, 130, 173, 0.769)');
+  assert.equal(withAlpha('#1C82ADC4', 0.5), 'rgba(28, 130, 173, 0.384)');
+});
+
+test("schemeName: the preset 'auto' follows, or custom once its colours change", () => {
+  const presets = [
+    { name: 'ember', label: 'Ember', bg: '#1C1D20', accent: '#E08A5F', text: '#E8E6E3' },
+    { name: 'paper', label: 'Paper', bg: '#F5F2EB', accent: '#C2602F', text: '#1F1E1C' },
+  ];
+  assert.equal(schemeName(Theme.parseAppearance(null), presets), 'ember');
+  assert.equal(schemeName({ preset: 'paper', colors: { bg: '#f5f2eb', accent: '#c2602f', text: '#1f1e1c' } }, presets), 'paper');
+  assert.equal(schemeName({ preset: 'paper', colors: { bg: '#000000', accent: '#C2602F', text: '#1F1E1C' } }, presets), 'custom');
+  assert.equal(schemeName({ preset: 'custom', colors: { bg: '#000000', accent: '#FFD400', text: '#FFFFFF' } }, presets), 'custom');
 });

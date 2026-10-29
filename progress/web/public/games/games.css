@@ -1,65 +1,74 @@
-/* The games' shared look: the WPF windows' dark card, centred on the page. */
+/* The games' shared layout, on /shared/theme.css (linked first: the colour roles and the shared
+   pieces .ui-title .ui-stat .ui-btn .ui-chip .ui-mark). The whole window is the card: the one
+   background is --card-fill on <html> (theme.css), and a game sits centred on it, with no box of
+   its own around it. Every colour here is a role of the colour scheme; only the games' own looks
+   (2048's tiles, the chess board, Typing's Monkeytype themes) keep colours of their own. */
 :root {
-  --page: #141518;
-  --card: #1c1d20;
-  --edge: rgba(255, 255, 255, 0.2);
-  --well: #202125;
-  --slot: #2b2c31;
-  --ink: #e8e6e3;
-  --dim: #8b8a88;
-  --accent: #e08a5f;
-  --green: #5fb98a;
-  --red: #e0696b;
-  --mono: 'Cascadia Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
-  color-scheme: dark;
+  /* The names the game pages grew up with, as the shared roles. */
+  --card: var(--card-fill);
+  --slot: var(--surface);
 }
 
 * { box-sizing: border-box; }
 
-html, body { margin: 0; min-height: 100%; }
+html, body { margin: 0; }
 
 body {
-  background: var(--page);
-  color: var(--ink);
-  font: 13px/1.35 var(--mono);
+  min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 100vh;
-  padding: 24px 16px;
+  padding: calc(24px + var(--titlebar, 0px)) 16px 24px;
+  color: var(--ink);
+  font: 12px/1.4 var(--mono);
   -webkit-font-smoothing: antialiased;
 }
 
-.card {
-  background: var(--card);
-  border: 1px solid var(--edge);
-  border-radius: 10px;
-  padding: 12px 16px 14px;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
-}
+/* A game's column: as wide as its board, never wider than the window. */
+.game { max-width: 100%; }
 
+/* The header: the way back to the hub over the title (text on the title's left edge, the hover
+   fill reaching past it), then the title and the game's own things on one line. */
 .back {
-  position: fixed;
-  top: 14px;
-  left: 16px;
+  display: inline-block;
+  margin: 0 0 2px -4px;
+  padding: 1px 4px;
+  border-radius: var(--radius);
   color: var(--dim);
+  font: 12px/16px var(--mono);
   text-decoration: none;
-  font-size: 12px;
 }
-.back:hover { color: var(--ink); }
+.back:hover { color: var(--ink); background: var(--hover); }
+.back:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
-button.press {
-  font: inherit;
-  color: var(--dim);
-  background: none;
-  border: 0;
-  padding: 2px 5px;
-  border-radius: 4px;
-  cursor: pointer;
+.head { display: flex; align-items: center; gap: 6px; min-height: 30px; }
+.head .ui-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The games are mono through and through, chips and buttons too. */
+.ui-chip { font: 11.5px/1 var(--mono); }
+.ui-btn { font: inherit; }
+.ui-btn.strong { font-weight: 700; }
+
+/* A key of an on-screen pad (Sudoku's digits): a glyph with a hover fill. */
+.key {
+  min-width: 30px; padding: 2px 8px; border: 0; border-radius: var(--radius);
+  background: transparent; color: var(--ink); font: inherit; cursor: pointer;
 }
-button.press:hover { color: var(--ink); background: rgba(255, 255, 255, 0.06); }
-button.press.on { color: var(--ink); font-weight: bold; }
+.key:hover { background: var(--hover); }
+.key:active { background: var(--pressed); }
+
+/* A stat whose number moves: the "+N" that rises out of it and fades. */
+.ui-stat { position: relative; }
+.ui-stat .ui-caption { letter-spacing: 0.05em; }
+.rise {
+  position: absolute; left: 0; right: 0; bottom: 2px; text-align: center;
+  font: bold 13px/1 var(--mono); opacity: 0; pointer-events: none;
+}
+.rise.go { animation: rise 600ms linear; }
+@keyframes rise { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-28px); } }
+
 button:focus { outline: none; }
 button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
+/* The keys line at a game's foot. */
 .hint { color: var(--dim); }

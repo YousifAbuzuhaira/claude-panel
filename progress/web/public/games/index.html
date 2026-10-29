@@ -4,31 +4,40 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Games</title>
+<link rel="stylesheet" href="/shared/theme.css">
 <link rel="stylesheet" href="games.css">
+<script src="/shared/theme.js"></script>
 <style>
-  .card { width: min(420px, 100%); padding: 18px 20px 20px; }
-  h1 { margin: 0 0 4px; font-size: 22px; color: var(--accent); }
-  p.hint { margin: 0 0 14px; }
-  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-  a.game {
-    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
-    padding: 10px 12px; border-radius: 6px; background: var(--slot);
+  .game { width: 380px; }
+  .lede { margin: 2px 0 12px; color: var(--dim); }
+  .list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+  /* A row's text sits on the title's left edge; its hover fill reaches past it. */
+  .list a {
+    display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 16px;
+    margin: 0 -10px; padding: 8px 10px; border-radius: var(--radius);
     color: var(--ink); text-decoration: none;
   }
-  a.game:hover { background: #34353b; }
-  a.game b { font-size: 15px; }
-  a.game span { color: var(--dim); font-size: 12px; text-align: right; }
+  .list a:hover { background: var(--hover); }
+  .list a:active { background: var(--pressed); }
+  .list a:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+  .list b { font-size: 14px; }
+  .list span { color: var(--dim); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .also { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
+  .also b { color: var(--blue); font-weight: 700; }
 </style>
 </head>
 <body>
-<main class="card">
-  <h1>Games</h1>
-  <p class="hint">Something to do while Claude works.</p>
-  <ul>
-    <li><a class="game" href="2048/"><b>2048</b><span>slide and merge</span></a></li>
-    <li><a class="game" href="sudoku/"><b>Sudoku</b><span>4&times;4, 6&times;6, 9&times;9</span></a></li>
-    <li><a class="game" href="typing/"><b>Typing</b><span>ten words, how fast</span></a></li>
-    <li><a class="game" href="chess/"><b>Chess puzzles</b><span>rated tactics</span></a></li>
+<main class="game">
+  <header class="head"><h1 class="ui-title">Games</h1></header>
+  <p class="lede">Something to do while Claude works.</p>
+  <ul class="list">
+    <li><a class="game-link" href="sudoku/"><b>Sudoku</b><span>4&times;4, 6&times;6, 9&times;9</span></a></li>
+    <li><a class="game-link" href="2048/"><b>2048</b><span>slide and merge</span></a></li>
+    <li><a class="game-link" href="typing/"><b>Typing</b><span>ten words, how fast</span></a></li>
+    <li><a class="game-link" href="chess/"><b>Chess</b><span>rated puzzles</span></a></li>
+  </ul>
+  <ul class="list also">
+    <li><a id="learn" href="../learn/" title="Courses, and the colour scheme in Settings"><b>Learn &rarr;</b><span>courses from videos and docs</span></a></li>
   </ul>
 </main>
 <script type="module" src="index.js"></script>

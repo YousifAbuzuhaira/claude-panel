@@ -1,5 +1,6 @@
 // The Sudoku page: draws the board, takes keys and clicks, keeps the save.
 import { loadSave, writeSave, withToken } from '../../shared/api.js';
+import { watchAppearance } from '../../shared/look.js';
 import { rngFor, seedFromUrl } from '../rng.js';
 import { MAX_LIVES, Sudoku, readSave, saveOf } from './logic.js';
 
@@ -70,14 +71,14 @@ function buildBoard() {
   padButtons = [];
   for (let d = 1; d <= n; d++) {
     const button = document.createElement('button');
-    button.className = 'press';
+    button.className = 'key';
     button.textContent = d;
     button.addEventListener('click', event => act(() => game.enterDigit(d, event.shiftKey || event.ctrlKey)));
     padEl.append(button);
     padButtons.push(button);
   }
   const erase = document.createElement('button');
-  erase.className = 'press';
+  erase.className = 'key erase';
   erase.textContent = '⌫';
   erase.title = 'Erase (Backspace); Ctrl+Z undoes';
   erase.addEventListener('click', () => act(() => game.clearCell()));
@@ -129,7 +130,6 @@ function draw() {
 
 function drawChrome() {
   const n = game.n;
-  $('title').textContent = `Sudoku ${n}x${n}`;
   const hearts = $('hearts');
   hearts.textContent = '';
   for (let k = 0; k < MAX_LIVES; k++) {
@@ -294,4 +294,5 @@ async function start() {
   draw();
 }
 
+watchAppearance('games');
 start();

@@ -6,7 +6,11 @@ import { WORD_LIST } from './words.js';
 export { WORD_LIST };
 export const WORD_COUNT = 10;
 export const EXTRA_LIMIT = 10;
-export const DEFAULT_THEME = 'serika_dark';
+// 'auto' follows the colour scheme every window shares; it is the theme with none saved, as in
+// widget/TypeTest.ps1. serika_dark is the Monkeytype theme that is always there.
+export const AUTO_THEME = 'auto';
+export const DEFAULT_THEME = AUTO_THEME;
+export const FALLBACK_THEME = 'serika_dark';
 // bg, main, caret, sub, subAlt, text, error, errorExtra.
 export const SERIKA_DARK = ['#323437', '#E2B714', '#E2B714', '#646669', '#2C2E31', '#D1D0C5', '#CA4754', '#7E2A33'];
 export const THEME_KEYS = ['bg', 'main', 'caret', 'sub', 'subAlt', 'text', 'error', 'errorExtra'];
@@ -228,34 +232,97 @@ export function cssColor(hex) {
 
 const COLOR = /^#(?:[0-9a-f]{6}|[0-9a-f]{8})$/i;
 
-/** The themes file as [{name, colors[8]}] in file order, colours in CSS order; serika_dark always there. */
+/**
+ * The themes file as [{name, colors[8]}] in file order, colours in CSS order; serika_dark always
+ * there. A line named 'auto' is left out: that name is the colour scheme's (schemeAsTheme).
+ */
 export function parseThemes(text) {
   const themes = [];
   const seen = new Set();
   for (const line of String(text ?? '').split(/\r?\n/)) {
     if (!line || line.startsWith('#')) continue;
     const fields = line.split('|');
-    if (fields.length !== 9 || seen.has(fields[0])) continue;
+    if (fields.length !== 9 || seen.has(fields[0]) || fields[0] === AUTO_THEME) continue;
     const colors = fields.slice(1);
     if (!colors.every(c => COLOR.test(c))) continue;
     seen.add(fields[0]);
     themes.push({ name: fields[0], colors: colors.map(cssColor) });
   }
-  if (!seen.has(DEFAULT_THEME)) themes.push({ name: DEFAULT_THEME, colors: [...SERIKA_DARK] });
+  if (!seen.has(FALLBACK_THEME)) themes.push({ name: FALLBACK_THEME, colors: [...SERIKA_DARK] });
   return themes;
 }
 
-export const themeTitle = name => name.replaceAll('_', ' ');
+export const themeTitle = name => (name === AUTO_THEME ? 'follow colour scheme' : name.replaceAll('_', ' '));
+
+/** What a search looks in: the title, and for 'auto' the other words someone might try. */
+export const themeKeywords = name => (name === AUTO_THEME ? 'follow colour scheme color auto default' : themeTitle(name));
 
 /** The themes whose name has the query (spaces and underscores alike, any case). */
 export function filterThemes(themes, query) {
   const q = String(query ?? '').trim().toLowerCase().replaceAll('_', ' ');
-  return q ? themes.filter(t => themeTitle(t.name).toLowerCase().includes(q)) : themes;
+  return q ? themes.filter(t => themeKeywords(t.name).toLowerCase().includes(q)) : themes;
+}
+
+// --- 'auto': the colour scheme as a Monkeytype theme ------------------------------------------
+
+/** '#RRGGBB', '#AARRGGBB' (shared/theme.js) or CSS '#RRGGBBAA' to [r, g, b] (alpha dropped). */
+function rgbOf(hex, isArgb) {
+  const value = String(hex).trim().replace(/^#/, '');
+  const six = value.length === 8 ? (isArgb ? value.slice(2) : value.slice(0, 6)) : value;
+  return [0, 2, 4].map(i => parseInt(six.slice(i, i + 2), 16));
+}
+
+const toByte = v => Math.min(255, Math.max(0, Math.floor(v + 0.5)));
+const toHex = rgb => `#${rgb.map(n => n.toString(16).toUpperCase().padStart(2, '0')).join('')}`;
+const mixRgb = (a, b, t) => [0, 1, 2].map(i => toByte(a[i] * (1 - t) + b[i] * t));
+
+/**
+ * The colour scheme as a theme: the palette shared/theme.js derives ('#AARRGGBB' roles), as
+ * [bg, main, caret, sub, subAlt, text, error, errorExtra] in '#RRGGBB'. The same mapping as
+ * Get-SchemeAsTheme in widget/TypeTest.ps1: the background solid (from cardFill), main and caret
+ * the accent, sub the dim text, subAlt a step toward the text, error the scheme's red, and
+ * errorExtra that red most of the way to the background.
+ */
+export function schemeAsTheme(palette) {
+  const bg = rgbOf(palette.cardFill, true);
+  const ink = rgbOf(palette.ink, true);
+  const red = rgbOf(palette.red, true);
+  const accent = toHex(rgbOf(palette.accent, true));
+  return [
+    toHex(bg), accent, accent, toHex(rgbOf(palette.dim, true)),
+    toHex(mixRgb(bg, ink, 0.08)), toHex(ink), toHex(red), toHex(mixRgb(red, bg, 0.45)),
+  ];
+}
+
+/** A CSS colour ('#RRGGBB' or '#RRGGBBAA') at `alpha` times its own, as rgba(). */
+export function withAlpha(hex, alpha) {
+  const value = String(hex).trim().replace(/^#/, '');
+  const own = value.length === 8 ? parseInt(value.slice(6), 16) / 255 : 1;
+  const [r, g, b] = rgbOf(`#${value}`, false);
+  const a = Math.round(Math.min(1, Math.max(0, alpha * own)) * 1000) / 1000;
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+/**
+ * The scheme 'auto' follows, by name for its swatch: the preset's label (lower case) when the
+ * colours are still that preset's, or 'custom'. `appearance` is shared/theme.js parseAppearance's.
+ */
+export function schemeName(appearance, presets) {
+  const colors = (appearance && appearance.colors) || {};
+  const same = (a, b) => String(a).toUpperCase() === String(b).toUpperCase();
+  for (const preset of presets || []) {
+    const isSame = preset.name === appearance.preset && same(preset.bg, colors.bg) && same(preset.accent, colors.accent) && same(preset.text, colors.text);
+    if (isSame) return String(preset.label || preset.name).toLowerCase();
+  }
+  return 'custom';
 }
 
 // --- The save: {pb, theme} -------------------------------------------------------------------
 
-/** The save file, each part checked on its own. `themes` (names) checks the theme when given. */
+/**
+ * The save file, each part checked on its own. `themes` (names) checks the theme when given.
+ * No theme saved, or one that is gone, is 'auto': the colour scheme.
+ */
 export function readSave(raw, themeNames) {
   const value = raw && typeof raw === 'object' ? raw : {};
   const pb = typeof value.pb === 'number' && Number.isFinite(value.pb) && value.pb > 0 ? value.pb : 0;

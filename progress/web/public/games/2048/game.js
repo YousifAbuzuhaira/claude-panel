@@ -1,5 +1,6 @@
 // The 2048 page: draws the board, takes keys and swipes, keeps the save.
 import { loadSave, writeSave, withToken } from '../../shared/api.js';
+import { watchAppearance } from '../../shared/look.js';
 import { rngFor, seedFromUrl } from '../rng.js';
 import { CELLS, SIDE, newGame, play, readSave, saveOf, isStopped } from './logic.js';
 
@@ -103,7 +104,8 @@ function drawOverlay() {
     overlay.classList.add('show');
   } else if (game.won && !game.keepPlaying) {
     message.textContent = 'You win!';
-    message.style.color = '#F5C400';
+    // The scheme's gold: the tile's own gold can't be read on a light scheme's veil.
+    message.style.color = 'var(--gold)';
     $('keep').hidden = false;
     overlay.classList.add('show');
   } else {
@@ -227,4 +229,5 @@ async function start() {
   save();
 }
 
+watchAppearance('games');
 start();

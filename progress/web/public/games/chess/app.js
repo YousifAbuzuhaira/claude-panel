@@ -5,7 +5,8 @@
 // Testing aid (no saves are written): ?demo=board|hint|wrong|review|picker|played|pieces
 // &puzzle=<id> plays the real handlers instantly, as the WPF -SnapshotView does; add
 // &engine=1 to let a 'wrong'/'played' demo wait for Stockfish.
-import { loadSave, token, writeSave } from '../../shared/api.js';
+import { loadSave, token, withToken, writeSave } from '../../shared/api.js';
+import { watchAppearance } from '../../shared/look.js';
 import { Board, isCapture, isCastle, isEnPassant, uci } from './board.js';
 import { describe, ideaHint, lineSan, pieceOn, replyNote, summary } from './narrator.js';
 import { update as glickoUpdate } from './glicko.js';
@@ -402,14 +403,14 @@ function buildSettings() {
     { key: 'normal', label: 'Normal', tip: 'Puzzles near your rating; the rating moves with each result.' },
     { key: 'climb', label: 'Climb', tip: `Start at ${CLIMB_START} and work up: +${CLIMB_UP} for a clean solve, -${CLIMB_DOWN} for a miss.` },
   ]) {
-    const b = pressable(choice.label, choice.tip);
+    const b = pressable(choice.label, choice.tip, 'ui-chip');
     b.dataset.key = choice.key;
     b.addEventListener('click', () => chooseMode(choice.key));
     el.modeRow.append(b);
     modeViews.push(b);
   }
   for (const level of DIFFICULTIES) {
-    const b = pressable(level.label);
+    const b = pressable(level.label, '', 'ui-chip');
     b.dataset.key = level.key;
     b.addEventListener('click', () => chooseDifficulty(level));
     el.difficultyRow.append(b);
@@ -417,10 +418,11 @@ function buildSettings() {
   }
 }
 
-function pressable(text, title = '') {
+/** A small button: a plain one (the replay moves), or a choice of a set ('ui-chip'). */
+function pressable(text, title = '', className = 'pressable') {
   const b = document.createElement('button');
   b.type = 'button';
-  b.className = 'pressable';
+  b.className = className;
   b.textContent = text;
   if (title) b.title = title;
   b.tabIndex = -1;
@@ -968,7 +970,7 @@ function buildChips() {
     const members = entries.filter(e => e.group === groupKey);
     if (members.length === 0) continue;
     const heading = document.createElement('div');
-    heading.className = 'group-heading';
+    heading.className = 'ui-caption group-heading';
     heading.textContent = name.toUpperCase();
     const wrap = document.createElement('div');
     wrap.className = 'chips';
@@ -1026,6 +1028,9 @@ function openPicker() {
   isPicking = true;
   el.search.value = '';
   el.picker.hidden = false;
+  // The picker takes the side column's place (the window can be see-through, so it can't just
+  // paint over it).
+  el.side.style.visibility = 'hidden';
   filterChips();
   const current = shownChips.findIndex(e => e.key === progress.settings.theme);
   if (current >= 0) selectChip(current);
@@ -1036,6 +1041,7 @@ function closePicker(keep) {
   if (!isPicking) return;
   isPicking = false;
   el.picker.hidden = true;
+  el.side.style.visibility = '';
   if (keep && pickIndex >= 0 && pickIndex < shownChips.length) {
     const chosen = shownChips[pickIndex].key;
     if (chosen !== progress.settings.theme) {
@@ -1289,4 +1295,6 @@ async function main() {
   if (!(read.puzzle && resumePuzzle(read.puzzle))) selectNextPuzzle();
 }
 
+document.getElementById('backLink').href = withToken('../');
+watchAppearance('games');
 main().catch(error => { console.error(error); el.loading.hidden = false; el.loading.textContent = `Something broke: ${error.message}`; });

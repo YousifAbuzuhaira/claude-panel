@@ -4,22 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sudoku</title>
+<link rel="stylesheet" href="/shared/theme.css">
 <link rel="stylesheet" href="../games.css">
+<script src="/shared/theme.js"></script>
 <style>
+  /* The board's lines and marks: tints of the text and the accent, so they follow the scheme
+     (and the blue of a note, the scheme's blue). */
   :root {
-    --thin: rgba(255, 255, 255, 0.15);
-    --box: rgba(255, 255, 255, 0.45);
-    --pick: rgba(224, 138, 95, 0.3);
-    --pick-note: rgba(92, 143, 204, 0.36);
-    --peer: rgba(255, 255, 255, 0.07);
-    --same: rgba(224, 138, 95, 0.15);
+    --thin: color-mix(in srgb, var(--ink) 15%, transparent);
+    --box: color-mix(in srgb, var(--ink) 45%, transparent);
+    --pick: color-mix(in srgb, var(--accent) 30%, transparent);
+    --pick-note: color-mix(in srgb, var(--blue) 36%, transparent);
+    --peer: color-mix(in srgb, var(--ink) 7%, transparent);
+    --same: color-mix(in srgb, var(--accent) 15%, transparent);
+    /* As wide as the 9x9 board (9 x 50 px and its 2 px frame), whatever size is on, so the
+       window's layout never jumps when the size changes. */
+    --column: 454px;
   }
-  .card { user-select: none; min-width: 360px; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  header h1 { margin: 0; font-size: 14px; }
+  .game { width: var(--column); user-select: none; }
   #hearts { font-size: 17px; letter-spacing: 1px; color: var(--red); cursor: default; }
-  #hearts .lost { color: var(--thin); }
-  hr { border: 0; height: 1px; background: var(--thin); margin: 8px 0 12px; }
+  #hearts .lost { color: var(--line); }
+  hr { border: 0; height: 1px; background: var(--rule); margin: 8px 0 12px; }
 
   .board {
     display: grid; margin: 0 auto; width: max-content; border: 2px solid var(--box);
@@ -49,21 +54,28 @@
   .notes span { place-self: center; padding: 0 3px; line-height: 1.25; border-radius: 3px; }
   .notes span.lit { color: var(--accent); font-weight: bold; background: var(--same); }
 
-  #status { text-align: center; margin-top: 9px; color: var(--dim); min-height: 1.35em; }
+  /* One line, the column's width: a long message trims instead of widening the window. */
+  #status {
+    margin-top: 9px; min-height: 1.4em; text-align: center; color: var(--dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   #status.green { color: var(--green); }
   #status.red { color: var(--red); }
   .pad { display: flex; justify-content: center; gap: 2px; margin-top: 8px; }
-  .pad button.press { font-size: 18px; padding: 2px 9px; color: var(--ink); }
-  .pad button.press.done { color: var(--dim); }
-  .controls { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; margin-top: 10px; }
+  .pad .key { font-size: 18px; }
+  .pad .key.done { color: var(--faint); }
+  .pad .key.erase { color: var(--dim); padding: 2px 7px; }
+  .controls { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; margin-top: 10px; }
+  .controls .chips { display: flex; gap: 4px; }
   .controls .sizes { justify-self: end; }
+  .keys { margin-top: 10px; text-align: center; color: var(--faint); }
 </style>
 </head>
 <body>
-<a class="back" href="../">&larr; games</a>
-<main class="card">
-  <header>
-    <h1 id="title">Sudoku</h1>
+<main class="game">
+  <a class="back" href="../" title="All the games, and Learn">&larr; Games</a>
+  <header class="head">
+    <h1 class="ui-title" id="title">Sudoku</h1>
     <span id="hearts" title="Lives: a wrong answer costs one"></span>
   </header>
   <hr>
@@ -71,17 +83,18 @@
   <div id="status"></div>
   <div class="pad" id="pad"></div>
   <div class="controls">
-    <div class="modes">
-      <button class="press" data-mode="answer" title="Answer mode (Space switches; hold Shift or Ctrl to note)">Answer</button>
-      <button class="press" data-mode="notes" title="Notes mode (Space switches; hold Shift or Ctrl to answer)">Notes</button>
+    <div class="chips modes">
+      <button class="ui-chip" data-mode="answer" title="Answer mode (Space switches; hold Shift or Ctrl to note)">Answer</button>
+      <button class="ui-chip" data-mode="notes" title="Notes mode (Space switches; hold Shift or Ctrl to answer)">Notes</button>
     </div>
-    <button class="press" id="new" title="A fresh puzzle">New</button>
-    <div class="sizes">
-      <button class="press" data-size="4" title="Easy">4x4</button>
-      <button class="press" data-size="6" title="Medium">6x6</button>
-      <button class="press" data-size="9" title="Hard">9x9</button>
+    <button class="ui-btn" id="new" title="A fresh puzzle">New</button>
+    <div class="chips sizes">
+      <button class="ui-chip" data-size="4" title="Easy">4x4</button>
+      <button class="ui-chip" data-size="6" title="Medium">6x6</button>
+      <button class="ui-chip" data-size="9" title="Hard">9x9</button>
     </div>
   </div>
+  <div class="keys">N notes &middot; Esc clear &middot; Ctrl+Z undo &middot; &#x232B; erase</div>
 </main>
 <script type="module" src="game.js"></script>
 </body>

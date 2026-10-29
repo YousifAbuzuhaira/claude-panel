@@ -3,21 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chess Puzzles</title>
+<title>Chess</title>
+<link rel="stylesheet" href="/shared/theme.css">
+<link rel="stylesheet" href="../games.css">
 <link rel="stylesheet" href="style.css">
+<script src="/shared/theme.js"></script>
 <script type="module" src="app.js"></script>
 </head>
 <body>
-<main class="card" id="card">
-  <header class="header">
-    <h1>Puzzles</h1>
-    <div class="header-right">
-      <svg class="spark" id="spark" viewBox="0 0 96 26" aria-label="Your rating over the last puzzles"><title>Your rating over the last puzzles</title><polyline id="sparkLine" points=""/></svg>
-      <div class="rating" id="ratingBox" title="Your puzzle rating (Glicko-2, as on Lichess). A ? means it is still settling.">
-        <div class="rating-label" id="ratingLabel">RATING</div>
-        <div class="rating-number" id="ratingNumber">1500</div>
-        <div class="rating-flash" id="ratingFlash"></div>
-      </div>
+<main class="game" id="card">
+  <a class="back" id="backLink" href="../" title="All the games, and Learn">&larr; Games</a>
+  <header class="head">
+    <h1 class="ui-title">Puzzles</h1>
+    <svg class="spark" id="spark" viewBox="0 0 96 26" aria-label="Your rating over the last puzzles"><title>Your rating over the last puzzles</title><polyline id="sparkLine" points=""/></svg>
+    <div class="ui-stat rating" id="ratingBox" title="Your puzzle rating (Glicko-2, as on Lichess). A ? means it is still settling.">
+      <span class="ui-caption" id="ratingLabel">RATING</span>
+      <b id="ratingNumber">1500</b>
+      <span class="rating-flash" id="ratingFlash"></span>
     </div>
   </header>
 
@@ -42,14 +44,14 @@
         <div class="bottom">
           <div class="move-strip" id="moveStrip" hidden></div>
           <div class="buttons">
-            <button type="button" class="btn hint" id="hintButton" title="H. First the idea (half credit), then the piece, then the move (no credit).">Hint</button>
-            <button type="button" class="btn next" id="nextButton" title="N or Enter">Next puzzle</button>
+            <button type="button" class="ui-btn strong" id="hintButton" title="H. First the idea (half credit), then the piece, then the move (no credit).">Hint</button>
+            <button type="button" class="ui-btn primary" id="nextButton" title="N or Enter">Next puzzle</button>
           </div>
-          <div class="row" id="modeRow"><span class="label">Mode</span></div>
+          <div class="row" id="modeRow"><span class="ui-caption label">Mode</span></div>
           <div class="row small" id="difficultyRow" title="How far from your rating the next puzzle is picked"></div>
           <div class="climb-note" id="climbNote" hidden></div>
           <div class="settings-row">
-            <button type="button" class="theme-chip" id="themeChip" title="Practise one theme, or a mix (T)"><span id="themeLabel"></span></button>
+            <button type="button" class="ui-btn theme-chip" id="themeChip" title="Practise one theme, or a mix (T)"><span id="themeLabel"></span></button>
             <button type="button" class="swatch" id="boardSwatch" title="Board colour"><span id="swatchLight"></span><span id="swatchDark"></span></button>
           </div>
           <div class="links">
@@ -60,7 +62,7 @@
       </section>
 
       <section class="picker" id="picker" hidden>
-        <input type="search" id="searchBox" placeholder="search themes..." autocomplete="off" spellcheck="false" aria-label="Search themes">
+        <input type="search" class="ui-input" id="searchBox" placeholder="search themes..." autocomplete="off" spellcheck="false" aria-label="Search themes">
         <div class="picker-list" id="pickerList"></div>
       </section>
     </div>
@@ -68,7 +70,7 @@
 
   <footer class="footer">
     <span class="keys">Drag or click · H hint · N next · ← → replay · T themes</span>
-    <span class="credits">Puzzles: Lichess (CC0) · Pieces: cburnett (GPLv2+) · Engine: Stockfish (GPLv3)</span>
+    <span class="credits" title="Puzzles: Lichess (CC0) · Pieces: cburnett (GPLv2+) · Engine: Stockfish (GPLv3)">Lichess puzzles CC0 · cburnett pieces GPLv2+ · Stockfish GPLv3</span>
   </footer>
 </main>
 <svg width="0" height="0" class="defs" aria-hidden="true"><defs id="pieceDefs"></defs></svg>
