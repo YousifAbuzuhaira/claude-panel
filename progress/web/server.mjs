@@ -27,6 +27,10 @@ const LEARN_MJS = join(HERE, '..', 'learn', 'learn.mjs');
 const CONFIG_DIR = process.env.LEARN_CONFIG_DIR || join(homedir(), '.config', 'claude-learn');
 const WEB_FILE = join(CONFIG_DIR, 'web.json');
 const SAVES_DIR = process.env.CLAUDE_PANEL_SAVES || join(homedir(), '.config', 'claude-panel', 'games');
+// The colour scheme and see-through every window shares (the shape is in shared/theme.js).
+const APPEARANCE_FILE = process.env.CLAUDE_PANEL_APPEARANCE || join(homedir(), '.config', 'claude-panel', 'appearance.json');
+const RELEASES_FILE = join(HERE, '..', 'releases.json');
+const PLUGIN_FILE = join(HERE, '..', '.claude-plugin', 'plugin.json');
 const STOCKFISH_DIR = join(homedir(), '.cache', 'claude-learn', 'stockfish');
 const APP_SOURCE = join(HERE, '..', 'mac', 'ClaudePanel.swift');
 const APP_CACHE = join(homedir(), '.cache', 'claude-panel', 'app');
@@ -35,7 +39,7 @@ const RPC_TIMEOUT_MS = 10 * 60_000;
 const MAX_BODY = 4 * 1024 * 1024;
 
 // The game data the WPF games read, served as is.
-const DATA_FILES = new Set(['ChessPuzzles.txt', 'ChessThemes.txt', 'ChessPieces.txt', 'TypeThemes.txt']);
+const DATA_FILES = new Set(['ChessPuzzles.txt', 'ChessThemes.txt', 'ChessPieces.txt', 'TypeThemes.txt', 'Presets.json']);
 const GAMES = new Set(['2048', 'sudoku', 'typetest', 'chess']);
 // npm stockfish@19.0.1, as https://unpkg.com/stockfish@19.0.1/?meta lists it. Never committed: GPL-3.0.
 const STOCKFISH = {
@@ -281,6 +285,32 @@ function serve() {
         }
       }
 
+      if (path === '/api/appearance') {
+        if (req.method === 'GET') return send(200, existsSync(APPEARANCE_FILE) ? readFileSync(APPEARANCE_FILE, 'utf8') : 'null');
+        if (req.method === 'POST') {
+          let text;
+          try {
+            text = await readBody(req);
+            const value = JSON.parse(text);
+            if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object');
+          } catch {
+            return send(400, { error: 'the body is not a JSON object' });
+          }
+          writeAtomic(APPEARANCE_FILE, text);
+          return send(200, { ok: true });
+        }
+      }
+
+      if (path === '/api/releases' && req.method === 'GET') {
+        try {
+          const { releases } = JSON.parse(readFileSync(RELEASES_FILE, 'utf8'));
+          const { version } = JSON.parse(readFileSync(PLUGIN_FILE, 'utf8'));
+          return send(200, { version, releases: Array.isArray(releases) ? releases : [] });
+        } catch {
+          return send(200, { version: null, releases: [] });
+        }
+      }
+
       return send(404, { error: 'no such API' });
     }
 
@@ -307,7 +337,7 @@ function serve() {
     const data = /^\/data\/([\w.-]+)$/.exec(path);
     if (data) {
       if (!DATA_FILES.has(data[1])) return send(404, 'not found', 'text/plain');
-      return send(200, readFileSync(join(WIDGET, data[1])), TYPES['.txt'], { 'Cache-Control': 'max-age=3600' });
+      return send(200, readFileSync(join(WIDGET, data[1])), TYPES[extname(data[1])] || TYPES['.txt'], { 'Cache-Control': 'max-age=3600' });
     }
 
     if (path === '/') return send(302, '', 'text/plain', { Location: '/learn/' });
