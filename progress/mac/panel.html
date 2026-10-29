@@ -11,8 +11,9 @@
 <style>
   /* The floating panel on macOS: the twin of widget/PhasesWidget.ps1, drawn from phases.json
      (contract 1). ClaudePanel.swift calls render(state) on every change, setAppearance(a) when the
-     colour scheme or see-through changes, setPresets(list) and setReleases({...}) once.
-     Two header rows: the marks, then the tabs with the version (the Releases tab) on the right.
+     colour scheme or see-through changes, setPresets(list), setReleases({...}) and setPrefs({...}) once.
+     Row 1: the open/closed mark, the title, the version (the Releases tab) and the marks. Then the
+     strip a mark opens, right under it; then the tabs with their counts; a rule; the tab; a footer.
      Sizes are the WPF panel's: padding 10 12, marks 22, glyph column 14, [x] column 28, gaps 2 / 8. */
   *, *::before, *::after { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
@@ -26,41 +27,58 @@
     padding: 10px 12px; background: var(--card-fill); border: 1px solid var(--edge); border-radius: var(--card-radius);
   }
   #card.sized { height: 100vh; }
-  #top, #foot { flex: none; }
+  #top { flex: none; display: flex; flex-direction: column; }
+  #foot { flex: none; }
   #scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -12px; padding: 0 12px; }
   #scroll::-webkit-scrollbar { width: 6px; }
   #scroll::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 3px; border: 0; }
   #body { display: flow-root; }
 
-  /* Row 1: open/closed mark, title (the one-line summary when closed), the marks. The marks reach
-     6px into the padding so their glyphs line up with the text edge. Swift drags the panel by
-     what lies between the marks (it is told where they are: post 'chrome'). */
+  /* Below 80% the terminal shows through the card, and over a backdrop of the other lightness even
+     the text colour sinks into it: a soft halo of the card's own colour round every glyph and line
+     keeps them off whatever is behind, strongest where the card is clearest (set by wear()). The
+     card's fill itself is never haloed, so the gaps between the lines stay see-through. Three
+     stacked shadows: one alone is too faint to lift dim text off a backdrop of the other lightness. */
+  .halo #top, .halo #scroll, .halo #foot {
+    filter: drop-shadow(0 0 0.5px var(--halo)) drop-shadow(0 0 1px var(--halo)) drop-shadow(0 0 2px var(--halo));
+  }
+
+  /* Row 1: open/closed mark, title (the one-line summary when closed), the version, the marks. The
+     open/closed mark's box overhangs the padding by as much as its small glyph leaves empty and
+     ends on the glyph column, so the title starts where the second lines of runs do; the other
+     marks reach 6px into the padding so their glyphs line up with the text edge. Swift drags the
+     panel by what lies between them (it is told where they are: post 'chrome'). */
   #head { display: flex; align-items: center; height: 22px; }
   #head .ui-mark { flex: none; }
-  #collapse { margin: 0 4px 0 -6px; }
-  #look { margin-left: 8px; }
+  #collapse { margin: 0 -1px 0 -7px; font-size: 9px; }
+  #look { margin-left: 2px; }
   #games { margin-left: 2px; }
   #close { margin: 0 -6px 0 2px; }
-  #title { flex: 1 1 auto; min-width: 0; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #title { flex: 1 1 auto; min-width: 0; display: flex; color: var(--dim); white-space: nowrap; }
+  #title-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #title-tail { flex: none; white-space: pre; }
   #title b { font-weight: bold; }
+  /* The version is the Releases tab: dim like a tab, the accent dot while there are notes not yet opened. */
+  #releases-tab { flex: none; margin: 0 6px 0 8px; }
 
-  /* Row 2: the tabs; the version on the right is the Releases tab. Mono, so bold doesn't move them. */
+  /* Row 2: the tabs, with the whole row for their counts. Mono, so bold doesn't move them. */
   #tabs { display: flex; align-items: center; margin-top: 4px; min-width: 0; }
   #tablist { display: flex; gap: 12px; flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
   .tab { flex: none; padding: 2px 0; color: var(--dim); white-space: nowrap; }
   .tab:hover { color: var(--ink); }
   .tab.on { color: var(--ink); font-weight: bold; }
-  #releases-tab { margin-left: 12px; }
   .new { color: var(--accent); font-weight: normal; }
 
-  /* The strips under the header: one at a time, each under its mark. */
-  .strip { margin-top: 8px; }
+  /* The strips under row 1: one at a time, right under the mark that opens it. */
+  .strip { margin: 8px 0; }
   .strip[hidden] { display: none; }
   .ui-caption { display: block; }
   #look-strip .ui-caption { margin-bottom: 6px; }
   #look-strip .ui-caption.next { margin-top: 12px; }
-  .ui-swatches { gap: 6px; }
-  .ui-swatch { flex: none; }
+  /* The swatches share the row: the last ends where the percentages below end. One row down to
+     the narrowest panel (240): a swatch's two dots need 24px. */
+  #swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(34px, 1fr)); gap: 6px; }
+  #swatches .ui-swatch { width: auto; min-width: 0; }
   .bar-row { display: flex; align-items: center; height: 18px; }
   .bar-row + .bar-row { margin-top: 2px; }
   .bar-row label { flex: none; width: 52px; color: var(--dim); font-size: 11.5px; }
@@ -73,13 +91,15 @@
   .see .knob { position: absolute; top: 4px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--ink); pointer-events: none; }
   .link { display: inline-block; color: var(--blue); cursor: pointer; }
   .link:hover { text-decoration: underline; }
-  #custom { margin-top: 6px; }
+  #custom { align-self: flex-start; margin-top: 6px; }
+  #custom.in-use { font-weight: bold; }
+  #look-strip { display: flex; flex-direction: column; }
+  #look-strip[hidden], #games-strip[hidden] { display: none; }
   #games-strip { display: flex; flex-wrap: wrap; gap: 6px; }
-  #games-strip[hidden] { display: none; }
   #games-strip .ui-chip { font-family: var(--mono); }
   #games-strip .ui-chip.first { margin-right: 6px; }
 
-  .rule { height: 1px; margin: 8px 0; background: var(--rule); }
+  .rule { flex: none; height: 1px; margin: 8px 0; background: var(--rule); }
 
   /* The body: a glyph column, then the text. */
   .row { display: flex; align-items: baseline; }
@@ -98,10 +118,12 @@
   .counts .rest { flex: none; white-space: pre; }
   .ink { color: var(--ink); } .dim { color: var(--dim); } .faint { color: var(--faint); }
   .ok { color: var(--green); } .bad { color: var(--red); } .warn { color: var(--gold); } .acc { color: var(--accent); }
-  .hint { margin-top: 2px; color: var(--faint); font-size: 11.5px; line-height: 1.3; }
+  /* The hint is read, not glanced at: dim (faint is for labels). */
+  .hint { margin-top: 2px; color: var(--dim); font-size: 11.5px; line-height: 1.3; }
   .act { margin-top: 6px; }
 
-  #foot { margin-top: 8px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* A footer sits a little higher, clear of the grip in the corner below its first letters. */
+  #foot { margin: 8px 0 2px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #foot:empty { display: none; }
 
   /* The resize grip, inside the card's bottom-left corner (the panel hangs from the terminal's
@@ -110,31 +132,29 @@
   #grip span { position: absolute; left: 4px; bottom: 3px; font: 10px/10px var(--sans); color: var(--faint); }
 
   .collapsed #tabs, .collapsed .strip, .collapsed .rule, .collapsed #scroll, .collapsed #foot, .collapsed #grip,
-  .collapsed #look, .collapsed #games { display: none; }
+  .collapsed #releases-tab, .collapsed #look, .collapsed #games { display: none; }
 </style>
 </head>
 <body>
 <div id="card">
   <div id="top">
     <header id="head">
-      <button class="ui-mark" id="collapse" title="Collapse">▾</button>
-      <div id="title">Progress</div>
+      <button class="ui-mark" id="collapse" title="Collapse">&#x25BC;</button>
+      <div id="title"><span id="title-main">Progress</span><span id="title-tail"></span></div>
+      <button class="tab" id="releases-tab" title="Releases: what is new in each version"></button>
       <button class="ui-mark" id="look" title="Colour scheme and see-through">◐</button>
-      <button class="ui-mark" id="games" title="Learn and the games">▦</button>
+      <button class="ui-mark" id="games" title="Learn and games">▦</button>
       <button class="ui-mark" id="close" title="Hide until something new">✕</button>
     </header>
-    <nav id="tabs">
-      <div id="tablist"></div>
-      <button class="tab" id="releases-tab" title="Releases: what is new in each version"></button>
-    </nav>
     <section class="strip" id="look-strip" hidden>
-      <span class="ui-caption">Colour scheme</span>
+      <span class="ui-caption" id="scheme-caption">Colour scheme</span>
       <div class="ui-swatches" id="swatches"></div>
       <span class="ui-caption next">See-through</span>
       <div id="bars"></div>
       <div class="link" id="custom" title="Your own background, accent and text colours, in Learn's settings">Custom colours →</div>
     </section>
     <section class="strip" id="games-strip" hidden></section>
+    <nav id="tabs"><div id="tablist"></div></nav>
     <div class="rule"></div>
   </div>
   <main id="scroll"><div id="body"></div></main>
@@ -144,13 +164,21 @@
 <script>
 const post = message => window.webkit?.messageHandlers?.panel?.postMessage(message);
 const T = globalThis.ClaudeTheme;
-const G = { check: '✓', cross: '✗', live: '●', middot: '·', arrow: '→', course: '≡', collapse: '▾', expand: '▸' };
+// The open/closed mark: solid triangles, drawn small (U+FE0E keeps the right one from turning emoji).
+const G = { check: '✓', cross: '✗', live: '●', middot: '·', arrow: '→', course: '≡', collapse: '▼', expand: '▶︎' };
 // Learn and the games, as the panel's games mark lists them (widget/Chrome.ps1 $UI_SIBLINGS).
 const SIBLINGS = [['learn', 'Learn'], ['games/sudoku', 'Sudoku'], ['games/2048', '2048'], ['games/typing', 'Typing'], ['games/chess', 'Chess']];
 const SEE_THROUGH = [['panel', 'Panel'], ['learn', 'Learn'], ['games', 'Games']];
 const MIN_OPACITY = T ? T.MIN_OPACITY : 0.15;
 const BAR_CELLS = 18;
-const RELEASES_SHOWN = 4;
+// The footer says how many more there are; the card stays short.
+const RELEASES_SHOWN = 2;
+const PICKABLE_TABS = ['phases', 'tests', 'learn'];
+// Which tab gives up its count first when the tabs don't fit: a live test count goes last.
+const SHORTEN_ORDER = ['learn', 'phases', 'tests'];
+// The halo round text and lines: from this see-through down, full strength from the second.
+const HALO_FROM = 0.8;
+const HALO_FULL_AT = 0.5;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 let state = null;
@@ -158,9 +186,13 @@ let tab = 'phases';
 let manualTab = null;
 let seenFocus = null;
 let seenPlan = null;
+// Until the first state is drawn: what it holds is where the panel starts, not news, so a tab saved
+// from last time stands.
+let isSeeded = false;
 let collapsed = false;
 let strip = '';
-let appearance = T ? T.parseAppearance(null) : null;
+// The saved appearance, given before the first paint (ClaudePanel.swift injects it), else Ember.
+let appearance = T ? T.parseAppearance(window.__appearance ?? null) : null;
 let presets = T ? T.parsePresets(null) : [];
 // A see-through bar being dragged: the appearance Swift pushes meanwhile waits until it's let go.
 let dragging = null;
@@ -168,6 +200,7 @@ let pending = null;
 let releases = { version: null, list: [] };
 let seenRelease = null;
 let seenBefore = null;
+let hoveredPreset = '';
 let lastHeight = 0;
 let lastChrome = '';
 
@@ -219,8 +252,7 @@ function runLook(run) {
 }
 const buildColor = s => ({ failed: 'bad', 'waiting-picks': 'warn', done: 'ok' })[s] || 'acc';
 
-// Full labels when they fit beside the version; else the tabs not in front drop their counts; else
-// all do; and at the narrowest the names alone.
+// Each tab's label with its count, and without.
 function labels() {
   const plan = hasPlan() ? state.plan : null;
   const list = runs();
@@ -243,20 +275,32 @@ function labels() {
 }
 
 // The tab in front, as the WPF panel picks it: something new (a new test run, a new plan) brings its
-// tab forward and ends the person's pick; otherwise the tab they clicked stays. Releases is only a click.
+// tab forward and ends the person's pick; otherwise the tab they clicked stays, and with no pick the
+// panel shows what there is. Two picks outlast news: the tab saved from last time, against what the
+// first state holds (that is where the panel starts, not news); and Releases, which stays until
+// another tab is clicked. Releases is only ever a click.
 function pickTab() {
   const plan = hasPlan() ? state.plan : null;
   const planTitle = plan ? String(plan.title) : null;
   const list = runs();
   const live = list.filter(run => run.status === 'running');
   let isNewRun = false;
+  let isNewPlan = false;
   const focus = state?.focus ?? null;
   if (focus && focus !== seenFocus) {
-    if (seenFocus !== null || live.length > 0) { tab = 'tests'; manualTab = null; isNewRun = true; }
+    if (seenFocus !== null || live.length > 0) isNewRun = true;
     seenFocus = focus;
   }
-  if (planTitle && planTitle !== seenPlan && !isNewRun) { tab = 'phases'; manualTab = null; }
+  if (planTitle && planTitle !== seenPlan && !isNewRun) isNewPlan = true;
   seenPlan = planTitle;
+  const isPickKept = !!manualTab && (manualTab === 'releases' || !isSeeded);
+  if (!isPickKept && (isNewRun || isNewPlan)) {
+    tab = isNewRun ? 'tests' : 'phases';
+    // The pick is over: the next panel no longer opens on it.
+    if (manualTab) post({ type: 'tab', value: null });
+    manualTab = null;
+  }
+  if (state !== null && state !== undefined) isSeeded = true;
   if (manualTab) { tab = manualTab; return; }
   if (tab === 'releases') tab = 'phases';
   if (!plan && list.length > 0 && tab !== 'learn') tab = 'tests';
@@ -268,14 +312,16 @@ function pickTab() {
 
 const markRow = (glyph, color, text, { cls = '', box = false, top = '' } = {}) =>
   el('div', { class: `row ${top}`.trim() }, el('span', { class: `${box ? 'box' : 'cell'} ${color}` }, glyph), el('div', { class: `text ${cls}`.trim() }, text));
-const empty = (headline, hint) => [el('div', { class: 'dim' }, headline), hint ? el('div', { class: 'hint' }, hint) : null];
+// What a tab says when it has nothing: what it is for (in the text colour), and what fills it.
+const empty = (headline, hint) => [el('div', { class: 'ink' }, headline), hint ? el('div', { class: 'hint' }, hint) : null];
 const counts = (ratio, color, ...rest) => el('div', { class: 'counts sub indent' }, el('span', { class: `bar ${color}` }, bar(ratio)), el('span', { class: 'rest' }, ...rest));
-const learnLink = (text, view) => el('div', { class: 'link act', onclick: () => openPage('learn', view) }, text);
+// A link that opens the Learn window (at a view and a course, when given).
+const learnLink = (text, view, courseId) => el('div', { class: 'link act', onclick: () => openPage('learn', view, courseId) }, text);
 
 function phasesBody(foot) {
   if (!hasPlan()) return empty('No plan yet', 'When Claude plans a task, its phases show here as it works through them.');
   const plan = state.plan;
-  foot.text = `${plan.done} of ${plan.total} done`;
+  foot.nodes = [`${plan.done} of ${plan.total} done`];
   return [
     el('div', { class: 'heading' }, plan.title),
     ...plan.items.map(item => {
@@ -289,9 +335,11 @@ function phasesBody(foot) {
 function testsBody(foot) {
   const list = [...runs()].reverse();
   if (list.length === 0) return empty('No test runs yet', 'Test commands Claude runs show here as they go, with their counts.');
+  // All the runs shown, together; failures first (in red), so a trim takes the least of it.
   const totals = state.totals;
   if (totals && Number(totals.tests) > 0) {
-    foot.text = `${totals.tests} tests in ${totals.runs} run${Number(totals.runs) === 1 ? '' : 's'} ${G.middot} ${totals.passed} passed${Number(totals.failed) > 0 ? ` ${G.middot} ${totals.failed} failed` : ''}`;
+    const rest = `${totals.passed} passed ${G.middot} ${totals.tests} tests in ${totals.runs} run${Number(totals.runs) === 1 ? '' : 's'}`;
+    foot.nodes = Number(totals.failed) > 0 ? [el('span', { class: 'bad' }, `${totals.failed} failed`), ` ${G.middot} ${rest}`] : [rest];
   }
   return list.map((run, i) => {
     const look = runLook(run);
@@ -317,7 +365,9 @@ function learnBody() {
     parts.push(markRow(G.course, 'dim', c.title, { cls: 'strong', top: b ? 'group' : '' }));
     parts.push(el('div', { class: 'sub indent dim' }, `Page ${c.page} of ${c.total}${c.next ? ` ${G.middot} next: ${c.next}` : ''}`));
   }
-  const link = c ? learnLink(`Carry on reading ${G.arrow}`, 'course') : learnLink(`Open Learn ${G.arrow}`, '');
+  // The course this tab names, not whichever Learn had open last.
+  const courseId = c && typeof c.id === 'string' ? c.id : '';
+  const link = c ? learnLink(`Carry on reading ${G.arrow}`, 'course', courseId) : learnLink(`Open Learn ${G.arrow}`, '');
   link.classList.add('indent');
   parts.push(link);
   return parts;
@@ -342,13 +392,17 @@ function releasesBody(foot) {
     for (const note of (release.notes || []).slice(0, 3)) parts.push(el('div', { class: 'row sub indent' }, el('span', { class: 'cell dim' }, G.middot), el('div', { class: 'text' }, note)));
   }
   const noun = list.length === 1 ? 'release' : 'releases';
-  foot.text = shown < list.length ? `Newest ${shown} of ${list.length} ${noun}` : `${list.length} ${noun}`;
+  foot.nodes = [shown < list.length ? `Newest ${shown} of ${list.length} ${noun}` : `${list.length} ${noun}`];
   return parts;
 }
 
-// The collapsed card's one line: a lead (bold, in its colour) and the rest (dim).
+// The collapsed card's one line: a lead (bold, in its colour) and the rest (dim). `keep` when the
+// rest is the count ("· 2/5"): it then follows the lead in a block of its own, which never trims.
 function summary() {
-  const lead = (text, color, rest = '', plain = false) => [el(plain ? 'span' : 'b', { class: color }, text), rest ? el('span', { class: 'dim' }, rest) : null];
+  const lead = (text, color, rest = '', { plain = false, keep = false } = {}) => ({
+    main: [el(plain ? 'span' : 'b', { class: color }, text), rest && !keep ? el('span', { class: 'dim' }, rest) : null],
+    tail: keep ? rest : '',
+  });
   if (tab === 'releases') {
     const first = releases.list[0]?.notes?.[0];
     return lead(releases.version ? `v${releases.version}` : 'Releases', 'ink', first ? ` ${G.middot} ${first}` : '');
@@ -361,17 +415,31 @@ function summary() {
   }
   if (tab === 'tests') {
     const run = runs().at(-1);
-    if (!run) return lead('No test runs yet', 'dim', '', true);
+    if (!run) return lead('No test runs yet', 'dim', '', { plain: true });
     const look = runLook(run);
     return lead(`${look.glyph} ${run.count}`, look.color, ` ${run.label}`);
   }
-  if (!hasPlan()) return lead('No plan yet', 'dim', '', true);
+  if (!hasPlan()) return lead('No plan yet', 'dim', '', { plain: true });
   const plan = state.plan;
   const now = plan.items.find(item => item.status === 'in_progress') || plan.items.find(item => item.status === 'todo');
-  return now ? lead(now.name, 'acc', ` ${G.middot} ${plan.done}/${plan.total}`) : lead('All done', 'ok', ` ${G.middot} ${plan.done}/${plan.total}`);
+  const count = ` ${G.middot} ${plan.done}/${plan.total}`;
+  return now ? lead(now.name, 'acc', count, { keep: true }) : lead('All done', 'ok', count, { keep: true });
 }
 
 // --- The strips -----------------------------------------------------------------------------
+
+// The preset in use, by the test the swatches ring it by; null for colours of the person's own.
+function presetInUse() {
+  if (!appearance) return null;
+  return presets.find(preset => appearance.preset === preset.name && appearance.colors.bg === preset.bg.toUpperCase() && appearance.colors.accent === preset.accent.toUpperCase()) || null;
+}
+
+// "COLOUR SCHEME · EMBER": the one under the mouse, else the one in use, else Custom.
+function showSchemeCaption() {
+  const inUse = presetInUse();
+  const name = hoveredPreset || (inUse ? inUse.label || inUse.name : 'Custom');
+  $('scheme-caption').textContent = `Colour scheme ${G.middot} ${name}`;
+}
 
 // Built once (again only when the presets change), then updated in place: a bar being dragged is
 // never replaced under the pointer.
@@ -382,15 +450,22 @@ function drawLookStrip() {
   const key = JSON.stringify(presets);
   if (key !== builtPresets) {
     builtPresets = key;
+    hoveredPreset = '';
     $('swatches').replaceChildren(...presets.map(preset =>
-      el('button', { class: 'ui-swatch', title: preset.label || preset.name, style: `background:${preset.bg}`, onclick: () => pickPreset(preset) },
-        el('i', { style: `background:${preset.accent}` }), el('i', { style: `background:${preset.text}` }))));
+      el('button', {
+        class: 'ui-swatch', title: preset.label || preset.name, style: `background:${preset.bg}`,
+        onclick: () => pickPreset(preset),
+        onmouseenter: () => { hoveredPreset = preset.label || preset.name; showSchemeCaption(); },
+        onmouseleave: () => { hoveredPreset = ''; showSchemeCaption(); },
+      }, el('i', { style: `background:${preset.accent}` }), el('i', { style: `background:${preset.text}` }))));
   }
-  [...$('swatches').children].forEach((swatch, i) => {
-    const preset = presets[i];
-    const inUse = now.preset === preset.name && now.colors.bg === preset.bg.toUpperCase() && now.colors.accent === preset.accent.toUpperCase();
-    swatch.classList.toggle('on', inUse);
-  });
+  const inUse = presetInUse();
+  [...$('swatches').children].forEach((swatch, i) => swatch.classList.toggle('on', presets[i] === inUse));
+  showSchemeCaption();
+  // The custom link in bold while the colours are the person's own.
+  const custom = $('custom');
+  custom.textContent = inUse ? `Custom colours ${G.arrow}` : `Custom colours (in use) ${G.arrow}`;
+  custom.classList.toggle('in-use', !inUse);
   if (!$('bars').childElementCount) {
     $('bars').replaceChildren(...SEE_THROUGH.map(([group, label]) => {
       const see = el('div', { class: 'see', 'data-key': group, title: group === 'panel' ? 'How see-through the panel is' : `How see-through the ${label} windows are` },
@@ -423,11 +498,30 @@ function setStrip(name) {
   draw();
 }
 
+// The panel wears an appearance: every role, and the halo while the card is clear enough to need it.
+function wear(value) {
+  if (!T) return;
+  T.applyAppearance(value, 'panel');
+  const root = document.documentElement;
+  const opacity = Number(value?.opacity?.panel);
+  const rgb = T.parseHex(value?.colors?.bg);
+  if (!rgb || !Number.isFinite(opacity) || opacity >= HALO_FROM) {
+    root.classList.remove('halo');
+    return;
+  }
+  const strength = Math.min(1, (HALO_FROM - opacity) / (HALO_FROM - HALO_FULL_AT));
+  root.style.setProperty('--halo', `rgba(${rgb.join(', ')}, ${Math.round(strength * 1000) / 1000})`);
+  root.classList.add('halo');
+}
+
+// Only what changed goes to Swift, which lays it over the file: a change another window made in
+// the last moment (⌘] in a game, Learn's settings) is kept.
 function pickPreset(preset) {
   if (!T) return;
-  appearance = { ...appearance, preset: preset.name, colors: { bg: preset.bg.toUpperCase(), accent: preset.accent.toUpperCase(), text: preset.text.toUpperCase() } };
-  T.applyAppearance(appearance, 'panel');
-  post({ type: 'appearance', value: { v: 1, ...appearance } });
+  const colors = { bg: preset.bg.toUpperCase(), accent: preset.accent.toUpperCase(), text: preset.text.toUpperCase() };
+  appearance = { ...appearance, preset: preset.name, colors };
+  wear(appearance);
+  post({ type: 'appearance', value: { preset: preset.name, colors } });
   draw();
 }
 
@@ -441,7 +535,7 @@ function valueAt(see, x) {
 function moveDrag(value) {
   dragging.value = value;
   showBar(dragging.see, value);
-  if (dragging.key === 'panel' && T) T.applyAppearance({ ...appearance, opacity: { ...appearance.opacity, panel: value } }, 'panel');
+  if (dragging.key === 'panel') wear({ ...appearance, opacity: { ...appearance.opacity, panel: value } });
 }
 function startDrag(event) {
   if (event.button !== 0 || !T) return;
@@ -460,8 +554,8 @@ function startDrag(event) {
     const base = pending ? T.parseAppearance(pending) : appearance;
     pending = null;
     appearance = { ...base, opacity: { ...base.opacity, [key]: value } };
-    T.applyAppearance(appearance, 'panel');
-    post({ type: 'appearance', value: { v: 1, ...appearance } });
+    wear(appearance);
+    post({ type: 'appearance', value: { opacity: { [key]: value } } });
     draw();
   };
   see.addEventListener('pointermove', move);
@@ -469,15 +563,18 @@ function startDrag(event) {
   see.addEventListener('pointercancel', end);
 }
 
-function openPage(page, view, course) {
+function openPage(page, view, courseId) {
   const message = { type: 'open', page };
   if (view) message.view = view;
-  if (course) message.course = course;
+  if (courseId) message.course = courseId;
   post(message);
 }
 
 // --- Drawing --------------------------------------------------------------------------------
 
+// A tab click: that tab stays in front until something new comes (see pickTab), and the next panel
+// opens on it (Swift keeps it; Releases is a look, never reopened). Opening Releases marks its
+// newest version seen.
 function selectTab(name) {
   if (name === 'releases' && tab !== 'releases') {
     seenBefore = seenRelease;
@@ -488,24 +585,29 @@ function selectTab(name) {
     }
   }
   tab = manualTab = name;
+  post({ type: 'tab', value: name });
   draw();
 }
 
-function drawTabs() {
-  // The version first: the tabs fit in what it leaves.
+// The version (row 1), with the new mark while there are notes the person has not opened.
+function drawVersion() {
   const release = $('releases-tab');
   release.className = `tab${tab === 'releases' ? ' on' : ''}`;
   release.replaceChildren(releases.version ? `v${releases.version}` : 'Releases', isReleaseUnseen() ? el('span', { class: 'new' }, ` ${G.live}`) : '');
   release.hidden = !releases.version && releases.list.length === 0;
+}
+
+// Full labels when they fit the row. Else the tabs not in front give up their counts one at a time
+// (SHORTEN_ORDER: the live test count last) until they fit; the tab in front gives up its own last.
+function drawTabs() {
   const { full, short } = labels();
+  const order = SHORTEN_ORDER.filter(name => name !== tab);
+  if (PICKABLE_TABS.includes(tab)) order.push(tab);
   const list = $('tablist');
-  const make = level => list.replaceChildren(...['phases', 'tests', 'learn'].map(name => {
-    const bare = { phases: 'Phases', tests: 'Tests', learn: 'Learn' };
-    const text = level === 3 ? bare[name] : level === 0 || (level === 1 && name === tab) ? full[name] : short[name];
-    return el('button', { class: `tab${name === tab ? ' on' : ''}`, onclick: () => selectTab(name) }, text);
-  }));
-  for (const level of [0, 1, 2, 3]) {
-    make(level);
+  for (let step = 0; step <= order.length; step++) {
+    const shortened = order.slice(0, step);
+    list.replaceChildren(...PICKABLE_TABS.map(name =>
+      el('button', { class: `tab${name === tab ? ' on' : ''}`, onclick: () => selectTab(name) }, shortened.includes(name) ? short[name] : full[name])));
     if (list.scrollWidth <= list.clientWidth + 0.5) break;
   }
 }
@@ -515,25 +617,36 @@ function draw() {
   const toggle = $('collapse');
   toggle.textContent = collapsed ? G.expand : G.collapse;
   toggle.title = collapsed ? 'Expand' : 'Collapse';
-  $('title').replaceChildren(...(collapsed ? summary().filter(Boolean) : ['Progress']));
+  if (collapsed) {
+    const line = summary();
+    $('title-main').replaceChildren(...line.main.filter(Boolean));
+    $('title-tail').textContent = line.tail;
+  } else {
+    $('title-main').textContent = 'Progress';
+    $('title-tail').textContent = '';
+  }
   $('look').classList.toggle('on', strip === 'look');
   $('games').classList.toggle('on', strip === 'games');
   $('look-strip').hidden = collapsed || strip !== 'look';
   $('games-strip').hidden = collapsed || strip !== 'games';
   if (!collapsed) {
+    drawVersion();
     drawTabs();
     if (strip === 'look') drawLookStrip();
     if (strip === 'games') drawGamesStrip();
-    const foot = { text: '' };
+    const foot = { nodes: [] };
     const parts = tab === 'tests' ? testsBody(foot) : tab === 'learn' ? learnBody() : tab === 'releases' ? releasesBody(foot) : phasesBody(foot);
     $('body').replaceChildren(...parts.filter(Boolean));
-    $('foot').textContent = foot.text;
+    if (foot.nodes.length) $('foot').replaceChildren(...foot.nodes);
+    else $('foot').textContent = '';
   }
   requestAnimationFrame(report);
 }
 
 // The content's own height (what scrolls included): the window fits it unless sized. And where the
-// marks and the grip are, so Swift's drag strip and grip view sit exactly on them.
+// marks and the grip are, so Swift's drag strip and grip view sit exactly on them. The strip covers
+// what lies between the open/closed mark and the first thing that takes a click on the right (the
+// version, else the marks); collapsed, the whole bar's height, so all of it drags.
 function report() {
   const card = $('card');
   const scroll = $('scroll');
@@ -545,11 +658,11 @@ function report() {
   }
   const head = $('head').getBoundingClientRect();
   const lead = $('collapse').getBoundingClientRect();
-  const marks = ['look', 'games', 'close'].map($).filter(mark => getComputedStyle(mark).display !== 'none');
+  const marks = ['releases-tab', 'look', 'games', 'close'].map($).filter(mark => !mark.hidden && getComputedStyle(mark).display !== 'none');
   const firstMark = marks.length ? marks[0].getBoundingClientRect().left : window.innerWidth;
   const chrome = {
     type: 'chrome',
-    header: Math.ceil(head.bottom),
+    header: Math.ceil(collapsed ? card.getBoundingClientRect().bottom : head.bottom),
     left: Math.ceil(lead.right),
     icons: Math.ceil(window.innerWidth - firstMark),
     grip: collapsed ? 0 : $('grip').offsetWidth,
@@ -588,7 +701,7 @@ window.setAppearance = value => {
   if (value && Array.isArray(value.presets)) presets = T.parsePresets({ presets: value.presets });
   if (dragging) { pending = value; return; }
   appearance = T.parseAppearance(value);
-  T.applyAppearance(appearance, 'panel');
+  wear(appearance);
   draw();
 };
 window.setPresets = list => {
@@ -603,6 +716,13 @@ window.setReleases = value => {
   if (typeof value?.seen === 'string' && value.seen) seenRelease = seenBefore = value.seen;
   draw();
 };
+// What the person left the last panel as, given once before the first state: {tab (one of the
+// pickable tabs, or null), collapsed}. Swift already knows it is collapsed: nothing is posted.
+window.setPrefs = value => {
+  if (PICKABLE_TABS.includes(value?.tab) && !isSeeded) tab = manualTab = value.tab;
+  if (value?.collapsed) { collapsed = true; strip = ''; }
+  draw();
+};
 window.selectTab = selectTab;
 window.setStrip = setStrip;
 
@@ -612,7 +732,7 @@ $('games').addEventListener('click', () => setStrip(strip === 'games' ? '' : 'ga
 $('collapse').addEventListener('click', () => window.toggleCollapsed());
 $('releases-tab').addEventListener('click', () => selectTab('releases'));
 $('custom').addEventListener('click', () => { setStrip(''); openPage('learn', 'settings'); });
-if (T) T.applyAppearance(appearance, 'panel');
+wear(appearance);
 draw();
 post({ type: 'loaded' });
 </script>

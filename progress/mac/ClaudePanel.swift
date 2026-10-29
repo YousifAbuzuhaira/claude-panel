@@ -159,11 +159,24 @@ func runningWindow(_ id: String, port: Int?) -> NSRunningApplication? {
     return app
 }
 
+/// The window id of one of the server's pages, from its path (as web/server.mjs `windowId` names
+/// them): /learn/ is 'learn', /games/ 'games', /games/2048/ 'games-2048'. Nil for any other path.
+func pageId(_ path: String) -> String? {
+    let parts = path.split(separator: "/").map { String($0) }
+    guard let first = parts.first else { return nil }
+    if first == "learn" { return "learn" }
+    guard first == "games" else { return nil }
+    if parts.count > 1, parts[1].range(of: "^[a-z0-9]+$", options: .regularExpression) != nil { return "games-\(parts[1])" }
+    return "games"
+}
+
 /// A Learn or game window that can float over a full-screen terminal: a panel that takes the
 /// keyboard without bringing this app forward (so the terminal's Space stays). The menu bar
 /// isn't this app's then, so its shortcuts are handled here.
 final class FloatingWindow: NSPanel {
     var onOpacity: ((CGFloat) -> Void)?
+    var onReload: (() -> Void)?
+    var onToggleFloat: (() -> Void)?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
@@ -179,6 +192,9 @@ final class FloatingWindow: NSPanel {
         case "z": action = shift ? Selector(("redo:")) : Selector(("undo:"))
         case "[": onOpacity?(-0.1); return true
         case "]": onOpacity?(0.1); return true
+        // The Window menu's Reload and Always on Top.
+        case "r" where !shift: onReload?(); return true
+        case "t" where shift: onToggleFloat?(); return true
         case "w": performClose(nil); return true
         case "q": NSApp.terminate(nil); return true
         default: action = nil
@@ -220,15 +236,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var isPlacing = false
     let pin = SpacePin()
     var isAlwaysOnTop = false
+    var floatItem: NSMenuItem?
     /// The window's title follows the page's <title> as the person moves between pages.
     var titleWatch: NSKeyValueObservation?
+    /// The page whose pid file (and deep-link mailbox) this window holds: its launch page, then
+    /// whichever page the person moves to in it (Learn's ▦ leads to the games), so `/games 2048`
+    /// finds a Learn window that now shows 2048. Nil while another window holds the page it shows.
+    var claimedId: String?
+    var urlWatch: NSKeyValueObservation?
+    /// The title bar's height, measured at launch: the error page leaves this much room at the top.
+    var titleBarHeight: CGFloat = 28
 
     init(options: Options) {
         self.options = options
     }
 
-    /// Which see-through this window takes from appearance.json: Learn's, or the games' (the hub included).
-    var opacityGroup: String { options.id == "learn" ? "learn" : "games" }
+    /// Which of the server's pages this window shows now, by its window id; nil for anything else
+    /// (the error page, a blank page before the first load).
+    func serverPageId(_ url: URL?) -> String? {
+        guard let url, let start = options.url, url.host == start.host, url.port == start.port else { return nil }
+        return pageId(url.path)
+    }
+
+    /// Which see-through this window takes from appearance.json: Learn's, or the games' (the hub
+    /// included), by the page it shows now, not the one it opened on.
+    var opacityGroup: String {
+        let shown = serverPageId(webView?.url) ?? claimedId ?? options.id
+        return shown.hasPrefix("games") ? "games" : "learn"
+    }
+
+    /// `<pid> <port>` in a page's pid file: web/server.mjs and a second launch read it.
+    func writePid(_ id: String) {
+        try? "\(getpid()) \(options.url?.port ?? 0)".write(to: pidFile(id), atomically: true, encoding: .utf8)
+    }
+
+    /// Removes a page's pid file, only while it is still this window's.
+    func releasePid(_ id: String) {
+        let file = pidFile(id)
+        guard let text = try? String(contentsOf: file, encoding: .utf8),
+              text.split(separator: " ").first.map({ String($0) }) == String(getpid()) else { return }
+        try? FileManager.default.removeItem(at: file)
+    }
+
+    /// After the page changed: this window now answers for the page it shows, unless another live
+    /// window already does.
+    func followShownPage() {
+        guard let id = serverPageId(webView.url), id != claimedId else { return }
+        if let held = claimedId { releasePid(held) }
+        claimedId = nil
+        if runningWindow(id, port: options.url?.port) == nil {
+            writePid(id)
+            claimedId = id
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
@@ -238,6 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let probe = NSRect(x: 0, y: 0, width: 400, height: 300)
         let measured = NSWindow.frameRect(forContentRect: probe, styleMask: [.titled, .closable]).height - probe.height
         let titleBar = measured >= 16 && measured <= 60 ? measured : 28
+        titleBarHeight = titleBar
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         let native = "document.documentElement.classList.add('native');document.documentElement.style.setProperty('--titlebar','\(Int(titleBar.rounded()))px');"
@@ -247,7 +308,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         webView.uiDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
 
-        let size = options.id == "learn" ? NSSize(width: 1280, height: 860) : NSSize(width: 980, height: 820)
+        // Learn reads wide; the games hub is a short list; a game fits its board.
+        let size = options.id == "learn" ? NSSize(width: 1280, height: 860)
+            : options.id == "games" ? NSSize(width: 560, height: 460) : NSSize(width: 980, height: 820)
         if tracker.isKnown {
             // Stuck to the terminal: a floating panel on every Space, full-screen ones included.
             let floating = FloatingWindow(
@@ -259,6 +322,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             floating.becomesKeyOnlyIfNeeded = false
             floating.collectionBehavior = [.fullScreenAuxiliary]
             floating.onOpacity = { [weak self] step in self?.changeOpacity(step) }
+            floating.onReload = { [weak self] in self?.reloadPage(nil) }
+            floating.onToggleFloat = { [weak self] in self?.toggleFloat(nil) }
             window = floating
         } else {
             window = NSWindow(
@@ -274,6 +339,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.backgroundColor = .clear
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        // This app is seldom the active one (stuck to the terminal it never is): without this, no
+        // tooltip shows, the pages' title attributes included.
+        window.allowsToolTipsWhenApplicationIsInactive = true
 
         let content = NSView(frame: NSRect(origin: .zero, size: size))
         webView.frame = content.bounds
@@ -291,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             guard let self = self, let title = view.title, !title.isEmpty else { return }
             self.window.title = title
         }
+        urlWatch = webView.observe(\.url, options: [.new]) { [weak self] _, _ in self?.followShownPage() }
         let defaults = UserDefaults.standard
         let saved = NSSize(width: defaults.double(forKey: "window.\(options.id).width"), height: defaults.double(forKey: "window.\(options.id).height"))
         if saved.width >= 320 && saved.height >= 240 { window.setContentSize(saved) }
@@ -307,18 +376,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.follow(force: false) }
         }
 
+        writePid(options.id)
+        claimedId = options.id
         if let url = options.url { webView.load(URLRequest(url: url)) }
-        try? "\(getpid()) \(options.url?.port ?? 0)".write(to: pidFile(options.id), atomically: true, encoding: .utf8)
         // A deep link while this window is open (`web.sh open learn --view settings`): the server
-        // writes the path to <id>.open beside the pid file. Load it on this page's own origin,
-        // where the page keeps its token for the session.
-        let mailbox = pidFile(options.id).deletingPathExtension().appendingPathExtension("open")
+        // writes the path to <id>.open beside the pid file of the page this window holds. Load it
+        // on the server's own origin (never the address shown now, which may be the error page),
+        // where the page keeps its token for the session. One left from an earlier window goes first.
+        try? FileManager.default.removeItem(at: pidFile(options.id).deletingPathExtension().appendingPathExtension("open"))
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self, let text = try? String(contentsOf: mailbox, encoding: .utf8) else { return }
+            guard let self, let id = self.claimedId, let start = self.options.url else { return }
+            let mailbox = pidFile(id).deletingPathExtension().appendingPathExtension("open")
+            guard let text = try? String(contentsOf: mailbox, encoding: .utf8) else { return }
             try? FileManager.default.removeItem(at: mailbox)
             let path = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard path.hasPrefix("/"), !path.hasPrefix("//"), let base = self.webView.url,
-                  let target = URL(string: path, relativeTo: base) else { return }
+            guard path.hasPrefix("/"), !path.hasPrefix("//"),
+                  let target = URL(string: path, relativeTo: start)?.absoluteURL else { return }
             self.webView.load(URLRequest(url: target))
         }
         // A free-standing window comes forward; one stuck to the terminal leaves it in front.
@@ -371,7 +444,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        try? FileManager.default.removeItem(at: pidFile(options.id))
+        if let id = claimedId { releasePid(id) }
     }
 
     // The page's own server stays in the window; anything else (YouTube, docs, lichess) opens in the browser.
@@ -415,21 +488,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        // A load that another one replaced (a deep link while the page was loading) is no failure.
+        let failure = error as NSError
+        if failure.domain == NSURLErrorDomain && failure.code == NSURLErrorCancelled { return }
+        if failure.domain == "WebKitErrorDomain" && failure.code == 102 { return }
         showProblem(error.localizedDescription)
     }
 
+    /// The page that couldn't load, in the colour scheme every window wears (appearance.json,
+    /// checked: only #RRGGBB colours reach the page), named as this window is.
     func showProblem(_ text: String) {
-        let escaped = text.replacingOccurrences(of: "<", with: "&lt;")
-        webView.loadHTMLString(
-            "<body style='font:14px -apple-system;color:#ccc;background:#141519;padding:40px'><h3>Couldn't reach Learn's server</h3><p>\(escaped)</p><p>Run /learn again in Claude Code.</p></body>",
-            baseURL: nil)
+        let escape = { (raw: String) -> String in
+            raw.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+        }
+        let look = cleanAppearance(readAppearance() ?? [:], over: nil)
+        let colors = (look["colors"] as? [String: String]) ?? [:]
+        let bg = colors["bg"] ?? "#1C1D20"
+        let ink = colors["text"] ?? "#E8E6E3"
+        let command = options.id == "learn" ? "/learn" : "/games"
+        let top = Int(titleBarHeight.rounded()) + 24
+        let html = "<!doctype html><meta charset='utf-8'><body style='margin:0;padding:\(top)px 40px 40px;font:14px -apple-system,sans-serif;color:\(ink);background:\(bg)'>"
+            + "<h3>Couldn't reach the \(escape(options.title)) page</h3><p style='opacity:.7'>\(escape(text))</p>"
+            + "<p style='opacity:.7'>Run \(command) again in Claude Code.</p></body>"
+        webView.loadHTMLString(html, baseURL: nil)
     }
 
     // Above everything, even other apps (it already floats above the terminal while that is in front).
-    @objc func toggleFloat(_ sender: NSMenuItem) {
+    @objc func toggleFloat(_ sender: Any?) {
         isAlwaysOnTop.toggle()
         window.level = isAlwaysOnTop || tracker.isFront() ? .floating : .normal
-        sender.state = isAlwaysOnTop ? .on : .off
+        floatItem?.state = isAlwaysOnTop ? .on : .off
     }
 
     @objc func reloadPage(_ sender: Any?) { webView.reload() }
@@ -484,10 +572,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let float = NSMenuItem(title: "Always on Top", action: #selector(toggleFloat(_:)), keyEquivalent: "t")
         float.keyEquivalentModifierMask = [.command, .shift]
         windowMenu.addItem(float)
+        floatItem = float
         windowMenu.addItem(withTitle: "More See-through", action: #selector(moreTransparent(_:)), keyEquivalent: "[")
         windowMenu.addItem(withTitle: "Less See-through", action: #selector(lessTransparent(_:)), keyEquivalent: "]")
         windowMenu.addItem(.separator())
-        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        // A window stuck to the terminal hides with it instead, and has no minimize button.
+        if !tracker.isKnown {
+            windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        }
         windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         windowItem.submenu = windowMenu
         main.addItem(windowItem)
@@ -769,6 +861,11 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
         signal(SIGPIPE, SIG_IGN)
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "panel")
+        // The saved colours before the page's first paint, so a Paper panel never shows Ember first.
+        // Only checked fields (a preset name of letters, #RRGGBB colours, numbers), as JSON: data.
+        let firstLook = readAppearance().map { cleanAppearance($0, over: nil) }
+        let firstJSON = firstLook.flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "null"
+        config.userContentController.addUserScript(WKUserScript(source: "window.__appearance = \(firstJSON);", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         webView = FirstClickWebView(frame: NSRect(x: 0, y: 0, width: width, height: height), configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         webView.autoresizingMask = [.width, .height]
@@ -789,6 +886,9 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
         panel.delegate = self
         // Never faded as a whole: the page's card fill carries the panel's see-through (appearance.json).
         panel.alphaValue = 1
+        // This app is never the active one (an accessory, a panel that doesn't activate): without
+        // this no tooltip shows, and the marks' meanings live in theirs.
+        panel.allowsToolTipsWhenApplicationIsInactive = true
 
         let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         content.addSubview(webView)
@@ -802,6 +902,8 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
         grip.onResize = { [weak self] dx, dy in self?.resize(dx: dx, dy: dy) }
         grip.onEnd = { [weak self] in self?.keepSize() }
         grip.onReset = { [weak self] in self?.resetSize() }
+        // The page's own grip lies under this view, so its title never shows: this is its tooltip.
+        grip.toolTip = "Drag to resize; double-click to fit"
         content.addSubview(grip)
         panel.contentView = content
         layoutChrome()
@@ -829,6 +931,7 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
             pushPresets()
             pushAppearance(force: true)
             pushReleases()
+            pushPrefs()
             readState()
             place(force: true)
             sendEvent("ready")
@@ -844,7 +947,16 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
             layoutChrome()
         case "collapsed":
             isCollapsed = body["value"] as? Bool ?? false
+            UserDefaults.standard.set(isCollapsed, forKey: "panel.collapsed")
             place(force: true)
+        case "tab":
+            // A tab the person clicked: the next panel opens on it (pushPrefs leaves Releases out).
+            // Null when something new ended that pick.
+            if let name = body["value"] as? String, ["phases", "tests", "learn", "releases"].contains(name) {
+                UserDefaults.standard.set(name, forKey: "panel.tab")
+            } else if body["value"] is NSNull {
+                UserDefaults.standard.removeObject(forKey: "panel.tab")
+            }
         case "open":
             // A Learn view ("settings" from Custom colours, "course" from Carry on reading) or a game.
             if let page = body["page"] as? String { openPage(page, view: body["view"] as? String, course: body["course"] as? String) }
@@ -911,6 +1023,18 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
         if let version = readJSONObject(base.appendingPathComponent(".claude-plugin/plugin.json"))?["version"] as? String { value["version"] = version }
         if let seen = UserDefaults.standard.string(forKey: "panel.seenRelease") { value["seen"] = seen }
         webView.callAsyncJavaScript("window.setReleases(r)", arguments: ["r": value], in: nil, in: .page, completionHandler: nil)
+    }
+
+    /// What the person left the last panel as, as the WPF panel keeps it: the tab they picked
+    /// (Releases is a look, not a place to come back to) and whether it was collapsed. Given
+    /// before the first state, so the saved tab stands against what that state holds.
+    func pushPrefs() {
+        let defaults = UserDefaults.standard
+        let savedTab = defaults.string(forKey: "panel.tab") ?? ""
+        isCollapsed = defaults.bool(forKey: "panel.collapsed")
+        var prefs: [String: Any] = ["tab": NSNull(), "collapsed": isCollapsed]
+        if ["phases", "tests", "learn"].contains(savedTab) { prefs["tab"] = savedTab }
+        webView.callAsyncJavaScript("window.setPrefs(p)", arguments: ["p": prefs], in: nil, in: .page, completionHandler: nil)
     }
 
     /// The drag strip over the header between its marks, and the grip view over the page's grip.
