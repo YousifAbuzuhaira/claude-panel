@@ -74,7 +74,7 @@ html.native { --titlebar: 28px; }
 
 /* Buttons: primary (accent), secondary (a surface), plain (text). */
 .ui-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 28px; box-sizing: border-box;
   padding: 4px 12px 5px; border: 0; border-radius: var(--radius);
   background: var(--button); color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap;
 }

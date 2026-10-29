@@ -65,8 +65,14 @@ views_of() {
       echo "demo|Sudoku.ps1 -SnapshotDemo"
       echo "demo4|Sudoku.ps1 -SnapshotDemo -Size 4 -Seed 7"
       echo "demo6|Sudoku.ps1 -SnapshotDemo -Size 6 -Seed 7"
+      echo "switcher|Sudoku.ps1 -SnapshotSwitcher -Seed 3"
       ;;
-    2048) echo "demo|Game2048.ps1 -SnapshotDemo" ;;
+    2048)
+      echo "demo|Game2048.ps1 -SnapshotDemo"
+      echo "switcher|Game2048.ps1 -SnapshotSwitcher -Seed 3"
+      echo "win|Game2048.ps1 -SnapshotLook win"
+      echo "over|Game2048.ps1 -SnapshotLook over"
+      ;;
     typing)
       for view in typing result themes; do echo "$view|TypeTest.ps1 -SnapshotView $view"; done
       echo "monkeytype|TypeTest.ps1 -SnapshotView typing -SnapshotTheme serika_dark"

@@ -18,8 +18,8 @@ $UI_GLYPHS = @{
   close = [string][char]0x2715
   games = [string][char]0x25A6
   look = [string][char]0x25D0
-  collapse = [string][char]0x25BE
-  expand = [string][char]0x25B8
+  collapse = [string][char]0x25BC
+  expand = [string][char]0x25B6
   gripLeft = [string][char]0x25E3
   gripRight = [string][char]0x25E2
   dot = [string][char]0x25CF
@@ -262,10 +262,10 @@ function New-UiGrip([string]$Corner = 'right') {
   $grip.FontSize = 10
   $grip.FontFamily = $UI_SANS
   $grip.VerticalAlignment = 'Bottom'
-  $grip.Foreground = Get-UiBrush 'faint'
+  $grip.Foreground = Get-UiBrush 'dim'
   $grip.ToolTip = 'Drag to resize'
-  $grip.Add_MouseEnter({ param($sender, $e) $sender.Foreground = Get-UiBrush 'dim' })
-  $grip.Add_MouseLeave({ param($sender, $e) $sender.Foreground = Get-UiBrush 'faint' })
+  $grip.Add_MouseEnter({ param($sender, $e) $sender.Foreground = Get-UiBrush 'ink' })
+  $grip.Add_MouseLeave({ param($sender, $e) $sender.Foreground = Get-UiBrush 'dim' })
   return $grip
 }
 
@@ -449,6 +449,53 @@ function Update-UiOpacityRow($Row) {
   if ($bar.IsMouseCaptured) { return }
   $bar.Tag.value = $script:THEME.appearance.opacity[$bar.Tag.key]
   Update-UiOpacityBar $bar
+}
+
+# --- Legible at low see-through ---------------------------------------------------------------
+
+# At a low see-through whatever is behind a window can be as bright as its text (a dark scheme
+# over a light window, or the other way round), and secondary text vanishes into it. So below
+# $UI_HALO_BELOW the text gets a halo in the card's own colour, solid: a tight one that edges
+# every letter, and over it a soft one that quiets what shows through around the text. The
+# background still fades; the text stands off what is behind it. Wrap each part with text in
+# New-UiHaloFrame where it would be added (never a part that animates, such as a board), and call
+# Update-UiHalo after Initialize-Theme and whenever Update-Theme returns $true.
+$UI_HALO_BELOW = 0.85
+
+function New-UiHaloEffect([double]$Radius) {
+  $effect = New-Object System.Windows.Media.Effects.DropShadowEffect
+  $effect.ShadowDepth = 0
+  $effect.BlurRadius = $Radius
+  $effect.Opacity = 1
+  return $effect
+}
+$UI_HALO_EDGE = New-UiHaloEffect 3
+$UI_HALO_SOFT = New-UiHaloEffect 6
+$script:uiHaloHosts = New-Object System.Collections.Generic.List[object]
+
+# A frame for an element with text: build the element, then add the frame where it would go.
+# The frame takes the element's alignment, so it is only as big as what it holds.
+function New-UiHaloFrame($Element) {
+  $frame = New-Object System.Windows.Controls.Border
+  $frame.HorizontalAlignment = $Element.HorizontalAlignment
+  $frame.VerticalAlignment = $Element.VerticalAlignment
+  $frame.IsHitTestVisible = $Element.IsHitTestVisible
+  $frame.Child = $Element
+  $script:uiHaloHosts.Add(@{ edge = $Element; soft = $frame })
+  return $frame
+}
+
+function Update-UiHalo {
+  $fill = $script:THEME.brushes.cardFill.Color
+  $solid = [System.Windows.Media.Color]::FromRgb($fill.R, $fill.G, $fill.B)
+  $UI_HALO_EDGE.Color = $solid
+  $UI_HALO_SOFT.Color = $solid
+  $isOn = [double]$script:THEME.appearance.opacity[$script:THEME.group] -lt $UI_HALO_BELOW
+  foreach ($pair in $script:uiHaloHosts) {
+    if ($isOn) { $edge = $UI_HALO_EDGE; $soft = $UI_HALO_SOFT } else { $edge = $null; $soft = $null }
+    if ($pair.edge.Effect -ne $edge) { $pair.edge.Effect = $edge }
+    if ($pair.soft.Effect -ne $soft) { $pair.soft.Effect = $soft }
+  }
 }
 
 # --- Opening one window from another --------------------------------------------------------------

@@ -25,14 +25,15 @@ export async function loadAppearance() {
   }
 }
 
-/** Saves the appearance for every window; other pages and windows follow within seconds. */
+/** Saves the appearance for every window (throws if the server refuses); others follow within seconds. */
 export async function saveAppearance(appearance) {
   const value = T().parseAppearance(appearance);
-  await fetch('/api/appearance', {
+  const response = await fetch('/api/appearance', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Learn-Token': token },
     body: JSON.stringify({ v: 1, ...value }),
   });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   lastText = JSON.stringify(value);
   return value;
 }
