@@ -240,6 +240,7 @@ function Initialize-Theme([string]$Group) {
     stamp = Get-AppearanceStamp
     checkedAt = [Environment]::TickCount
     tints = New-Object System.Collections.Generic.List[object]
+    resourceHosts = New-Object System.Collections.Generic.List[object]
   }
   return $brushes
 }
@@ -275,6 +276,7 @@ function Set-ThemeAppearance($Appearance) {
   $script:THEME.appearance = $Appearance
   $script:THEME.palette = $palette
   foreach ($tint in $script:THEME.tints) { $tint.brush.Color = Get-ThemeTintColor $tint }
+  foreach ($resourceHost in $script:THEME.resourceHosts) { Set-ThemeResourceBrushes $resourceHost }
 }
 
 # Call from the window's timer. At most once a second it looks at the file's stamp; when the file
@@ -348,7 +350,19 @@ $THEME_RESOURCES_XAML = @'
 </ResourceDictionary>
 '@
 
+# The styles find their colours by name ('Theme.<role>'). Each name gets a brush of its own,
+# never the live role brush: WPF freezes a brush that a style or template resolves, and a
+# PowerShell-made object must be unwrapped before a ResourceDictionary holds it. A change of
+# scheme replaces the brushes, which is what moves a DynamicResource.
+function Set-ThemeResourceBrushes($Element) {
+  foreach ($role in $THEME_ROLES) {
+    $color = ConvertTo-ThemeMediaColor $script:THEME.palette[$role]
+    $Element.Resources['Theme.' + $role] = [System.Windows.Media.Brush]([System.Windows.Media.SolidColorBrush]::new($color))
+  }
+}
+
 function Add-ThemeResources($Element) {
-  foreach ($role in $THEME_ROLES) { $Element.Resources['Theme.' + $role] = $script:THEME.brushes[$role] }
+  $script:THEME.resourceHosts.Add($Element)
+  Set-ThemeResourceBrushes $Element
   $Element.Resources.MergedDictionaries.Add([System.Windows.Markup.XamlReader]::Parse($THEME_RESOURCES_XAML))
 }
