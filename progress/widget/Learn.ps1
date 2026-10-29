@@ -30,7 +30,7 @@ param(
   [string]$SnapshotConfig = '',
   [string]$SnapshotCourse = '',
   [int]$SnapshotPage = 1,
-  # A snapshot at another size than the default (to check the 900x560 minimum, say).
+  # A snapshot at another size than the default (to check the 960x560 minimum, say).
   [int]$SnapshotWidth = 0,
   [int]$SnapshotHeight = 0,
   # A snapshot with the row of other windows open under the header, as the games mark opens it.
@@ -116,15 +116,14 @@ $GLYPH_PLAY = [string][char]0x25B6
 $GLYPH_LINK = [string][char]0x2197
 $GLYPH_LEFT = [string][char]0x2190
 $GLYPH_RIGHT = [string][char]0x2192
-$GLYPH_BOX = [string][char]0x2610
-$GLYPH_TICKED = [string][char]0x2611
 $GLYPH_SKIP = [string][char]0x2298
 $GLYPH_DASH = [string][char]0x2014
 $GLYPH_ELLIPSIS = [string][char]0x2026
 $GLYPH_PENDING = [string][char]0x25CC
 $GLYPH_UP = [string][char]0x2191
 $GLYPH_DOWN = [string][char]0x2193
-$MIN_WIDTH = 900
+# At 960 the course view's page keeps its 420 with the contents and the chat at their narrowest.
+$MIN_WIDTH = 960
 $MIN_HEIGHT = 560
 $DEFAULT_WIDTH = 1180
 $DEFAULT_HEIGHT = 780
@@ -141,9 +140,18 @@ $VIEW_TIPS = @{
   ask = 'Ask what to learn next  (Ctrl+4)'
   settings = 'Settings and colours  (Ctrl+5)'
 }
-# How wide the views can get on a wide window, and the lesson page's reading width.
+# How wide the views can get on a wide window (they start on the header's left edge; the rest is
+# left over on the right), and the lesson page's reading width in ems of the text size, so a line
+# keeps about 75 characters at any text size.
 $CONTENT_MAX = 980
-$READING_MAX = 740
+$READING_EMS = 38
+# A chat message's inset from its column: your box's padding, and the same for Claude's text.
+$MESSAGE_INSET = 8
+# Under this see-through, Settings says text can get hard to read over what shows through.
+$SEE_THROUGH_LOW = 0.6
+# The thin scrollbar's own width. Lists keep this lane for it whether they scroll or not, beside
+# their rows' hover fill, so nothing moves when a bar comes or goes.
+$SCROLL_LANE = 9
 $CONTENTS_WIDTH = 250
 $CHAT_WIDTH = 360
 # On a narrow window the page keeps at least this much: the chat gives up to 60 first, then the
@@ -467,6 +475,20 @@ foreach ($name in $VIEW_NAMES) {
   [void]$body.Children.Add($viewHost)
 }
 
+# Library, Learned, Ask and Settings start on the header's left edge, as the Course view does, and
+# are no wider than $CONTENT_MAX: what a wide window has left over is the host's right padding.
+# (A view stretched to a MaxWidth would be centred, and its left edge would move with the width.)
+function Update-ViewColumns([double]$Width) {
+  $spare = [Math]::Max(0.0, $Width - [double]$CONTENT_MAX)
+  foreach ($name in @('library', 'learned', 'ask', 'settings')) {
+    $viewHost = $script:viewHosts[$name]
+    if ($viewHost.Padding.Right -ne $spare) { $viewHost.Padding = New-Gap 0 0 $spare 0 }
+  }
+}
+# The card's border (1) and the frame's margin (16) on each side.
+Update-ViewColumns ($script:width - 34)
+$body.Add_SizeChanged({ param($sender, $e) try { Update-ViewColumns ([double]$sender.ActualWidth) } catch { Write-Failure $_ } })
+
 # The resize grip, in the card's own bottom-right corner (not inside its padding).
 $grip = New-UiGrip 'right'
 $grip.FontSize = 11
@@ -694,13 +716,8 @@ $gamesMark.Add_MouseLeftButtonUp({
   $e.Handled = $true
   Set-SwitcherShown ($switcher.Visibility -ne 'Visible')
 })
-# The row's last chip ends on the close mark's right edge.
-if ($switcher.Children.Count -gt 0) { $switcher.Children[$switcher.Children.Count - 1].Margin = New-Gap 0 0 0 0 }
-# (The chip's own handler marks the click handled, so this one asks to hear handled ones too.)
-$CLOSE_SWITCHER = [System.Windows.Input.MouseButtonEventHandler]{ param($sender, $e) try { Set-SwitcherShown $false } catch { Write-Failure $_ } }
-foreach ($siblingChip in $switcher.Children) {
-  $siblingChip.AddHandler([System.Windows.UIElement]::MouseLeftButtonUpEvent, $CLOSE_SWITCHER, $true)
-}
+# A pick closes the row and switches the mark off (New-UiSwitcherRow does both, through its Tag).
+$switcher.Tag = @{ mark = $gamesMark }
 $buildChip.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
 $buildChip.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; try { Show-View 'library' } catch { Write-Failure $_ } })
 
@@ -900,9 +917,45 @@ if ($SelfTest) {
   $checks.columnsWide = $wide.contents -eq 250 -and $wide.chat -eq 360
   $checks.columnsNarrow = $narrow.chat -eq 300 -and $narrow.contents -eq 200
   $checks.columnsNoContents = $bare.contents -eq 0 -and $bare.chat -eq 360
+  # At the minimum window the page keeps its 420 with both side columns at their narrowest.
+  $minimum = Get-CourseColumns ([double]$MIN_WIDTH - 34) $true
+  $checks.columnsMinimumPage = ([double]$MIN_WIDTH - 34 - $minimum.contents - $minimum.chat) -ge $PAGE_MIN_WIDTH
   # A chip is a 22-high pill whose label is centred.
   $chip = New-Chip 'x' $null $false
   $checks.chipHeight = $chip.Height -eq 22 -and $chip.Child.VerticalAlignment -eq 'Center'
+  # A hovered secondary button steps up from its resting fill (they were the same brush once).
+  $quiet = New-Button 'Go' 'secondary'
+  Set-ButtonLook $quiet 'hot'
+  $hotFill = $quiet.Background
+  Set-ButtonLook $quiet 'rest'
+  $checks.secondaryHover = $hotFill -eq $UI_BUTTON_HOT -and $quiet.Background -eq $buttonFill
+  # Tick boxes are one size ticked or not, so the titles after them start at one x.
+  $tickOn = New-Tick $true
+  $tickOff = New-Tick $false
+  $checks.tickSameSize = $tickOn.Width -eq 16 -and $tickOff.Width -eq 16 -and $tickOn.Height -eq $tickOff.Height -and $tickOn.Background -eq $accent
+  # A timestamp's play mark is joined to its time by a no-break space.
+  $playRuns = 0
+  foreach ($block in $doc.Blocks) { if ($block -is [System.Windows.Documents.Paragraph]) { foreach ($inline in $block.Inlines) { if ($inline -is [System.Windows.Documents.Hyperlink]) { foreach ($run in $inline.Inlines) { if ($run.Text -eq ($GLYPH_PLAY + $GLYPH_NBSP + '0:37')) { $playRuns++ } } } } } }
+  $checks.timestampNoBreak = $playRuns -eq 1
+  # Dates: the year only when it is not this one.
+  $checks.shortDateThisYear = (Format-ShortDate '2026-10-27T10:00:00Z' ([DateTime]'2026-11-01')) -eq ([DateTime]'2026-10-27T10:00:00Z').ToLocalTime().ToString('d MMM')
+  $checks.shortDateOtherYear = (Format-ShortDate '2025-03-02T10:00:00Z' ([DateTime]'2026-11-01')).EndsWith('2025')
+  # Overlap lines: the page first, glued to what follows, so no line ends on the dot.
+  $checks.overlapPages = (Get-OverlapPages @(4)) -eq ('page' + $GLYPH_NBSP + '4') -and (Get-OverlapPages @(2, 14)) -eq ('pages' + $GLYPH_NBSP + '2, 14') -and (Get-OverlapPages @()) -eq ''
+  $checks.overlapJoin = (Join-OverlapDetail 'page 1' 'learned here') -eq ('page 1' + $GLYPH_NBSP + $GLYPH_DOT + $GLYPH_NBSP + 'learned here') -and (Join-OverlapDetail '' 'x') -eq 'x'
+  # A learned concept's line is its date; the course is only in the tooltip.
+  $script:concepts = [pscustomobject]@{ courseTitles = [pscustomobject]@{ c1 = 'A long course title' } }
+  $whereLearned = Get-ConceptWhere ([pscustomobject]@{ learned = [pscustomobject]@{ at = '2026-10-27T10:00:00Z'; course = 'c1' } }) ([DateTime]'2026-11-01')
+  $checks.conceptWhereDate = $whereLearned.text.StartsWith('learned ') -and -not $whereLearned.text.Contains('course') -and $whereLearned.tip.Contains('A long course title')
+  $whereRead = Get-ConceptWhere ([pscustomobject]@{ learned = $null; seen = @([pscustomobject]@{ course = 'c1' }, [pscustomobject]@{ course = 'c1' }) })
+  $checks.conceptWhereRead = $whereRead.text -eq 'read in 1 course' -and $whereRead.tip -eq 'Read in A long course title'
+  $script:concepts = $null
+  # Your own chat message can be selected and copied.
+  $selectable = New-SelectableText 'hello' $ink 13
+  $checks.messageSelectable = $selectable -is [System.Windows.Controls.TextBox] -and $selectable.IsReadOnly
+  # A list keeps its scrollbar's lane past its rows' fill, scrolling or not.
+  $listScroll = New-RowScroll (New-Object System.Windows.Controls.StackPanel) 10
+  $checks.rowScrollLane = $listScroll.VerticalScrollBarVisibility -eq 'Visible' -and $listScroll.Margin.Right -eq (-10 - $SCROLL_LANE) -and $listScroll.Content.Margin.Right -eq 10
   $failed = @($checks.Keys | Where-Object { -not $checks[$_] })
   $checks.ok = $failed.Count -eq 0
   $checks.failed = $failed

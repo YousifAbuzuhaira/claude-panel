@@ -53,7 +53,8 @@ function Set-PressableHot($Block, [bool]$Hot) {
 }
 
 # A button: 'primary' (the accent), 'good' (green: something becomes learned) or 'secondary'
-# (a quiet fill). 30 high, so it lines up with the inputs beside it.
+# (a quiet fill). Chrome.ps1's New-UiButton with two things Learn needs: the 'good' kind, and a
+# height of 30, so it lines up with the inputs beside it. Hover and press step the same way.
 function New-Button([string]$Text, [string]$Kind = 'secondary') {
   $button = New-Object System.Windows.Controls.Border
   $button.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
@@ -92,7 +93,7 @@ function Set-ButtonLook($Button, [string]$Look) {
   switch ($state.kind) {
     'primary' { $Button.Background = $accent }
     'good' { $Button.Background = $green }
-    default { $Button.Background = if ($Look -eq 'hot') { $pressed } elseif ($Look -eq 'down') { $line } else { $buttonFill } }
+    default { $Button.Background = if ($Look -eq 'hot') { $UI_BUTTON_HOT } elseif ($Look -eq 'down') { $UI_BUTTON_DOWN } else { $buttonFill } }
   }
   $Button.Opacity = if (-not $state.enabled) { 0.45 } elseif ($state.kind -eq 'secondary') { 1.0 } elseif ($Look -eq 'hot') { 0.88 } elseif ($Look -eq 'down') { 0.76 } else { 1.0 }
 }
@@ -172,12 +173,13 @@ function Set-DocButtonLearned($Button) {
   $Button.IsEnabled = $false
 }
 
-# A chip: a pill 22 high, filled when on. Hovering an off chip lights it.
+# A chip: a pill 22 high, filled when on, with New-UiChip's numbers. Hovering an off chip lights it.
+# Learn's own because its Tag carries its click (Set-Click) and an on chip can take another fill.
 function New-Chip([string]$Text, $Tag, [bool]$IsOn, $OnFill = $null) {
   $chip = New-Object System.Windows.Controls.Border
   $chip.CornerRadius = New-Object System.Windows.CornerRadius(11)
   $chip.Height = 22
-  $chip.Padding = New-Gap 9 0 9 1
+  $chip.Padding = New-Gap 9 0 9 0
   $chip.Margin = New-Gap 0 0 6 6
   $chip.VerticalAlignment = 'Center'
   $chip.Cursor = [System.Windows.Input.Cursors]::Hand
@@ -238,6 +240,32 @@ $INPUT_XAML = @'
 '@
 $script:inputTemplate = [System.Windows.Markup.XamlReader]::Parse($INPUT_XAML)
 $INPUT_HEIGHT = 30
+
+# Text you can select and copy that looks like a TextBlock: a read-only TextBox with no border,
+# whose text sits in a Decorator rather than a ScrollViewer, so the wheel still scrolls the chat.
+$SELECTABLE_XAML = @'
+<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="TextBox">
+  <Border Background="{TemplateBinding Background}"><Decorator x:Name="PART_ContentHost"/></Border>
+</ControlTemplate>
+'@
+$script:selectableTemplate = [System.Windows.Markup.XamlReader]::Parse($SELECTABLE_XAML)
+
+function New-SelectableText([string]$Text, $Foreground, [double]$Size) {
+  $box = New-Object System.Windows.Controls.TextBox
+  $box.Template = $script:selectableTemplate
+  $box.Text = $Text
+  $box.IsReadOnly = $true
+  $box.TextWrapping = 'Wrap'
+  $box.Background = $noFill
+  $box.Foreground = $Foreground
+  $box.SelectionBrush = $accent
+  $box.BorderThickness = New-Object System.Windows.Thickness(0)
+  $box.FontSize = $Size
+  [System.Windows.Controls.TextBlock]::SetLineHeight($box, $Size * 1.5)
+  # A text box draws its text 2 in from its edges; this puts it where a TextBlock's would be.
+  $box.Margin = New-Gap -2 0 -2 0
+  return $box
+}
 
 # Returns @{ holder; box }. -Mono for paths and colours.
 function New-InputBox([string]$Hint, [bool]$Multiline = $false, [switch]$Mono) {
@@ -320,6 +348,44 @@ function Format-Date([string]$Iso) {
   return $when.ToLocalTime().ToString('d MMM yyyy')
 }
 
+# '27 Oct' this year, '27 Oct 2025' before it. $Now is for the self-test.
+function Format-ShortDate([string]$Iso, $Now = $null) {
+  if (-not $Iso) { return '' }
+  $when = [DateTime]::MinValue
+  if (-not [DateTime]::TryParse($Iso, [ref]$when)) { return '' }
+  $shown = $when.ToLocalTime()
+  $today = if ($Now) { [DateTime]$Now } else { [DateTime]::Now }
+  if ($shown.Year -eq $today.Year) { return $shown.ToString('d MMM') }
+  return $shown.ToString('d MMM yyyy')
+}
+
+# A tick box for a list of picks: 16 square in a fixed place, so a ticked and an unticked row's
+# text starts at the same x (the ballot-box glyphs fall back to fonts of different sizes).
+# Ticked it is filled with the accent and carries a check; unticked, an outline you can see.
+function New-Tick([bool]$Ticked) {
+  $box = New-Object System.Windows.Controls.Border
+  $box.Width = 16
+  $box.Height = 16
+  $box.CornerRadius = New-Object System.Windows.CornerRadius(4)
+  $box.BorderThickness = New-Object System.Windows.Thickness(1)
+  $box.VerticalAlignment = 'Top'
+  if ($Ticked) {
+    $box.Background = $accent
+    $box.BorderBrush = $accent
+    $check = New-Text $GLYPH_CHECK $onAccent
+    $check.FontSize = 11
+    $check.FontWeight = 'Bold'
+    $check.HorizontalAlignment = 'Center'
+    $check.VerticalAlignment = 'Center'
+    $check.Margin = New-Gap 0 -1 0 0
+    $box.Child = $check
+  } else {
+    $box.Background = $surface2
+    $box.BorderBrush = $faint
+  }
+  return $box
+}
+
 function Get-Short([string]$Text, [int]$Max) {
   if (-not $Text) { return '' }
   if ($Text.Length -le $Max) { return $Text }
@@ -336,7 +402,8 @@ function Open-Link([string]$Url) {
 function Add-Inlines($Target, $Inlines, [double]$Size) {
   foreach ($item in $Inlines) {
     $text = [string]$item.s
-    if ($item.time) { $text = "$GLYPH_PLAY $text" }
+    # A no-break space: the play mark never ends a line without its time.
+    if ($item.time) { $text = $GLYPH_PLAY + $GLYPH_NBSP + $text }
     $run = New-Object System.Windows.Documents.Run($text)
     if ($item.code) {
       $run.FontFamily = $monoFont

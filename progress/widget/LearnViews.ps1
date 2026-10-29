@@ -62,6 +62,20 @@ function New-Label([string]$Text, [double]$Size = 11, $Foreground = $null) {
   return $label
 }
 
+# A caption and its count, a fixed gap apart: 'ALREADY LEARNED  15' without spaces doing the gap.
+function New-CountLabel([string]$Text, [string]$Count, $Foreground) {
+  $line = New-Object System.Windows.Controls.StackPanel
+  $line.Orientation = 'Horizontal'
+  $line.Margin = New-Gap 0 12 0 6
+  $label = New-Label $Text 11 $Foreground
+  $label.Margin = New-Gap 0 0 0 0
+  $countText = New-Label $Count 11 $faint
+  $countText.Margin = New-Gap 8 0 0 0
+  [void]$line.Children.Add($label)
+  [void]$line.Children.Add($countText)
+  return $line
+}
+
 function New-Column([string]$Width) {
   $column = New-Object System.Windows.Controls.ColumnDefinition
   if ($Width -eq '*') { $column.Width = New-Object System.Windows.GridLength(1, 'Star') }
@@ -78,20 +92,25 @@ function New-Scroll($Content) {
   return $scroll
 }
 
-# A list of rows whose text starts on the column's own left edge while their hover fill reaches
-# $Overhang past it on both sides: the scroll area sticks out by that much, and its content is
-# inset by the same, so the rows' negative margins land inside it (a scroll area clips).
+# A list of rows whose text starts and ends on the column's own edges while their hover fill
+# reaches $Overhang past them on both sides: the scroll area sticks out by that much, and its
+# content is inset by the same, so the rows' negative margins land inside it (a scroll area clips).
+# The scrollbar keeps its lane past the right overhang whether the list scrolls or not (with
+# nothing to scroll the bar draws nothing), so the rows' right edge never moves.
 function New-RowScroll($Content, [double]$Overhang) {
   $scroll = New-Scroll $Content
-  $scroll.Margin = New-Gap (-$Overhang) 0 (-$Overhang) 0
+  $scroll.VerticalScrollBarVisibility = 'Visible'
+  $scroll.Margin = New-Gap (-$Overhang) 0 (-$Overhang - $SCROLL_LANE) 0
   $Content.Margin = New-Gap $Overhang 0 $Overhang 0
   return $scroll
 }
 
-# A view's content, no wider than $CONTENT_MAX: stretched, so on a wide window WPF centres it.
+# A view's content (Library, Learned, Ask, Settings). It starts on the header's left edge and is no
+# wider than $CONTENT_MAX (Update-ViewColumns in Learn.ps1); on its right it leaves the lane its
+# lists' scrollbars use, so the bar never reaches the card's own edge.
 function Set-ViewColumn($Content) {
-  $Content.MaxWidth = $CONTENT_MAX
   $Content.HorizontalAlignment = 'Stretch'
+  $Content.Margin = New-Gap 0 0 $SCROLL_LANE 0
 }
 
 # Armed actions (remove) need a second click within a few seconds. The first click turns the
@@ -427,7 +446,7 @@ function New-JobRow($Job) {
   $message.Margin = New-Gap 0 3 0 0
   [void]$stack.Children.Add($message)
   if ($state -eq 'failed' -and $Job.error) {
-    $why = New-Text (Get-Short ([string]$Job.error) 300) $faint
+    $why = New-Text (Get-Short ([string]$Job.error) 300) $dim
     $why.TextWrapping = 'Wrap'
     $why.FontSize = 11.5
     [void]$stack.Children.Add($why)
@@ -485,10 +504,9 @@ function New-Picker($Job) {
     Set-Hover $itemBox
     $item = New-Object System.Windows.Controls.DockPanel
     $itemBox.Child = $item
-    $tick = New-Text $(if ($script:picks[$id]) { $GLYPH_TICKED } else { $GLYPH_BOX }) $(if ($script:picks[$id]) { $accent } else { $dim })
-    $tick.FontSize = 16
-    $tick.Margin = New-Gap 0 -1 10 0
-    $tick.VerticalAlignment = 'Top'
+    # A drawn box, not a glyph, so ticked and unticked titles start at the same x.
+    $tick = New-Tick ([bool]$script:picks[$id])
+    $tick.Margin = New-Gap 0 1 10 0
     [System.Windows.Controls.DockPanel]::SetDock($tick, 'Left')
     $text = New-Object System.Windows.Controls.StackPanel
     $kind = if ([string]$candidate.kind -eq 'youtube') { "$GLYPH_PLAY video" } else { "$GLYPH_LINK page" }
@@ -736,9 +754,10 @@ function Build-CourseView {
   [void]$contents.Children.Add((New-RowScroll $pageList 6))
   [System.Windows.Controls.Grid]::SetColumn($contents, 0)
 
-  # Page: capped to a reading width and centred in its column on a wide window.
+  # Page: capped to a reading width (in ems, so it follows the text size) and centred in its
+  # column on a wide window.
   $pageArea = New-Object System.Windows.Controls.Grid
-  $pageArea.MaxWidth = $READING_MAX
+  $pageArea.MaxWidth = (Get-TextSize) * $READING_EMS
   [System.Windows.Controls.Grid]::SetColumn($pageArea, 1)
   $pagePanel = New-Object System.Windows.Controls.DockPanel
   $pageTop = New-Object System.Windows.Controls.StackPanel
@@ -752,6 +771,12 @@ function Build-CourseView {
   $pageCount.Margin = New-Gap 0 0 0 0
   $pageCount.VerticalAlignment = 'Center'
   [System.Windows.Controls.DockPanel]::SetDock($pageCount, 'Left')
+  # BEING REWRITTEN, a fixed gap after it (not spaces).
+  $pageState = New-Label '' 11 $gold
+  $pageState.Margin = New-Gap 7 0 0 0
+  $pageState.VerticalAlignment = 'Center'
+  $pageState.Visibility = 'Collapsed'
+  [System.Windows.Controls.DockPanel]::SetDock($pageState, 'Left')
   $showContents = New-Pressable 'show contents' $null $faint
   $showContents.FontSize = 11.5
   $showContents.VerticalAlignment = 'Center'
@@ -764,6 +789,7 @@ function Build-CourseView {
   $overlapLink.ToolTip = 'What this course covers that you have met before, and pages you could skip'
   [System.Windows.Controls.DockPanel]::SetDock($overlapLink, 'Right')
   [void]$countRow.Children.Add($pageCount)
+  [void]$countRow.Children.Add($pageState)
   [void]$countRow.Children.Add($overlapLink)
   [void]$countRow.Children.Add($showContents)
   [void]$countRow.Children.Add((New-Object System.Windows.Controls.Border))
@@ -780,21 +806,28 @@ function Build-CourseView {
   [void]$pageTop.Children.Add($pageTitle)
   [void]$pageTop.Children.Add($sourceLine)
   [void]$pageTop.Children.Add($conceptChips)
-  $nav = New-Object System.Windows.Controls.DockPanel
-  $nav.Margin = New-Gap -4 8 0 0
+  # Previous on the left, Next on the right, and Skip in the middle of the page, however wide
+  # the other two are: three columns, the outer two of equal share. Their text sits on the page's
+  # edges (the links' own padding hangs past them).
+  $nav = New-Object System.Windows.Controls.Grid
+  $nav.Margin = New-Gap -4 8 -4 0
+  $nav.ColumnDefinitions.Add((New-Column '*'))
+  $nav.ColumnDefinitions.Add((New-Column 'auto'))
+  $nav.ColumnDefinitions.Add((New-Column '*'))
   [System.Windows.Controls.DockPanel]::SetDock($nav, 'Bottom')
   $prevLink = New-Pressable "$GLYPH_LEFT Previous" $null $dim
   $prevLink.ToolTip = 'The page before  (Left arrow)'
+  $prevLink.HorizontalAlignment = 'Left'
   $nextLink = New-Pressable "Next $GLYPH_RIGHT" $null $accent
   $nextLink.ToolTip = 'The next page  (Right arrow)'
-  $skipLink = New-Pressable 'Skip this page' $null $faint
+  $nextLink.HorizontalAlignment = 'Right'
+  $skipLink = New-Pressable 'Skip this page' $null $dim
   $skipLink.ToolTip = 'Leave it out of the course; Next steps over it'
-  [System.Windows.Controls.DockPanel]::SetDock($prevLink, 'Left')
-  [System.Windows.Controls.DockPanel]::SetDock($nextLink, 'Right')
-  $skipLink.HorizontalAlignment = 'Center'
+  [System.Windows.Controls.Grid]::SetColumn($skipLink, 1)
+  [System.Windows.Controls.Grid]::SetColumn($nextLink, 2)
   [void]$nav.Children.Add($prevLink)
-  [void]$nav.Children.Add($nextLink)
   [void]$nav.Children.Add($skipLink)
+  [void]$nav.Children.Add($nextLink)
   $reader = New-Reader
   [void]$pagePanel.Children.Add($pageTop)
   [void]$pagePanel.Children.Add($nav)
@@ -802,13 +835,14 @@ function Build-CourseView {
   [void]$pageArea.Children.Add($pagePanel)
 
   # The overlap screen is a step of its own in the page's place (the page is collapsed while it
-  # shows), drawn on the card itself, with its heading where the page's title is.
+  # shows), drawn on the card itself, with its heading where the page's title is. A list of rows
+  # like the others: its text on the page's own edges (so the way back ends where 'What I already
+  # know' does), its scrollbar in the gap before the chat.
   $overlap = New-Object System.Windows.Controls.Border
   $overlap.Background = $noFill
   $overlap.Visibility = 'Collapsed'
   $overlapStack = New-Object System.Windows.Controls.StackPanel
-  $overlapStack.Margin = New-Gap 0 0 8 0
-  $overlap.Child = New-Scroll $overlapStack
+  $overlap.Child = New-RowScroll $overlapStack 6
   [void]$pageArea.Children.Add($overlap)
 
   # Chat
@@ -847,7 +881,10 @@ function Build-CourseView {
   $chatInput.box.Height = 64
   [void]$chatBottom.Children.Add($sendButton)
   [void]$chatBottom.Children.Add($chatInput.holder)
+  # The messages' text on the column's edge, like the title and the box; your own message's fill
+  # hangs into the gap (Add-MessageSection).
   $chatReader = New-Reader
+  $chatReader.Margin = New-Gap (-$MESSAGE_INSET - 2) 0 0 0
   [void]$chatInner.Children.Add($chatHead)
   [void]$chatInner.Children.Add($chatBottom)
   [void]$chatInner.Children.Add($chatReader)
@@ -865,6 +902,8 @@ function Build-CourseView {
   $script:ui.overlapLink = $overlapLink
   $script:ui.pageList = $pageList
   $script:ui.pageCount = $pageCount
+  $script:ui.pageState = $pageState
+  $script:ui.pageArea = $pageArea
   $script:ui.showContents = $showContents
   $script:ui.pageTitle = $pageTitle
   $script:ui.sourceLine = $sourceLine
@@ -879,6 +918,7 @@ function Build-CourseView {
   $script:ui.chatReader = $chatReader
   $script:ui.chatInput = $chatInput.box
   $script:ui.send = $sendButton
+  Set-ChatInputSize $chatInput.box
 
   Set-Click $prevLink { param($Data, $Sender) Step-Page -1 }
   Set-Click $nextLink { param($Data, $Sender) Step-Page 1 }
@@ -1025,13 +1065,15 @@ function Show-Contents {
       $title.FontSize = 13
       [void]$row.Children.Add($title)
     }
-    # Rename, reorder, rewrite and remove: under the page you're on, so the list stays tight.
+    # Rename, reorder, rewrite and remove: under the page you're on, so the list stays tight, and
+    # on one line in the narrowest contents (remove is the same mark as a concept's).
     # Lined up under the title: the glyph column's width, less the action's own padding.
     $actions = New-Object System.Windows.Controls.WrapPanel
     $actions.Margin = New-Gap ($PAGE_GLYPH_WIDTH - 4) 2 0 0
-    foreach ($action in @(@{ text = 'rename'; key = 'rename' }, @{ text = $GLYPH_UP; key = 'up' }, @{ text = $GLYPH_DOWN; key = 'down' }, @{ text = 'rewrite'; key = 'rewrite' }, @{ text = 'remove'; key = 'remove' })) {
+    $actionTips = @{ up = 'Move up'; down = 'Move down'; remove = 'Remove this page' }
+    foreach ($action in @(@{ text = 'rename'; key = 'rename' }, @{ text = $GLYPH_UP; key = 'up' }, @{ text = $GLYPH_DOWN; key = 'down' }, @{ text = 'rewrite'; key = 'rewrite' }, @{ text = $GLYPH_CLOSE; key = 'remove' })) {
       $press = New-SmallAction $action.text { param($Data, $Sender) Invoke-PageAction $Data.key $Data.n $Sender } @{ key = $action.key; n = $n }
-      if ($action.key -eq 'up' -or $action.key -eq 'down') { $press.ToolTip = if ($action.key -eq 'up') { 'Move up' } else { 'Move down' } }
+      if ($actionTips[$action.key]) { $press.ToolTip = $actionTips[$action.key] }
       [void]$actions.Children.Add($press)
     }
     [void]$outer.Children.Add($actions)
@@ -1190,8 +1232,10 @@ function Show-PageHeader {
   $total = @($script:courseData.course.pages).Count
   $position = Get-PagePosition $script:pageNumber
   $pageInfo = @($script:courseData.course.pages) | Where-Object { [int]$_.n -eq $script:pageNumber } | Select-Object -First 1
-  $state = if ($pageInfo -and [string]$pageInfo.status -ne 'written' -and $script:pageData -and $script:pageData.page) { "  $GLYPH_DOT  BEING REWRITTEN" } else { '' }
-  $script:ui.pageCount.Text = "PAGE $position OF $total$state"
+  $rewriting = $pageInfo -and [string]$pageInfo.status -ne 'written' -and $script:pageData -and $script:pageData.page
+  $script:ui.pageCount.Text = "PAGE $position OF $total"
+  $script:ui.pageState.Text = "$GLYPH_DOT BEING REWRITTEN"
+  $script:ui.pageState.Visibility = if ($rewriting) { 'Visible' } else { 'Collapsed' }
   $script:ui.pageTitle.Text = if ($pageInfo) { [string]$pageInfo.title } else { '' }
   $script:ui.pageTitle.FontSize = $size * 1.55
   $script:ui.skip.Text = if (@($script:courseData.course.skipped) -contains $script:pageNumber) { 'Skipped: undo' } else { 'Skip this page' }
@@ -1347,7 +1391,8 @@ function Show-Overlap($Data) {
   $stack.Children.Clear()
   $script:overlapData = $Data
   $titles = $Data.courseTitles
-  $courseTitle = { param($Id) $entry = $titles.PSObject.Properties[[string]$Id]; if ($entry) { [string]$entry.Value } else { 'an earlier course' } }
+  # The course you are in is 'here', not its title again on every line.
+  $courseTitle = { param($Id) if ([string]$Id -eq [string]$script:courseId) { 'here' } else { $entry = $titles.PSObject.Properties[[string]$Id]; if ($entry) { [string]$entry.Value } else { 'an earlier course' } } }
   # The same top as the page: a caption line where PAGE x OF y is, then the heading where the
   # page's title is, at the same size.
   $captionRow = New-Object System.Windows.Controls.DockPanel
@@ -1378,32 +1423,36 @@ function Show-Overlap($Data) {
   $intro.TextWrapping = 'Wrap'
   $intro.Margin = New-Gap 0 0 0 4
   [void]$stack.Children.Add($intro)
-  # Kept on one line: "here: page 4" never breaks before its number.
-  $pagesText = { param($Pages) $list = @($Pages); if ($list.Count -eq 1) { "here:$($GLYPH_NBSP)page$($GLYPH_NBSP)$($list[0])" } else { "here:$($GLYPH_NBSP)pages$($GLYPH_NBSP)" + ($list -join ", ") } }
-
+  # Each line: the page it is on first, then what you know of it ('page 1 . learned here, 27 Oct').
   if (@($Data.covered).Count -gt 0) {
-    [void]$stack.Children.Add((New-Label ("Already learned  {0}" -f @($Data.covered).Count) 11 $green))
+    [void]$stack.Children.Add((New-CountLabel 'Already learned' ([string]@($Data.covered).Count) $green))
     foreach ($item in @($Data.covered)) {
-      $when = if ($item.learned) { "learned $(Format-Date ([string]$item.learned.at))" + $(if ($item.learned.course) { " in $(& $courseTitle $item.learned.course)" } else { '' }) } else { 'learned' }
-      [void]$stack.Children.Add((New-OverlapLine "$GLYPH_CHECK $($item.name)" "$when  $GLYPH_DOT  $(& $pagesText $item.pages)" $green))
+      $when = 'learned'
+      if ($item.learned) {
+        $date = Format-ShortDate ([string]$item.learned.at)
+        $place = if ($item.learned.course) { & $courseTitle $item.learned.course } else { '' }
+        $when = if ($place -eq 'here') { "learned here, $date" } elseif ($place) { "learned $date in $place" } else { "learned $date" }
+      }
+      [void]$stack.Children.Add((New-OverlapLine "$GLYPH_CHECK $($item.name)" (Join-OverlapDetail (Get-OverlapPages $item.pages) $when) $green))
     }
   }
   if (@($Data.partly).Count -gt 0) {
-    [void]$stack.Children.Add((New-Label ("Partly covered  {0}" -f @($Data.partly).Count) 11 $blue))
+    [void]$stack.Children.Add((New-CountLabel 'Partly covered' ([string]@($Data.partly).Count) $blue))
     foreach ($item in @($Data.partly)) {
-      [void]$stack.Children.Add((New-OverlapLine "$GLYPH_HALF $($item.name)" "you have $($item.have.name); this goes further  $GLYPH_DOT  $(& $pagesText $item.pages)" $blue))
+      [void]$stack.Children.Add((New-OverlapLine "$GLYPH_HALF $($item.name)" (Join-OverlapDetail (Get-OverlapPages $item.pages) "you have $($item.have.name); this goes further") $blue))
     }
   }
   if (@($Data.mentioned).Count -gt 0) {
-    [void]$stack.Children.Add((New-Label ("Read before, not marked learned  {0}" -f @($Data.mentioned).Count) 11 $dim))
+    [void]$stack.Children.Add((New-CountLabel 'Read before, not marked learned' ([string]@($Data.mentioned).Count) $dim))
     foreach ($item in @($Data.mentioned)) {
       $where = @($item.seen | ForEach-Object { & $courseTitle $_.course } | Select-Object -Unique) -join ', '
-      [void]$stack.Children.Add((New-OverlapLine "$GLYPH_EMPTY $($item.name)" "read in $where  $GLYPH_DOT  $(& $pagesText $item.pages)" $dim))
+      $read = if ($where -eq 'here') { 'read here' } else { "read in $where" }
+      [void]$stack.Children.Add((New-OverlapLine "$GLYPH_EMPTY $($item.name)" (Join-OverlapDetail (Get-OverlapPages $item.pages) $read) $dim))
     }
   }
   $fresh = @($Data.fresh)
   if ($fresh.Count -gt 0) {
-    [void]$stack.Children.Add((New-Label ("New to you  {0}" -f $fresh.Count) 11 $accent))
+    [void]$stack.Children.Add((New-CountLabel 'New to you' ([string]$fresh.Count) $accent))
     $names = New-Text (($fresh | ForEach-Object { [string]$_.name }) -join "  $GLYPH_DOT  ") $ink
     $names.TextWrapping = 'Wrap'
     [void]$stack.Children.Add($names)
@@ -1450,13 +1499,28 @@ function Set-OverlapShown([bool]$Shown) {
   $script:ui.pagePanel.Visibility = if ($Shown) { 'Collapsed' } else { 'Visible' }
 }
 
+# Where a concept is in this course: 'page 4' or 'pages 2, 14', the number never on a line of its own.
+function Get-OverlapPages($Pages) {
+  $list = @(@($Pages) | Where-Object { $null -ne $_ -and [string]$_ -ne '' } | ForEach-Object { [string]$_ })
+  if ($list.Count -eq 0) { return '' }
+  if ($list.Count -eq 1) { return 'page' + $GLYPH_NBSP + $list[0] }
+  return 'pages' + $GLYPH_NBSP + ($list -join ', ')
+}
+
+# The page, a dot, then the rest: no-break spaces round the dot, so it never ends a line.
+function Join-OverlapDetail([string]$Where, [string]$Rest) {
+  if (-not $Where) { return $Rest }
+  if (-not $Rest) { return $Where }
+  return $Where + $GLYPH_NBSP + $GLYPH_DOT + $GLYPH_NBSP + $Rest
+}
+
 function New-OverlapLine([string]$Name, [string]$Detail, $Fore) {
   $panel = New-Object System.Windows.Controls.StackPanel
   $panel.Margin = New-Gap 0 2 0 4
   $nameText = New-Text $Name $Fore
   $nameText.FontSize = 14
   $nameText.TextWrapping = 'Wrap'
-  $detailText = New-Text $Detail $faint
+  $detailText = New-Text $Detail $dim
   $detailText.FontSize = 11.5
   $detailText.TextWrapping = 'Wrap'
   $detailText.Margin = New-Gap 16 0 0 0
@@ -1465,21 +1529,34 @@ function New-OverlapLine([string]$Name, [string]$Detail, $Fore) {
   return $panel
 }
 
+# The pages you could skip, each a row with a tick box in a fixed place (as in the source picker),
+# its fill reaching 6 past the text like the other lists' rows.
 function Show-SkipPicks {
   $list = $script:ui.skipList
   $list.Children.Clear()
   foreach ($n in @($script:overlapData.skippablePages)) {
     $page = @($script:courseData.course.pages) | Where-Object { [int]$_.n -eq [int]$n } | Select-Object -First 1
     $ticked = $script:overlapPicks.ContainsKey([string]$n)
-    $text = New-Text ("{0}  {1}. {2}" -f $(if ($ticked) { $GLYPH_TICKED } else { $GLYPH_BOX }), (Get-PagePosition ([int]$n)), $(if ($page) { [string]$page.title } else { '' })) $(if ($ticked) { $accent } else { $ink })
+    $itemBox = New-Object System.Windows.Controls.Border
+    $itemBox.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+    $itemBox.Padding = New-Gap 6 4 6 4
+    $itemBox.Margin = New-Gap -6 1 -6 1
+    Set-Hover $itemBox
+    $item = New-Object System.Windows.Controls.DockPanel
+    $tick = New-Tick $ticked
+    $tick.Margin = New-Gap 0 1 10 0
+    [System.Windows.Controls.DockPanel]::SetDock($tick, 'Left')
+    $text = New-Text ("{0}. {1}" -f (Get-PagePosition ([int]$n)), $(if ($page) { [string]$page.title } else { '' })) $ink
     $text.TextWrapping = 'Wrap'
-    $text.Margin = New-Gap 0 2 0 2
-    Set-Click $text {
+    [void]$item.Children.Add($tick)
+    [void]$item.Children.Add($text)
+    $itemBox.Child = $item
+    Set-Click $itemBox {
       param($Data, $Sender)
       if ($script:overlapPicks.ContainsKey($Data)) { $script:overlapPicks.Remove($Data) } else { $script:overlapPicks[$Data] = $true }
       Show-SkipPicks
     } ([string]$n)
-    [void]$list.Children.Add($text)
+    [void]$list.Children.Add($itemBox)
   }
 }
 
@@ -1504,24 +1581,23 @@ function Get-ChatState([string]$Key) {
 }
 
 # A message in a chat. Yours is a rounded box; Claude's has the same inset with no fill, so
-# both start on one left edge.
+# both start on one left edge, and the reader is pulled left by that inset (and the document's
+# own 2), so the text lines up with the chat's title and box while your box hangs past them.
+# Your text is selectable, as Claude's is.
 function Add-MessageSection($Doc, $Message, [string]$Key) {
   $size = (Get-TextSize) * 0.93
   if ([string]$Message.role -eq 'user') {
     $bubble = New-Object System.Windows.Controls.Border
     $bubble.Background = $surface2
     $bubble.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
-    $bubble.Padding = New-Gap 10 6 10 8
+    $bubble.Padding = New-Gap $MESSAGE_INSET 6 $MESSAGE_INSET 8
     $inside = New-Object System.Windows.Controls.StackPanel
     $whoText = New-Text 'YOU' $dim
     $whoText.FontFamily = $monoFont
     $whoText.FontSize = $size * 0.8
     $whoText.Margin = New-Gap 0 0 0 2
     $saidText = ([string]$Message.text).Replace("`r", '')
-    $said = New-Text $saidText $ink
-    $said.FontSize = $size
-    $said.LineHeight = $size * 1.5
-    $said.TextWrapping = 'Wrap'
+    $said = New-SelectableText $saidText $ink $size
     [void]$inside.Children.Add($whoText)
     [void]$inside.Children.Add($said)
     $bubble.Child = $inside
@@ -1532,7 +1608,7 @@ function Add-MessageSection($Doc, $Message, [string]$Key) {
   }
   $section = New-Object System.Windows.Documents.Section
   $section.Margin = New-Gap 0 0 0 10
-  $section.Padding = New-Gap 10 0 10 0
+  $section.Padding = New-Gap $MESSAGE_INSET 0 $MESSAGE_INSET 0
   $who = New-Paragraph ($size * 0.8) $blue
   $who.Margin = New-Gap 0 0 0 2
   $who.FontFamily = $monoFont
@@ -1590,18 +1666,24 @@ function New-OfferButton($Ids) {
   return (New-DocBlock $button 4 4)
 }
 
+# A course the Advisor suggests: a quiet button with the topic trimmed (the whole of it, and its
+# category, in the tooltip). Once clicked it is a plain blue line that opens the Library.
 function New-BuildButton($Build) {
   $topic = [string]$Build.topic
-  $button = New-DocButton ("Build this: {0}  ({1})" -f $topic, [string]$Build.category) $accentSoft $ink {
+  $category = [string]$Build.category
+  $button = New-DocButton ("Build: {0}" -f (Get-Short $topic 48)) $buttonFill $ink {
     param($Data, $Sender)
     Start-Build ([string]$Data.topic) ([string]$Data.category) 'pick'
-    Set-DocButtonDone $Sender ("Building: {0}. Pick its sources in the Library" -f (Get-Short ([string]$Data.topic) 48)) $surface
-    # A second click goes to the Library, where the build waits for your picks.
+    Set-DocButtonDone $Sender ("Building {0} pick its sources in the Library {1}" -f $GLYPH_DOT, $GLYPH_RIGHT) $noFill
+    $Sender.Content.Foreground = $blue
+    $Sender.Padding = New-Gap 0 5 0 6
+    # A click now goes to the Library, where the build waits for your picks.
     $Sender.Cursor = [System.Windows.Input.Cursors]::Hand
-    $Sender.ToolTip = 'Open the Library'
+    $Sender.ToolTip = "Building '$([string]$Data.topic)': open the Library to pick its sources"
     $Sender.Tag = @{ action = { param($Data2, $Sender2) Show-View 'library' }; data = $null }
-  } @{ topic = $topic; category = [string]$Build.category }
-  $button.ToolTip = 'Start building this course; you pick its sources in the Library'
+  } @{ topic = $topic; category = $category }
+  $button.Content.FontWeight = 'Normal'
+  $button.ToolTip = if ($category) { "Build a course on '$topic' (in $category); you pick its sources in the Library" } else { "Build a course on '$topic'; you pick its sources in the Library" }
   return (New-DocBlock $button 4 4)
 }
 
@@ -1611,7 +1693,8 @@ function Show-Chat([string]$Key, $Messages, $Viewer) {
     $state.messages = @($Messages)
     $state.doc = New-Document ((Get-TextSize) * 0.93)
     if ($state.messages.Count -eq 0) {
-      $empty = New-Paragraph ((Get-TextSize) * 0.9) $faint
+      $empty = New-Paragraph ((Get-TextSize) * 0.9) $dim
+      $empty.Padding = New-Gap $MESSAGE_INSET 0 $MESSAGE_INSET 0
       $emptyText = if ($Key -eq 'advisor') { 'Ask what to learn next. Claude looks at what you have learned and read, and at the work folders you set in Settings, to suggest what would help you most.' } else { 'Ask about anything on this page, or answer one of its check questions. Claude knows the page and its sources.' }
       [void]$empty.Inlines.Add((New-Object System.Windows.Documents.Run($emptyText)))
       [void]$state.doc.Blocks.Add($empty)
@@ -1655,7 +1738,7 @@ function Submit-Chat([string]$Key, $Fields, $InputBox, $Viewer) {
   $size = (Get-TextSize) * 0.93
   $live = New-Object System.Windows.Documents.Section
   $live.Margin = New-Gap 0 0 0 10
-  $live.Padding = New-Gap 10 0 10 0
+  $live.Padding = New-Gap $MESSAGE_INSET 0 $MESSAGE_INSET 0
   $who = New-Paragraph ($size * 0.8) $blue
   $who.FontFamily = $monoFont
   $who.Margin = New-Gap 0 0 0 2
@@ -1955,6 +2038,25 @@ function Get-CourseTitle([string]$Id) {
   return 'a removed course'
 }
 
+# A concept's 'where' on its row: the date it was learned (or how many courses it was read in),
+# short, with the course in the tooltip, so the same course title is not on every row.
+# Returns @{ text; tip } (both '' when there is nothing to say). $Now is for the self-test.
+function Get-ConceptWhere($Concept, $Now = $null) {
+  if ($Concept.learned) {
+    $text = 'learned ' + (Format-ShortDate ([string]$Concept.learned.at) $Now)
+    $tip = 'Learned ' + (Format-Date ([string]$Concept.learned.at))
+    if ($Concept.learned.course) { $tip += ' in ' + (Get-CourseTitle ([string]$Concept.learned.course)) }
+    return @{ text = $text.Trim(); tip = $tip.Trim() }
+  }
+  $courses = @(@($Concept.seen) | Where-Object { $_ } | ForEach-Object { [string]$_.course } | Select-Object -Unique)
+  if ($courses.Count -gt 0) {
+    $text = if ($courses.Count -eq 1) { 'read in 1 course' } else { "read in $($courses.Count) courses" }
+    $tip = 'Read in ' + (@($courses | ForEach-Object { Get-CourseTitle $_ }) -join ', ')
+    return @{ text = $text; tip = $tip }
+  }
+  return @{ text = ''; tip = '' }
+}
+
 function New-ConceptRow($Concept, [int]$Depth) {
   $id = [string]$Concept.id
   $state = [string]$Concept.state
@@ -1984,44 +2086,40 @@ function New-ConceptRow($Concept, [int]$Depth) {
   $actions.Orientation = 'Horizontal'
   $actions.VerticalAlignment = 'Top'
   [System.Windows.Controls.DockPanel]::SetDock($actions, 'Right')
-  $where = ''
-  if ($Concept.learned) {
-    $where = "learned $(Format-Date ([string]$Concept.learned.at))"
-    if ($Concept.learned.course) { $where += " $GLYPH_DOT $(Get-Short (Get-CourseTitle ([string]$Concept.learned.course)) 30)" }
-  } elseif (@($Concept.seen).Count -gt 0) {
-    $courses = @($Concept.seen | ForEach-Object { [string]$_.course } | Select-Object -Unique)
-    $where = if ($courses.Count -eq 1) { "read in $(Get-Short (Get-CourseTitle $courses[0]) 30)" } else { "read in $($courses.Count) courses" }
-  }
-  $whereText = $null
-  if ($where) {
-    $whereText = New-Text $where $faint
-    $whereText.FontSize = 11.5
-    $whereText.MaxWidth = 260
-    $whereText.TextTrimming = 'CharacterEllipsis'
-    $whereText.VerticalAlignment = 'Center'
-    $whereText.Margin = New-Gap 12 0 4 0
-    $whereText.ToolTip = $where
-    [void]$actions.Children.Add($whereText)
-  }
+  $where = Get-ConceptWhere $Concept
   $keys = if ($script:mergeFrom -and $script:mergeFrom -ne $id) { @('into') }
     elseif ($script:nestFrom -and $script:nestFrom -ne $id) { @('under') }
     elseif ($script:nestFrom -eq $id) { @('top level', 'cancel') }
     else { @('rename', 'edit', 'nest', 'move', 'merge') }
   $isTarget = $keys[0] -eq 'into' -or $keys[0] -eq 'under' -or $keys[0] -eq 'top level'
-  # The actions take the place of the 'learned ...' line while the pointer is on the row (they
-  # are always there while picking a merge or nest target, or editing this one); otherwise they
-  # take no room, so names and definitions use the whole width.
+  # The 'learned 27 Oct' line and the row's tools share one cell on the right, as wide as the
+  # wider of the two whichever shows: the tools take its place while the pointer is on the row
+  # (and always while picking a merge or nest target, or editing this one). Nothing beside it
+  # changes width, so the row never re-wraps under the pointer.
+  $cell = New-Object System.Windows.Controls.Grid
+  $cell.Margin = New-Gap 12 0 0 0
+  $whereText = $null
+  if ($where.text) {
+    $whereText = New-Text $where.text $faint
+    $whereText.FontSize = 11.5
+    $whereText.HorizontalAlignment = 'Right'
+    $whereText.VerticalAlignment = 'Center'
+    $whereText.Margin = New-Gap 0 0 4 0
+    $whereText.ToolTip = $where.tip
+    [void]$cell.Children.Add($whereText)
+  }
   $tools = New-Object System.Windows.Controls.StackPanel
   $tools.Orientation = 'Horizontal'
-  $tools.Margin = New-Gap 12 0 0 0
+  $tools.HorizontalAlignment = 'Right'
   $toolsShown = $isTarget -or $script:renamingConcept -eq $id -or $script:movingConcept -eq $id -or $script:editingDefinition -eq $id
-  $tools.Visibility = if ($toolsShown) { 'Visible' } else { 'Collapsed' }
-  if ($toolsShown -and $whereText) { $whereText.Visibility = 'Collapsed' }
+  $tools.Visibility = if ($toolsShown) { 'Visible' } else { 'Hidden' }
+  if ($toolsShown -and $whereText) { $whereText.Visibility = 'Hidden' }
   foreach ($key in $keys) {
     $press = New-SmallAction $key { param($Data, $Sender) Invoke-ConceptAction $Data.key $Data.id $Sender } @{ key = $key; id = $id } $(if ($isTarget -and $key -ne 'cancel') { $accent } else { $faint })
     [void]$tools.Children.Add($press)
   }
-  [void]$actions.Children.Add($tools)
+  [void]$cell.Children.Add($tools)
+  [void]$actions.Children.Add($cell)
   if (-not $isTarget) {
     # Always there, so removing never depends on finding the hover actions.
     $removeMark = New-SmallAction $GLYPH_CLOSE { param($Data, $Sender) Invoke-ConceptAction 'remove' $Data $Sender } $id
@@ -2033,8 +2131,8 @@ function New-ConceptRow($Concept, [int]$Depth) {
     # Set-Hover owns the row's Tag-free hover fill; the tools ride in the row's Resources.
     $row.Resources['tools'] = $tools
     if ($whereText) { $row.Resources['where'] = $whereText }
-    $row.Add_MouseEnter({ param($sender, $e) $sender.Resources['tools'].Visibility = 'Visible'; if ($sender.Resources['where']) { $sender.Resources['where'].Visibility = 'Collapsed' } })
-    $row.Add_MouseLeave({ param($sender, $e) $sender.Resources['tools'].Visibility = 'Collapsed'; if ($sender.Resources['where']) { $sender.Resources['where'].Visibility = 'Visible' } })
+    $row.Add_MouseEnter({ param($sender, $e) $sender.Resources['tools'].Visibility = 'Visible'; if ($sender.Resources['where']) { $sender.Resources['where'].Visibility = 'Hidden' } })
+    $row.Add_MouseLeave({ param($sender, $e) $sender.Resources['tools'].Visibility = 'Hidden'; if ($sender.Resources['where']) { $sender.Resources['where'].Visibility = 'Visible' } })
   }
   [void]$dock.Children.Add($actions)
 
@@ -2058,7 +2156,7 @@ function New-ConceptRow($Concept, [int]$Depth) {
     $definitionEdit.Margin = New-Gap 0 3 0 0
     [void]$text.Children.Add($definitionEdit)
   } elseif ($Concept.definition) {
-    $definition = New-Text ([string]$Concept.definition) $faint
+    $definition = New-Text ([string]$Concept.definition) $dim
     $definition.FontSize = 11.5
     $definition.TextWrapping = 'Wrap'
     [void]$text.Children.Add($definition)
@@ -2169,9 +2267,12 @@ function Build-AskView {
   [System.Windows.Controls.DockPanel]::SetDock($send, 'Right')
   $askInput = New-InputBox 'Ask what to learn, or how to go about it' $true
   $askInput.box.Height = 64
+  Set-ChatInputSize $askInput.box
   [void]$bottom.Children.Add($send)
   [void]$bottom.Children.Add($askInput.holder)
+  # The messages' text on the view's edge (Add-MessageSection).
   $reader = New-Reader
+  $reader.Margin = New-Gap (-$MESSAGE_INSET - 2) 0 0 0
   [void]$root.Children.Add($top)
   [void]$root.Children.Add($bottom)
   [void]$root.Children.Add($reader)
@@ -2252,6 +2353,7 @@ function New-SettingTitle([string]$Text, [string]$Note, [double]$Top = 18) {
 
 $script:shownAppearance = ''
 $script:shownColors = ''
+$script:fillingColorBoxes = $false
 
 function Get-ColorText([string]$Text) {
   $hex = $Text.Trim()
@@ -2315,7 +2417,7 @@ function Build-AppearanceSection {
       param($sender, $e)
       try {
         Update-CustomWell ([string]$sender.Resources['part'])
-        if ($sender.IsKeyboardFocused) { Use-CustomColors -Quiet }
+        if ($sender.IsKeyboardFocused -and -not $script:fillingColorBoxes) { Use-CustomColors -Quiet }
       } catch { Write-Failure $_ }
     })
     $colorBox.box.Add_KeyDown({ param($sender, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; try { Use-CustomColors } catch { Write-Failure $_ } } })
@@ -2344,6 +2446,15 @@ function Build-AppearanceSection {
     [void]$section.Children.Add($bar)
     $script:ui.opacityRows += $bar
   }
+  # Said while any bar is low: over a busy or opposite-coloured window, text can get hard to read.
+  # In the text colour, the one that stays readable longest as the background clears.
+  $lowNote = New-Text "Below $([int]($SEE_THROUGH_LOW * 100))% text can get hard to read over a busy window, or one much lighter or darker than this scheme." $ink
+  $lowNote.FontSize = 12
+  $lowNote.TextWrapping = 'Wrap'
+  $lowNote.Margin = New-Gap 0 4 0 0
+  $lowNote.Visibility = 'Collapsed'
+  [void]$section.Children.Add($lowNote)
+  $script:ui.seeThroughNote = $lowNote
 
   $reset = New-Button 'Reset to Ember' 'secondary'
   $reset.HorizontalAlignment = 'Left'
@@ -2367,8 +2478,10 @@ function Build-AppearanceSection {
 }
 
 # Moves the swatch ring and the bars to the scheme in use, and puts its colours in the boxes when
-# they changed (a swatch, another window, Reset), never while you are typing in one.
-function Update-AppearanceSection {
+# they changed (a swatch, another window, Reset). -KeepFocused is for the as-you-type case only: the
+# box being typed in keeps its text. Anything else refreshes every box, so a box left focused
+# never keeps showing an old colour that 'Use these' would then apply.
+function Update-AppearanceSection([switch]$KeepFocused) {
   if (-not $script:ui.swatchRow) { return }
   $current = $script:THEME.appearance
   $script:shownAppearance = Get-AppearanceKey
@@ -2378,14 +2491,23 @@ function Update-AppearanceSection {
     $cell.name.Foreground = if ($inUse) { $ink } else { $dim }
   }
   foreach ($row in $script:ui.opacityRows) { Update-UiOpacityRow $row }
+  if ($script:ui.seeThroughNote) {
+    $low = $false
+    foreach ($group in @('panel', 'learn', 'games')) { if ([double]$current.opacity[$group] -lt $SEE_THROUGH_LOW - 0.001) { $low = $true } }
+    $script:ui.seeThroughNote.Visibility = if ($low) { 'Visible' } else { 'Collapsed' }
+  }
   $colorsKey = '{0}|{1}|{2}' -f $current.colors.bg, $current.colors.accent, $current.colors.text
   if ($colorsKey -ne $script:shownColors) {
     $script:shownColors = $colorsKey
-    foreach ($key in @('bg', 'accent', 'text')) {
-      $box = $script:ui.customBoxes[$key]
-      if ($box.IsKeyboardFocused) { continue }
-      $box.Text = [string]$current.colors[$key]
-    }
+    # Filled one at a time, so a focused box must not apply the three while the others are old.
+    $script:fillingColorBoxes = $true
+    try {
+      foreach ($key in @('bg', 'accent', 'text')) {
+        $box = $script:ui.customBoxes[$key]
+        if ($KeepFocused -and $box.IsKeyboardFocused) { continue }
+        if ($box.Text -ne [string]$current.colors[$key]) { Set-InputText $box ([string]$current.colors[$key]) }
+      }
+    } finally { $script:fillingColorBoxes = $false }
   }
   foreach ($key in @('bg', 'accent', 'text')) { Update-CustomWell $key }
 }
@@ -2445,7 +2567,7 @@ function Use-CustomColors([switch]$Quiet) {
   $next.colors = $colors
   Set-Appearance $next
   $script:shownColors = ''
-  Update-AppearanceSection
+  Update-AppearanceSection -KeepFocused:$Quiet
   if (-not $Quiet) { Show-Toast 'Your colours, in every window' }
 }
 
@@ -2608,8 +2730,18 @@ function Show-Settings {
 # Every tick, and after status changes
 # ===================================================================================================
 
+# The chat and Ask boxes' text follows the text size, as the messages above them do.
+function Set-ChatInputSize($Box) {
+  $size = [Math]::Round((Get-TextSize) * 0.93, 1)
+  $Box.FontSize = $size
+  if ($Box.Tag -is [System.Windows.Controls.TextBlock]) { $Box.Tag.FontSize = $size }
+  $Box.Height = [Math]::Round(64 * [Math]::Max(1.0, [double]$script:textScale))
+}
+
 function Update-TextSize {
   foreach ($key in @($script:chats.Keys)) { if (-not $script:chats[$key].busy) { $script:chats.Remove($key) } }
+  if ($script:ui.pageArea) { $script:ui.pageArea.MaxWidth = (Get-TextSize) * $READING_EMS }
+  foreach ($box in @($script:ui.chatInput, $script:ui.askInput)) { if ($box) { Set-ChatInputSize $box } }
   if ($script:view -eq 'course' -and $script:pageData) { Show-Page }
   if ($script:view -eq 'ask') { Open-Advisor }
 }
