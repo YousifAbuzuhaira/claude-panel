@@ -22,6 +22,13 @@ const DONE_SHOWN_MS = 60 * 60_000
 
 export const learnStatusPath = (home: string) => `${home}/.config/claude-learn/status.json`
 
+/** The views `/learn <view>` opens: Learn's own tabs. */
+export const LEARN_VIEWS = ['library', 'course', 'learned', 'ask', 'settings'] as const
+
+export type LearnView = (typeof LEARN_VIEWS)[number]
+
+export const isLearnView = (name: string): name is LearnView => (LEARN_VIEWS as readonly string[]).includes(name)
+
 const text = (value: unknown, max = 120) => (typeof value === 'string' ? value.slice(0, max) : '')
 const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0)
 

@@ -2,24 +2,29 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PhasePlan, TestRun } from '../types'
-import { isLearnBusy, learnStatusPath, readLearnStatus } from './learn'
+import { isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus } from './learn'
 import type { LearnStatus } from './learn'
 import {
-  bar, buildColor, buildRatio, collapsedLine, frontTab, GAMES, isGame, learnLabel, PANE_ID, phasesLabel, runMark,
-  statusLine, testsFooter, testsLabel,
+  bar, buildColor, buildRatio, collapsedLine, fitReleases, frontTab, GAMES, isGame, learnLabel, PANE_ID, pageLabel, phasesLabel,
+  runMark, statusLine, testsFooter, testsLabel, wrappedRows,
 } from './pane'
 import type { Tab } from './pane'
 import { runCount, runRatio } from './format'
 import { emptyProgress, feed, hasFailed } from './parse'
 import { describePlan, PHASES_GUIDE, PHASES_TOOL_SCHEMA, readPhasesInput } from './phases'
-import { macPanelArgv, panelState, readAppPath, readEvents, widgetArgv, widgetStatePath, WINDOW_SCRIPTS, windowArgv } from './widget'
+import { isReleaseUnseen, readPluginVersion, readReleases, releaseLine, releasesLabel, SEEN_RELEASE_KEY } from './releases'
+import type { Release } from './releases'
+import {
+  macPanelArgv, panelState, readAppPath, readEvents, readOwnerHwnd, widgetArgv, widgetStatePath, WINDOW_SCRIPTS, windowArgv,
+} from './widget'
 import type { WidgetEvent } from './widget'
 import { isTestCommand, runKey, shortLabel, wrapCommand } from './wrap'
 
 // Everything shows in one place: on WezTerm-on-WSL, the floating panel over the
 // chat's WezTerm window (widget/PhasesWidget.ps1); anywhere else (macOS, Linux, any
-// terminal), a Claude Code pane drawn here, with the same Phases, Tests and Learn tabs.
-// Learn and the games open in the browser from web/server.mjs, wherever there is no WPF.
+// terminal), a Claude Code pane drawn here, with the same Phases, Tests, Learn and
+// Releases tabs. Learn and the games open in the browser from web/server.mjs, wherever
+// there is no WPF.
 
 const LOG_ROOT = '/tmp/claude-progress'
 const POLL_MS = 500
@@ -29,6 +34,8 @@ const RUNS_KEPT = 4
 const TOTALS_KEY = 'totals'
 const TOTALS_KEPT = 100
 const LEARN_POLL_MS = 3_000
+// The body rows the pane asks for inline (a request: the layout may give it fewer).
+const PANE_ROWS = 12
 
 const testRuns = atom({ plugin: 'progress', key: 'testRuns' } as const, [])
 const phases = atom({ plugin: 'progress', key: 'phases' } as const, null)
@@ -67,11 +74,19 @@ let learn: LearnStatus | null = null
 let learnText = ''
 let learnTimer: Timer | null = null
 let syncing: Promise<void> = Promise.resolve()
-// The pane (off WezTerm-on-WSL): the tab in front, and the newest run it has seen.
+// The pane (off WezTerm-on-WSL): the tab in front, the one the person clicked (it stays
+// until a new run or a new plan), and the newest run and plan it has seen.
 let paneTab: Tab = 'phases'
+let manualTab: Tab | null = null
 let lastFocus: string | null = null
 let isPaneOpen = false
 let lastPlanTitle: string | null = null
+// The WezTerm window the WPF panel follows (its `ready`): /learn and /games windows follow it too.
+let ownerHwnd: number | null = null
+// releases.json and plugin.json, read once (session.start or the first draw).
+let releases: Release[] = []
+let pluginVersion: string | null = null
+let releasesRead: Promise<void> | null = null
 // macOS: whether this is a Mac that can draw the floating panel (else the pane).
 let isMacHost: Promise<boolean> | null = null
 
@@ -131,6 +146,7 @@ async function stopPanel($: EngineInterface) {
 async function onPanelEvent($: EngineInterface, event: WidgetEvent) {
   if (event.event === 'ready') {
     if (panel) panel.isReady = true
+    ownerHwnd = readOwnerHwnd(event) ?? ownerHwnd
   } else if (event.event === 'closed') {
     // ✕: hidden until something new happens (a new plan, a new test run, /phases).
     isDismissed = true
@@ -204,33 +220,40 @@ async function doSyncPanel($: EngineInterface) {
 
 /** Keeps the status line and the pane's front tab current, and opens the pane for something new. */
 async function syncPane($: EngineInterface, plan: PhasePlan | null, runs: readonly TestRun[]) {
-  // A new plan comes to the front, as a new run does.
-  const planTitle = plan && plan.items.length > 0 ? plan.title : null
-  if (planTitle !== null && planTitle !== lastPlanTitle) paneTab = 'phases'
-  lastPlanTitle = planTitle
-  paneTab = frontTab({ current: paneTab, plan, runs, learn, lastFocus })
+  // A new plan comes to the front, as a new run does; otherwise a clicked tab stays.
+  const front = frontTab({ current: paneTab, manual: manualTab, plan, runs, learn, lastFocus, lastPlanTitle })
+  paneTab = front.tab
+  manualTab = front.manual
+  lastPlanTitle = plan && plan.items.length > 0 ? plan.title : null
   lastFocus = runs.at(-1)?.id ?? null
   $.ui.status(statusLine(plan, runs, learn))
   if (isDismissed && !isPinned) return
   if (!isPaneOpen) {
     isPaneOpen = true
-    await $.ui.open({ id: PANE_ID, title: 'Progress', rows: 12 }).catch(() => {
+    await $.ui.open({ id: PANE_ID, title: 'Progress', rows: PANE_ROWS }).catch(() => {
       isPaneOpen = false
     })
   }
   $.ui.invalidate('ui.render')
 }
 
-/** Opens Learn or a game: its WPF window on WSL (any terminal), else the browser page from web/server.mjs. */
-async function openPage($: EngineInterface, page: string): Promise<string> {
+/**
+ * Opens Learn (at one of its views), a game, or the games page: its WPF window on WSL
+ * (any terminal; owned by the WezTerm window once the panel has named it), else the
+ * page from web/server.mjs, in its own window on macOS or the browser.
+ */
+async function openPage($: EngineInterface, page: string, deep: { view?: string; courseId?: string } = {}): Promise<string> {
+  const { view, courseId } = deep
   const distro = await $.env.get('WSL_DISTRO_NAME').catch(() => undefined)
   const script = WINDOW_SCRIPTS[page]
+  const at = view ? ` (${view})` : ''
   if (distro && script) {
     try {
-      const argv = windowArgv({ distro, pluginRoot: $.plugin.root, script, sessionId: await $.session.id() })
+      const sessionId = await $.session.id()
+      const argv = windowArgv({ distro, pluginRoot: $.plugin.root, script, sessionId, ownerHwnd, view, courseId })
       // Detached: the window stays when the session ends, as the panel's own launches do.
       await $.process.run(['bash', '-c', 'nohup "$@" >/dev/null 2>&1 &', 'open-window', ...argv])
-      return `Opening ${script.replace('.ps1', '')}.`
+      return `Opening ${pageLabel(page)}${at}.`
     } catch (error) {
       return `Couldn't open it: ${error instanceof Error ? error.message : String(error)}`
     }
@@ -239,9 +262,10 @@ async function openPage($: EngineInterface, page: string): Promise<string> {
     // The window sticks to this session's terminal window (macOS).
     const [terminal, itermSession] = await Promise.all([$.env.get('TERM_PROGRAM'), $.env.get('ITERM_SESSION_ID')])
     const follow = terminal ? ['--terminal', terminal, '--iterm-session', itermSession ?? ''] : []
-    const ran = await $.process.run(['bash', `${$.plugin.root}/web/web.sh`, 'open', page, ...follow])
+    const toView = [...(view ? ['--view', view] : []), ...(courseId ? ['--course', courseId] : [])]
+    const ran = await $.process.run(['bash', `${$.plugin.root}/web/web.sh`, 'open', page, ...toView, ...follow])
     const answer = JSON.parse(ran.stdout.trim().split('\n').at(-1) ?? '{}') as { ok?: boolean; url?: string; error?: string; shown?: string }
-    if (answer.ok && answer.shown === 'window') return `Opened ${page === 'learn' ? 'Learn' : page.replace('games/', '')} in its own window.`
+    if (answer.ok && answer.shown === 'window') return `Opened ${pageLabel(page)}${at} in its own window.`
     if (answer.ok && answer.url) return `Opened ${answer.url} in your browser.`
     return `Couldn't open it: ${answer.error ?? (ran.stderr.trim() || 'no answer')}`
   } catch (error) {
@@ -270,6 +294,19 @@ async function macPanelBinary($: EngineInterface): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+/** Reads releases.json and the plugin's version once; a missing or broken file leaves the tab empty. */
+function loadReleases($: EngineInterface): Promise<void> {
+  releasesRead ??= (async () => {
+    const [list, manifest] = await Promise.all([
+      $.fs.read(`${$.plugin.root}/releases.json`).catch(() => ''),
+      $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).catch(() => ''),
+    ])
+    releases = readReleases(list)
+    pluginVersion = readPluginVersion(manifest) ?? releases[0]?.version ?? null
+  })().catch(() => undefined)
+  return releasesRead
 }
 
 /** Picks up Learn's status file; a change redraws the panel's Learn tab. */
@@ -443,7 +480,8 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'learn',
-      description: 'Open Learn: courses built from free videos and docs by your own Claude',
+      description: 'Open Learn, or one of its views: courses built from free videos and docs by your own Claude',
+      argumentHint: `[${LEARN_VIEWS.join('|')}]`,
       immediate: true,
     })
     await $.command.register({
@@ -460,6 +498,7 @@ export const register: Register = on => {
     })
 
     const started = await next(e)
+    void loadReleases($)
     void syncPanel($)
     void resumeRuns($).catch(() => undefined)
     learnTimer?.cancel()
@@ -570,7 +609,7 @@ export const register: Register = on => {
     if ((await panelDistro($)) === null && panel === null) {
       // No floating panel here (or it failed): the pane, opened from the person's own command, seats at any width.
       isPaneOpen = true
-      const opened = await $.ui.open({ id: PANE_ID, title: 'Progress', rows: 12 })
+      const opened = await $.ui.open({ id: PANE_ID, title: 'Progress', rows: PANE_ROWS })
       if (!opened.isPlaced) return { text: `The progress pane is open but not drawn yet (${opened.reason}).` }
     } else if (panel === null) return { text: 'The floating panel could not start. /phases tries again.' }
     const plan = await read($, phases)
@@ -580,12 +619,21 @@ export const register: Register = on => {
     return { text: plan ? describePlan(plan) : 'Showing the test runs.' }
   })
 
-  on('command.run', { command: 'learn' }, async $ => ({ text: await openPage($, 'learn') }))
+  on('command.run', { command: 'learn' }, async ($, e) => {
+    const view = e.args.trim().toLowerCase()
+    if (view && !isLearnView(view)) return { text: `Learn has no view called "${view}". Views: ${LEARN_VIEWS.join(', ')}.` }
+    return { text: await openPage($, 'learn', { view: view || undefined }) }
+  })
 
   on('command.run', { command: 'games' }, async ($, e) => {
     const name = e.args.trim().toLowerCase()
-    if (!name) return { text: `Games: ${GAMES.map(game => game.id).join(', ')}. Try /games sudoku.` }
-    if (!isGame(name)) return { text: `No game called "${name}". Games: ${GAMES.map(game => game.id).join(', ')}.` }
+    const names = GAMES.map(game => game.id).join(', ')
+    if (!name) {
+      // On WSL each game is its own WPF window, so name one; elsewhere the games page lists them.
+      const distro = await $.env.get('WSL_DISTRO_NAME').catch(() => undefined)
+      return { text: distro ? `Games: ${names}. Try /games sudoku.` : await openPage($, 'games') }
+    }
+    if (!isGame(name)) return { text: `No game called "${name}". Games: ${names}.` }
     return { text: await openPage($, `games/${name}`) }
   })
 
@@ -601,34 +649,79 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
+    await loadReleases($)
     const plan = await read($, phases)
     const runs = await read($, testRuns)
+    // Read while drawing, so the write a press of the Releases tab makes draws the label again.
+    const seenRelease = await $.store.get(SEEN_RELEASE_KEY).catch(() => undefined)
     const isInline = e.props.placement === 'inline'
-    const ROOM = isInline ? 6 : 40
-    const show = (tab: Tab) => () => {
+    // Inline, the rows the layout gave the body: less the tab row and the gap under it, what a tab may draw.
+    const room = Math.max(1, (e.props.scroll?.bodyRows ?? PANE_ROWS) - 2)
+    // A click puts the tab in front and keeps it there until a new run or a new plan.
+    const show = (tab: Tab) => async () => {
       paneTab = tab
+      manualTab = tab
+      if (tab === 'releases' && pluginVersion) await $.store.set(SEEN_RELEASE_KEY, pluginVersion).catch(() => undefined)
       $.ui.invalidate('ui.render')
     }
-    const open = (page: string) => () => {
-      void openPage($, page).then(text => $.ui.toast(text))
+    const open = (page: string, deep?: { view?: string; courseId?: string }) => () => {
+      void openPage($, page, deep).then(text => $.ui.toast(text))
     }
+    // The tab in front is the accented one; the others dim until hovered.
+    const tabLook = (tab: Tab) =>
+      paneTab === tab ? { variant: 'primary' as const } : { plain: true as const, dimColor: true }
+    const versionLabel = releasesLabel(pluginVersion, seenRelease)
+    const isUnseen = isReleaseUnseen(pluginVersion, seenRelease)
 
+    // The three live tabs on the left; the version, which is the Releases tab, at the right.
     const tabs = (
-      <Box flexDirection="row" gap={1}>
-        <Button key="tab:phases" plain={paneTab === 'phases' ? undefined : true} variant={paneTab === 'phases' ? 'primary' : undefined} onPress={show('phases')}>
-          {phasesLabel(plan)}
-        </Button>
-        <Button key="tab:tests" plain={paneTab === 'tests' ? undefined : true} variant={paneTab === 'tests' ? 'primary' : undefined} onPress={show('tests')}>
-          {testsLabel(runs)}
-        </Button>
-        <Button key="tab:learn" plain={paneTab === 'learn' ? undefined : true} variant={paneTab === 'learn' ? 'primary' : undefined} onPress={show('learn')}>
-          {learnLabel(learn)}
+      <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" columnGap={2}>
+        <Box flexDirection="row" gap={1}>
+          <Button key="tab:phases" {...tabLook('phases')} onPress={show('phases')}>
+            {phasesLabel(plan)}
+          </Button>
+          <Button key="tab:tests" {...tabLook('tests')} onPress={show('tests')}>
+            {testsLabel(runs)}
+          </Button>
+          <Button key="tab:learn" {...tabLook('learn')} onPress={show('learn')}>
+            {learnLabel(learn)}
+          </Button>
+        </Box>
+        <Button key="tab:releases" label={versionLabel} {...tabLook('releases')} onPress={show('releases')}>
+          {versionLabel.replace(/ ●$/, '')}
+          {isUnseen && <Text color="claude"> ●</Text>}
         </Button>
       </Box>
     )
 
     let body
-    if (paneTab === 'tests') {
+    if (paneTab === 'releases') {
+      // Docked, the body scrolls; inline, the frame is cut at its rows, so only what fits is drawn.
+      const shown = isInline ? fitReleases(releases, room, e.props.bodyColumns) : releases
+      const earlier = releases.length - shown.length
+      // A gap between two releases; the "+N earlier" line sits right under the last one shown.
+      body = (
+        <Box flexDirection="column">
+          {releases.length === 0 && <Text dimColor>No releases listed.</Text>}
+          <Box flexDirection="column" gap={1}>
+            {shown.map(release => (
+              <Box key={`release:${release.version}`} flexDirection="column">
+                <Text>
+                  <Text bold>{release.version}</Text>
+                  <Text dimColor>{releaseLine(release).slice(release.version.length)}</Text>
+                </Text>
+                {release.notes.map((note, i) => (
+                  <Box key={`note:${release.version}:${i}`} paddingLeft={2}>
+                    <Text>{note}</Text>
+                  </Box>
+                ))}
+              </Box>
+            ))}
+          </Box>
+          {earlier > 0 && <Text dimColor>+{earlier} earlier</Text>}
+        </Box>
+      )
+    } else if (paneTab === 'tests') {
       const newest = [...runs].reverse()
       body = (
         <Box flexDirection="column">
@@ -654,23 +747,48 @@ export const register: Register = on => {
     } else if (paneTab === 'learn') {
       const build = learn?.build
       const course = learn?.course
+      // Inline with fewer rows than it all takes, the build's bar goes first, then its message:
+      // the topic, the course and the buttons always show.
+      const spare = room - 3 - (course ? 2 : 0) - (build || !course ? 1 : 0)
+      const hasMessage = Boolean(build?.message) && (!isInline || spare >= 1)
+      const hasBar = build !== undefined && build !== null && build.total > 0 && (!isInline || spare >= (hasMessage ? 2 : 1))
       body = (
         <Box flexDirection="column">
+          {/* The topic and what the build is doing, a line each, cut with an ellipsis rather than run into each other. */}
           {build && (
-            <Text>
-              <Text bold color={buildColor(build)}>{build.topic}</Text> <Text dimColor>{build.message}</Text>
+            <Text bold color={buildColor(build)} wrap="truncate-end">
+              {build.topic}
             </Text>
           )}
-          {build && build.total > 0 && (
+          {build && hasMessage && (
+            <Text dimColor wrap="truncate-end">
+              {build.message}
+            </Text>
+          )}
+          {build && hasBar && (
             <Text>
               <Text color={buildColor(build)}>{bar(buildRatio(build))}</Text> {build.done}/{build.total} pages
             </Text>
           )}
-          {course && <Text bold>{course.title}</Text>}
-          {course && <Text dimColor>Page {course.page} of {course.total}{course.next ? ` · next: ${course.next}` : ''}</Text>}
+          {course && (
+            <Text bold wrap="truncate-end">
+              {course.title}
+            </Text>
+          )}
+          {course && (
+            <Text dimColor wrap="truncate-end">
+              Page {course.page} of {course.total}{course.next ? ` · next: ${course.next}` : ''}
+            </Text>
+          )}
           {!build && !course && <Text dimColor>Courses from free videos and docs, written by your own Claude.</Text>}
-          <Box flexDirection="row" gap={1}>
-            <Button key="open:learn" variant="primary" onPress={open('learn')}>{course ? 'Carry on reading' : 'Open Learn'}</Button>
+          <Box flexDirection="row" marginTop={1}>
+            <Button key="open:learn" variant="primary" onPress={course ? open('learn', { view: 'course', courseId: course.id }) : open('learn')}>
+              {course ? 'Carry on reading' : 'Open Learn'}
+            </Button>
+          </Box>
+          {/* The games on their own row, which wraps rather than clips in a narrow pane. */}
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1}>
+            <Text dimColor>Games</Text>
             {GAMES.map(game => (
               <Button key={`game:${game.id}`} onPress={open(`games/${game.id}`)}>{game.label}</Button>
             ))}
@@ -680,9 +798,11 @@ export const register: Register = on => {
     } else if (plan === null || plan.items.length === 0) {
       body = <Text dimColor>No plan yet.</Text>
     } else {
+      // Inline, as many phases as the room leaves under the title (wrapped) and above the count.
+      const itemRows = isInline ? Math.max(1, room - wrappedRows(plan.title, e.props.bodyColumns) - 1) : plan.items.length
       const now = plan.items.findIndex(item => item.status !== 'done')
-      const first = isInline ? Math.max(0, Math.min(now, plan.items.length - ROOM)) : 0
-      const shown = plan.items.slice(first, first + ROOM)
+      const first = isInline ? Math.max(0, Math.min(now, plan.items.length - itemRows)) : 0
+      const shown = plan.items.slice(first, first + itemRows)
       const { done, total } = { done: plan.items.filter(item => item.status === 'done').length, total: plan.items.length }
       body = (
         <Box flexDirection="column">
@@ -691,7 +811,7 @@ export const register: Register = on => {
             <Text key={`item:${first + i}`}>
               {item.status === 'done' && <Text color="success">[✓] </Text>}
               {item.status === 'done' && <Text dimColor>{item.name}</Text>}
-              {item.status === 'in_progress' && <Text bold color="claude">[▸] {item.name}</Text>}
+              {item.status === 'in_progress' && <Text bold color="claude">[●] {item.name}</Text>}
               {item.status === 'todo' && <Text>[ ] {item.name}</Text>}
             </Text>
           ))}
@@ -704,7 +824,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {tabs}
-          <Text>{collapsedLine(paneTab, plan, runs, learn)}</Text>
+          <Text wrap="truncate-end">{collapsedLine(paneTab, plan, runs, learn, releases)}</Text>
         </Box>
       )
     }

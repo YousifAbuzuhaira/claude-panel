@@ -15,6 +15,16 @@ const STATE_ROOT = '/tmp/claude-progress'
 export type WidgetEvent = {
   event: 'ready' | 'closed' | 'alive' | 'duplicate' | 'error' | 'exited'
   message?: string
+  /** On `ready` from the WPF panel: the WezTerm window it follows (PhasesWidget.ps1 Send-Event). */
+  hwnd?: number
+  paneId?: number
+  guiPid?: number
+}
+
+/** The WezTerm window a `ready` names, for the windows /learn and /games open to follow; null when it names none. */
+export function readOwnerHwnd(event: WidgetEvent): number | null {
+  const hwnd = event.event === 'ready' ? event.hwnd : undefined
+  return typeof hwnd === 'number' && Number.isSafeInteger(hwnd) && hwnd > 0 ? hwnd : null
 }
 
 /** A WSL path as Windows reaches it: `\\wsl.localhost\<distro>\...`. */
@@ -82,14 +92,38 @@ export const WINDOW_SCRIPTS: Record<string, string> = {
   'games/chess': 'ChessPuzzles.ps1',
 }
 
-/** The command that starts a Learn or game window from WSL, any terminal. */
-export function windowArgv(options: { distro: string; pluginRoot: string; script: string; sessionId: string }): string[] {
-  const { distro, pluginRoot, script, sessionId } = options
-  return [
+// A course id as Learn's helper writes it: safe to pass through bash and on to Windows unquoted.
+const COURSE_ID = /^[\w.-]{1,80}$/
+
+/**
+ * The command that starts a Learn or game window from WSL, any terminal. With
+ * `ownerHwnd` (the WezTerm window the panel reported) the window follows it, as
+ * the panel's own launches do; `view` and `courseId` send Learn to one of its
+ * views and a course (an open Learn gets them too: the new one hands them over).
+ */
+export function windowArgv(options: {
+  distro: string
+  pluginRoot: string
+  script: string
+  sessionId: string
+  ownerHwnd?: number | null
+  view?: string
+  courseId?: string
+}): string[] {
+  const { distro, pluginRoot, script, sessionId, ownerHwnd, view, courseId } = options
+  const argv = [
     POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
     '-File', windowsPath(distro, `${pluginRoot}/widget/${script}`),
     '-SessionId', sessionId,
   ]
+  if (typeof ownerHwnd === 'number' && Number.isSafeInteger(ownerHwnd) && ownerHwnd > 0) argv.push('-OwnerHwnd', String(ownerHwnd))
+  // Only Learn takes a view and a course: a game would refuse the unknown parameter and not open.
+  if (script === WINDOW_SCRIPTS.learn) {
+    if (view) argv.push('-View', view)
+    if (courseId && COURSE_ID.test(courseId)) argv.push('-CourseId', courseId)
+  }
+
+  return argv
 }
 
 /** The command that starts the floating panel on macOS: the window app (mac/ClaudePanel.swift) in panel mode. */
