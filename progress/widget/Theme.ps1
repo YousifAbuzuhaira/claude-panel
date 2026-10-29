@@ -193,7 +193,9 @@ function Save-Appearance($Appearance) {
     ([Math]::Round([double]$Appearance.opacity.games, 2)).ToString($invariant))
   $temp = $path + '.tmp'
   [System.IO.File]::WriteAllText($temp, $json, (New-Object System.Text.UTF8Encoding($false)))
-  if (Test-Path -LiteralPath $path) { [System.IO.File]::Replace($temp, $path, $null) } else { [System.IO.File]::Move($temp, $path) }
+  # No backup: [NullString]::Value, because PowerShell turns $null into '' for a string argument,
+  # which File.Replace rejects as 'not of a legal form'.
+  if (Test-Path -LiteralPath $path) { [System.IO.File]::Replace($temp, $path, [NullString]::Value) } else { [System.IO.File]::Move($temp, $path) }
 }
 
 # The presets that ship beside this file: @{ name; label; bg; accent; text }, in their order.

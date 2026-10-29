@@ -546,7 +546,7 @@ function Write-LearnRequest([string]$View, [string]$CourseId) {
     $request = @{ view = $View; courseId = $CourseId; at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
     $path = Join-Path $dir 'learn-open.json'
     [System.IO.File]::WriteAllText($path + '.tmp', ($request | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
-    if (Test-Path -LiteralPath $path) { [System.IO.File]::Replace($path + '.tmp', $path, $null) } else { [System.IO.File]::Move($path + '.tmp', $path) }
+    if (Test-Path -LiteralPath $path) { [System.IO.File]::Replace($path + '.tmp', $path, [NullString]::Value) } else { [System.IO.File]::Move($path + '.tmp', $path) }
   } catch {}
 }
 
