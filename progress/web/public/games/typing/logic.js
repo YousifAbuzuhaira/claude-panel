@@ -294,6 +294,24 @@ export function schemeAsTheme(palette) {
   ];
 }
 
+/**
+ * The page's colours while 'auto' (the colour scheme) is on, as CSS properties: Monkeytype's
+ * names for the scheme's roles. `colors` is schemeAsTheme of the scheme at FULL opacity. Three
+ * differ from the theme: the hints and labels (sub) take the shared dim, which nears the text as
+ * the window clears so they stay legible, as every window's do; the letters still to type
+ * (untyped) keep the dim at full opacity, so they stay apart from the typed ones (the text)
+ * however see-through the window is, as widget/TypeTest.ps1's do; and subAlt fills (the key
+ * chips, the search box) are a tint of the text, so they fade with the window.
+ */
+export function schemeProperties(colors) {
+  const props = {};
+  THEME_KEYS.forEach((key, k) => { props[`--${key}`] = colors[k]; });
+  props['--sub'] = 'var(--dim)';
+  props['--subAlt'] = 'var(--surface)';
+  props['--untyped'] = colors[3];
+  return props;
+}
+
 /** A CSS colour ('#RRGGBB' or '#RRGGBBAA') at `alpha` times its own, as rgba(). */
 export function withAlpha(hex, alpha) {
   const value = String(hex).trim().replace(/^#/, '');

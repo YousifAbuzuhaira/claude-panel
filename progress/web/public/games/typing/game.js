@@ -2,12 +2,13 @@
 // The first theme, 'auto' (the default), is the colour scheme every window shares; a Monkeytype
 // theme repaints the whole window in its colours, as widget/TypeTest.ps1 does.
 import { loadSave, writeSave, withToken } from '../../shared/api.js';
-import { isNative, loadPresets, previewAppearance, watchAppearance } from '../../shared/look.js';
+import { isNative, loadAppearance, loadPresets, previewAppearance, watchAppearance } from '../../shared/look.js';
 import { markSeeThrough } from '../legible.js';
 import { rngFor, seedFromUrl } from '../rng.js';
 import {
   AUTO_THEME, DEFAULT_THEME, THEME_KEYS, TypeTest, WORD_COUNT,
-  filterThemes, graphScale, isBest, parseThemes, readSave, saveOf, schemeAsTheme, schemeName, themeTitle, withAlpha,
+  filterThemes, graphScale, isBest, parseThemes, readSave, saveOf, schemeAsTheme, schemeName, schemeProperties,
+  themeTitle, withAlpha,
 } from './logic.js';
 
 const $ = id => document.getElementById(id);
@@ -20,8 +21,11 @@ const rng = rngFor(seedFromUrl());
 document.querySelector('a.back').href = withToken('../');
 
 const Theme = globalThis.ClaudeTheme;
-// The colour scheme, as the shared watcher last saw it, and the presets that name it.
+// The colour scheme, as start() or the shared watcher last read it, and the presets that name it.
+// Until one of them has read it (haveScheme), `appearance` is only today's default, Ember, so
+// 'auto' leaves the page as /look.css first painted it: already in the saved scheme.
 let appearance = Theme.parseAppearance(null);
+let haveScheme = false;
 let presets = [];
 const schemeTheme = () => ({ name: AUTO_THEME, colors: schemeAsTheme(Theme.derivePalette(appearance.colors, 1)) });
 
@@ -42,6 +46,18 @@ function save() {
 
 // --- Themes --------------------------------------------------------------------------
 
+/**
+ * Before the scheme has been read: whatever a Monkeytype preview set taken off again, so the page
+ * shows /look.css's roles (and index.html's Monkeytype names for them), as at its first paint.
+ */
+function clearColors() {
+  const root = document.documentElement;
+  for (const role of Theme.ROLES) root.style.removeProperty(Theme.cssName(role));
+  for (const key of [...THEME_KEYS, 'untyped', 'bg-solid']) root.style.removeProperty(`--${key}`);
+  root.style.removeProperty('color-scheme');
+  delete root.dataset.seeThrough;
+}
+
 /** Paints the window in a theme: 'auto' is the scheme's roles; any other repaints them. */
 function setColors(name) {
   const theme = themes.find(t => t.name === name);
@@ -50,11 +66,10 @@ function setColors(name) {
   const root = document.documentElement.style;
   const colors = theme.colors;
   if (name === AUTO_THEME) {
-    // The scheme's roles back on the page, and Monkeytype's names for them.
-    markSeeThrough(previewAppearance(appearance, 'games'));
-    THEME_KEYS.forEach((key, k) => root.setProperty(`--${key}`, colors[k]));
-    // subAlt fills (the key chips, the search box): a tint of the text, so it fades with the window.
-    root.setProperty('--subAlt', 'var(--surface)');
+    if (!haveScheme) return clearColors();
+    // The scheme's roles back on the page (look.js marks the see-through), and Monkeytype's names for them.
+    previewAppearance(appearance, 'games');
+    for (const [key, value] of Object.entries(schemeProperties(colors))) root.setProperty(key, value);
     return;
   }
   // Every shared role worked out from the theme's bg, main and text the way the scheme's are (so
@@ -69,6 +84,8 @@ function setColors(name) {
   root.setProperty('--red', colors[6]);
   root.setProperty('--edge', withAlpha(colors[3], 80 / 255));
   THEME_KEYS.forEach((key, k) => root.setProperty(`--${key}`, colors[k]));
+  // The letters still to type are the theme's own sub, as Monkeytype paints them.
+  root.setProperty('--untyped', colors[3]);
   // subAlt is meant as a shade barely off the background: on a see-through window it fades too.
   root.setProperty('--subAlt', withAlpha(colors[4], opacity));
 }
@@ -77,6 +94,7 @@ function setColors(name) {
     see-through of whichever theme is on screen. */
 function schemeChanged(next) {
   appearance = next;
+  haveScheme = true;
   const auto = schemeTheme();
   themes[0] = auto;
   const entry = swatches.find(e => e.name === AUTO_THEME);
@@ -492,11 +510,18 @@ function showDemo() {
 
 async function start() {
   newTest();
-  const [text, saved, presetList] = await Promise.all([
+  const [text, saved, presetList, loaded] = await Promise.all([
     fetch('/data/TypeThemes.txt').then(r => (r.ok ? r.text() : '')).catch(() => ''),
     demoView ? null : loadSave('typetest'),
     loadPresets(),
+    loadAppearance(),
   ]);
+  // The scheme before the first paint of 'auto', unless the watcher has already brought it.
+  // Null (the server could not be asked): 'auto' keeps /look.css's look until the watcher can.
+  if (loaded && !haveScheme) {
+    appearance = loaded;
+    haveScheme = true;
+  }
   presets = presetList;
   themes = [schemeTheme(), ...parseThemes(text)];
   const prefs = readSave(saved, themes.map(t => t.name));

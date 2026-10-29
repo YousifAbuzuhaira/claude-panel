@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import {
   AUTO_THEME, DEFAULT_THEME, EXTRA_LIMIT, FALLBACK_THEME, SAVE_THEME_SET, TypeTest, WORD_COUNT, WORD_LIST, consistency, count, cssColor,
   filterThemes, graphScale, isBest, kogasa, parseThemes, pickWords, raw, readSave, saveOf, schemeAsTheme, schemeName,
-  themeTitle, withAlpha, wpm,
+  schemeProperties, themeTitle, withAlpha, wpm,
 } from '../public/games/typing/logic.js';
 import { seeded } from '../public/games/rng.js';
 
@@ -244,4 +244,51 @@ test("schemeName: the preset 'auto' follows, or custom once its colours change",
   assert.equal(schemeName({ preset: 'paper', colors: { bg: '#f5f2eb', accent: '#c2602f', text: '#1f1e1c' } }, presets), 'paper');
   assert.equal(schemeName({ preset: 'paper', colors: { bg: '#000000', accent: '#C2602F', text: '#1F1E1C' } }, presets), 'custom');
   assert.equal(schemeName({ preset: 'custom', colors: { bg: '#000000', accent: '#FFD400', text: '#FFFFFF' } }, presets), 'custom');
+});
+
+// The schemes the snapshots draw: Ember, Paper and a high-contrast custom one.
+const SCHEMES = {
+  ember: Theme.DEFAULT_COLORS,
+  paper: { bg: '#F5F2EB', accent: '#C2602F', text: '#1F1E1C' },
+  hc: { bg: '#000000', accent: '#FFD400', text: '#FFFFFF' },
+};
+const rgbHex = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+
+test("'auto': the letters still to type keep the full-opacity dim, so they stay apart from the typed ones", () => {
+  for (const [name, colors] of Object.entries(SCHEMES)) {
+    const solid = Theme.derivePalette(colors, 1);
+    const props = schemeProperties(schemeAsTheme(solid));
+    const fullDim = `#${solid.dim.slice(3)}`;
+    assert.equal(props['--untyped'], fullDim, `${name}: untyped is the dim at full opacity`);
+    assert.equal(props['--text'], `#${solid.ink.slice(3)}`, `${name}: typed is the text`);
+    // At 40% the shared dim nears the text; the untyped letters don't follow it.
+    const clearDim = `#${Theme.derivePalette(colors, 0.4).dim.slice(3)}`;
+    assert.notEqual(clearDim.toUpperCase(), fullDim.toUpperCase(), `${name}: the shared dim moves at 0.4`);
+    const apart = Theme.contrast(rgbHex(props['--untyped']), rgbHex(props['--text']));
+    assert.ok(apart >= 2.2, `${name}: typed vs untyped ${apart.toFixed(2)}:1`);
+    // Hints and labels take the shared dim (legible at any see-through); fills a tint of the text.
+    assert.equal(props['--sub'], 'var(--dim)', `${name}: sub is the shared dim`);
+    assert.equal(props['--subAlt'], 'var(--surface)', `${name}: subAlt is the shared surface`);
+    assert.equal(props['--main'], `#${solid.accent.slice(3)}`, `${name}: main is the accent`);
+  }
+});
+
+test('the untyped letters are painted with --untyped, which is sub unless game.js says otherwise', () => {
+  const page = readFileSync(new URL('../public/games/typing/index.html', import.meta.url), 'utf8');
+  assert.match(page, /\.word span \{ color: var\(--untyped\); \}/);
+  assert.match(page, /--untyped: var\(--sub\);/);
+  const game = readFileSync(new URL('../public/games/typing/game.js', import.meta.url), 'utf8');
+  assert.match(game, /root\.setProperty\('--untyped', colors\[3\]\);/, "a Monkeytype theme's untyped letters are its sub");
+});
+
+test("'auto' waits for the saved scheme: never a frame of the default (Ember) before it is read", () => {
+  const game = readFileSync(new URL('../public/games/typing/game.js', import.meta.url), 'utf8');
+  // start() reads the appearance with its other fetches, and takes it unless the watcher was first.
+  const start = /async function start\(\) \{[\s\S]*?\n\}/.exec(game)[0];
+  assert.match(start, /await Promise\.all\(\[[\s\S]*loadAppearance\(\),[\s\S]*\]\);/);
+  assert.match(start, /if \(loaded && !haveScheme\) \{\s*appearance = loaded;\s*haveScheme = true;/);
+  assert.ok(start.indexOf('haveScheme = true') < start.indexOf('setTheme(prefs.theme)'), 'the scheme is in before the first setTheme');
+  // Until then 'auto' paints nothing of its own: /look.css's first paint stays.
+  assert.match(game, /if \(name === AUTO_THEME\) \{\s*if \(!haveScheme\) return clearColors\(\);/);
+  assert.match(game, /function schemeChanged\(next\) \{\s*appearance = next;\s*haveScheme = true;/);
 });

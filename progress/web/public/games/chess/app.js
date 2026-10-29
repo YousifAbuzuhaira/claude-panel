@@ -7,7 +7,6 @@
 // &engine=1 to let a 'wrong'/'played' demo wait for Stockfish.
 import { loadSave, token, withToken, writeSave } from '../../shared/api.js';
 import { watchAppearance } from '../../shared/look.js';
-import { markSeeThrough } from '../legible.js';
 import { Board, isCapture, isCastle, isEnPassant, uci } from './board.js';
 import { describe, ideaHint, lineSan, pieceOn, replyNote, summary } from './narrator.js';
 import { update as glickoUpdate } from './glicko.js';
@@ -1307,5 +1306,6 @@ async function main() {
 }
 
 document.getElementById('backLink').href = withToken('../');
-watchAppearance('games', (appearance, palette) => markSeeThrough(palette));
+// The colour scheme, followed live; look.js also marks the see-through for the halo.
+watchAppearance('games');
 main().catch(error => { console.error(error); el.loading.hidden = false; el.loading.textContent = `Something broke: ${error.message}`; });

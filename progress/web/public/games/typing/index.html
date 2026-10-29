@@ -11,10 +11,12 @@
 <style>
   /* Monkeytype's colours. game.js sets them from the chosen theme; 'auto' (the default) is the
      colour scheme every window shares, so before it runs they are the scheme's. A Monkeytype
-     theme repaints the shared roles too, so the whole window wears it. */
+     theme repaints the shared roles too, so the whole window wears it. --untyped, the letters
+     still to type, is sub; in 'auto' game.js makes it the scheme's dim at full opacity, so they
+     stay apart from the typed ones however see-through the window is. */
   :root {
     --bg: var(--card-fill); --main: var(--accent); --caret: var(--accent); --sub: var(--dim); --subAlt: var(--surface);
-    --text: var(--ink); --error: var(--red); --errorExtra: #884749;
+    --text: var(--ink); --error: var(--red); --errorExtra: #884749; --untyped: var(--sub);
     --type: 'Roboto Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
     --letter: 26px;
     /* The views share one height, so the window holds still between typing, result and themes. */
@@ -37,7 +39,7 @@
   }
   .word { margin: 4px calc(var(--letter) * 0.6) 4px 0; border-bottom: 2px solid transparent; white-space: pre; }
   .word.left-wrong { border-bottom-color: var(--error); }
-  .word span { color: var(--sub); }
+  .word span { color: var(--untyped); }
   .word span.right { color: var(--text); }
   .word span.wrong { color: var(--error); }
   .word span.extra { color: var(--errorExtra); }

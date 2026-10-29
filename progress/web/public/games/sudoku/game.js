@@ -1,7 +1,6 @@
 // The Sudoku page: draws the board, takes keys and clicks, keeps the save.
 import { loadSave, writeSave, withToken } from '../../shared/api.js';
 import { watchAppearance } from '../../shared/look.js';
-import { markSeeThrough } from '../legible.js';
 import { rngFor, seedFromUrl } from '../rng.js';
 import { MAX_LIVES, Sudoku, boardLook, readSave, saveOf } from './logic.js';
 
@@ -294,5 +293,6 @@ async function start() {
   draw();
 }
 
-watchAppearance('games', (appearance, palette) => markSeeThrough(palette));
+// The colour scheme, followed live; look.js also marks the see-through for the halo.
+watchAppearance('games');
 start();

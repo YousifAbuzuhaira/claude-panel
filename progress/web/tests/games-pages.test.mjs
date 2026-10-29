@@ -1,7 +1,7 @@
 // The game pages' wiring to the shared look and to each other: every page wears the colour
 // scheme (theme.css then /look.css before its own CSS, theme.js before its modules,
-// watchAppearance('games') marking the see-through), every game links back to the hub from its
-// header, and the hub reaches every game and Learn.
+// watchAppearance('games'), whose look.js marks the see-through), every game links back to the
+// hub from its header, and the hub reaches every game and Learn.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -45,14 +45,18 @@ test('every page paints its first frame in the saved scheme: /look.css right aft
   }
 });
 
-test('every page follows the games colour scheme and opacity, and marks its see-through', () => {
+test('every page follows the games colour scheme and opacity; look.js marks its see-through', () => {
   for (const [name, [, js]] of Object.entries(PAGES)) {
     const code = read(js);
     assert.match(code, /from '(\.\.\/)+shared\/look\.js'/, `${name}: imports look.js`);
     assert.match(code, /watchAppearance\('games'/, `${name}: watches the 'games' group`);
-    assert.match(code, /from '\.\.?\/(\.\.\/)?legible\.js'/, `${name}: imports legible.js`);
-    assert.match(code, /markSeeThrough\(/, `${name}: marks its see-through`);
   }
+  // look.js marks every palette it paints, watched or previewed, so the pages need not.
+  const look = readFileSync(new URL('../public/shared/look.js', import.meta.url), 'utf8');
+  const marks = look.match(/const palette = T\(\)\.applyAppearance\(shown, group\);\s*markSeeThrough\(palette\);/g) || [];
+  assert.equal(marks.length, 2, 'watchAppearance and previewAppearance both mark the see-through');
+  // A Monkeytype theme is a palette look.js never sees: Typing marks that one itself.
+  assert.match(read('typing/game.js'), /from '\.\.\/legible\.js'[\s\S]*markSeeThrough\(look\);/);
 });
 
 test('every page is titled by its name: Games, 2048, Sudoku, Typing, Chess', () => {
@@ -165,7 +169,27 @@ test('see-through: --bg-solid always, html[data-see-through] below 85%', () => {
 });
 
 test('the halo is for see-through windows only, and spares the things with fills of their own', () => {
+  // The halo itself is the shared one (theme.css); games.css only takes it off the games' own fills.
+  const shared = readFileSync(new URL('../public/shared/theme.css', import.meta.url), 'utf8');
+  assert.match(shared, /html\[data-see-through\] body \{\s*text-shadow:[^}]*var\(--bg-solid\)/);
   const css = read('games.css');
-  assert.match(css, /html\[data-see-through\] body \{\s*text-shadow:[^}]*var\(--bg-solid\)/);
+  assert.ok(!/html\[data-see-through\] body \{/.test(css), 'games.css adds no second halo of its own');
   assert.match(css, /html\[data-see-through\] :is\(\.face, \.board-frame, \.ui-btn\.primary, \.swatch:not\(\.auto\), \.veil-text\) \{ text-shadow: none; \}/);
+});
+
+test('the title sits the same distance under the back link in every game, stat boxes or not', () => {
+  const css = read('games.css');
+  const head = /\n\.head \{([^}]*)\}/.exec(css)[1];
+  const title = /\n\.head \.ui-title \{([^}]*)\}/.exec(css)[1];
+  const line = /min-height: (\d+)px/.exec(head)[1];
+  // On the head's first line, as tall as the head at its least: not centred against 2048's and
+  // Chess's 40px stat boxes, which would put it lower there than in Sudoku and Typing.
+  assert.match(title, /align-self: flex-start/);
+  assert.match(title, new RegExp(`line-height: ${line}px`));
+  for (const name of ['2048', 'sudoku', 'typing', 'chess']) {
+    const page = read(PAGES[name][0]);
+    assert.match(page, /&larr; Games<\/a>\s*<header class="head">\s*<h1 class="ui-title"/, `${name}: the back link, then the head, the title first`);
+    assert.ok(!/\.head\s*\{|\.ui-title\s*\{/.test(page.split('</style>')[0].split('<style>')[1] || ''), `${name}: no head or title rule of its own`);
+  }
+  assert.ok(!/\.head\s*\{|\.head \.ui-title|(^|\n)\.ui-title/.test(read('chess/style.css')), 'chess: no head or title rule of its own');
 });
