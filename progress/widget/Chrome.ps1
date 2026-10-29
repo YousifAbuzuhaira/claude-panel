@@ -130,6 +130,8 @@ function New-UiButton([string]$Text, [string]$Kind = 'secondary', [switch]$Mono,
   $button = New-Object System.Windows.Controls.Border
   $button.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
   $button.Padding = New-UiThickness 12 4 12 5
+  # One height for every text button, here and on the web (.ui-btn).
+  $button.MinHeight = 28
   $button.Cursor = [System.Windows.Input.Cursors]::Hand
   $button.VerticalAlignment = 'Center'
   if ($Tip) { $button.ToolTip = $Tip }
@@ -141,7 +143,7 @@ function New-UiButton([string]$Text, [string]$Kind = 'secondary', [switch]$Mono,
   if ($Mono) { $label.FontFamily = $UI_MONO }
   switch ($Kind) {
     'primary' { $fill = 'accent'; $role = 'onAccent'; $label.FontWeight = 'Bold' }
-    'plain' { $fill = $null; $role = 'dim'; $button.Padding = New-UiThickness 4 2 4 2 }
+    'plain' { $fill = $null; $role = 'dim'; $button.Padding = New-UiThickness 4 2 4 2; $button.MinHeight = 0 }
     default { $fill = 'button'; $role = 'ink' }
   }
   $label.Foreground = Get-UiBrush $role
@@ -490,7 +492,12 @@ function Update-UiHalo {
   $solid = [System.Windows.Media.Color]::FromRgb($fill.R, $fill.G, $fill.B)
   $UI_HALO_EDGE.Color = $solid
   $UI_HALO_SOFT.Color = $solid
-  $isOn = [double]$script:THEME.appearance.opacity[$script:THEME.group] -lt $UI_HALO_BELOW
+  $opacity = [double]$script:THEME.appearance.opacity[$script:THEME.group]
+  $isOn = $opacity -lt $UI_HALO_BELOW
+  # It comes in gently below the threshold and is full by 50%.
+  $strength = [Math]::Min([double]1, [Math]::Max([double]0.25, ($UI_HALO_BELOW - $opacity) / 0.35))
+  $UI_HALO_EDGE.Opacity = $strength
+  $UI_HALO_SOFT.Opacity = $strength
   foreach ($pair in $script:uiHaloHosts) {
     if ($isOn) { $edge = $UI_HALO_EDGE; $soft = $UI_HALO_SOFT } else { $edge = $null; $soft = $null }
     if ($pair.edge.Effect -ne $edge) { $pair.edge.Effect = $edge }

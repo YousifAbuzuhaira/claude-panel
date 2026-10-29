@@ -78,10 +78,6 @@ button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
    so it reads over whatever shows through, light or dark. Things with solid fills of their own
    (2048's tiles, the chess board, a primary button, Typing's theme swatches) keep crisp edges; the
    sparkline and Typing's graph get the same halo as a drop shadow. */
-html[data-see-through] body {
-  text-shadow: 0 0 1px var(--bg-solid), 0 0 1px var(--bg-solid), 0 0 2px var(--bg-solid), 0 0 3px var(--bg-solid), 0 0 6px var(--bg-solid);
-}
-html[data-see-through] :is(button, input) { text-shadow: inherit; }
 html[data-see-through] :is(.face, .board-frame, .ui-btn.primary, .swatch:not(.auto), .veil-text) { text-shadow: none; }
 html[data-see-through] :is(.spark, #graph) {
   filter: drop-shadow(0 0 1px var(--bg-solid)) drop-shadow(0 0 2px var(--bg-solid));

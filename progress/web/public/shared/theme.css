@@ -138,5 +138,12 @@ textarea.ui-input { height: auto; resize: vertical; }
 .ui-empty { max-width: 320px; color: var(--dim); }
 .ui-empty small { display: block; margin-top: 2px; color: var(--faint); font-size: 11.5px; }
 
-/* Tooltips the pages draw themselves ([data-tip]). */
-[data-tip] { position: relative; }
+/* Legible at low see-through: below 85% (shared/legible.js marks html[data-see-through] and
+   sets --bg-solid, the background without its see-through) the text gets a halo of the
+   background to stand on, whatever shows through. Pages turn it off where it doesn't belong
+   (a board, a tile, a primary button). */
+html[data-see-through] body {
+  text-shadow: 0 0 1px var(--bg-solid), 0 0 1px var(--bg-solid), 0 0 2px var(--bg-solid), 0 0 3px var(--bg-solid), 0 0 6px var(--bg-solid);
+}
+html[data-see-through] :is(button, input, textarea, select) { text-shadow: inherit; }
+html[data-see-through] :is(.ui-btn.primary, .ui-swatch) { text-shadow: none; }

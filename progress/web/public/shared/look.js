@@ -4,6 +4,7 @@
 //   import { watchAppearance } from '../shared/look.js'
 //   watchAppearance('learn')        // applies now, then follows changes made in any window
 import { token } from './api.js';
+import { markSeeThrough } from './legible.js';
 
 const T = () => globalThis.ClaudeTheme;
 const POLL_MS = 2000;
@@ -75,6 +76,7 @@ export function watchAppearance(group, onChange) {
     lastText = text;
     const shown = isNative() ? appearance : { ...appearance, opacity: { ...appearance.opacity, [group]: 1 } };
     const palette = T().applyAppearance(shown, group);
+    markSeeThrough(palette);
     if (onChange) onChange(appearance, palette);
   };
   apply();
@@ -88,5 +90,7 @@ export function watchAppearance(group, onChange) {
 /** Shows an appearance on this page at once (while a control is being dragged), unsaved. */
 export function previewAppearance(appearance, group) {
   const shown = isNative() ? appearance : { ...appearance, opacity: { ...appearance.opacity, [group]: 1 } };
-  return T().applyAppearance(shown, group);
+  const palette = T().applyAppearance(shown, group);
+  markSeeThrough(palette);
+  return palette;
 }

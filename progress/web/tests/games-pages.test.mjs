@@ -136,15 +136,15 @@ test('Sudoku keeps the 9x9 board\'s room at every size, so nothing below it move
   assert.match(page, /--thin: color-mix\(in srgb, var\(--ink\) 15%, var\(--bg-solid, transparent\)\)/, 'the grid lines are solid');
 });
 
-test('see-through: --bg-solid always, html[data-see-through] below 80%', () => {
-  assert.equal(SEE_THROUGH_BELOW, 0.8);
+test('see-through: --bg-solid always, html[data-see-through] below 85%', () => {
+  assert.equal(SEE_THROUGH_BELOW, 0.85);
   assert.deepEqual(splitArgb('#F21C1D20'), { solid: '#1c1d20', alpha: 0xf2 / 255 });
   assert.equal(splitArgb('#1C1D20'), null);
   assert.equal(splitArgb(null), null);
   const at = op => seeThroughOf(Theme.derivePalette(Theme.DEFAULT_COLORS, op));
   assert.deepEqual(at(1), { bgSolid: '#1c1d20', seeThrough: false });
   assert.deepEqual(at(0.95), { bgSolid: '#1c1d20', seeThrough: false });
-  assert.deepEqual(at(0.8), { bgSolid: '#1c1d20', seeThrough: false });
+  assert.deepEqual(at(0.85), { bgSolid: '#1c1d20', seeThrough: false });
   assert.deepEqual(at(0.79), { bgSolid: '#1c1d20', seeThrough: true });
   assert.deepEqual(at(0.4), { bgSolid: '#1c1d20', seeThrough: true });
   const paper = seeThroughOf(Theme.derivePalette({ bg: '#F5F2EB', accent: '#C2602F', text: '#1F1E1C' }, 0.4));
