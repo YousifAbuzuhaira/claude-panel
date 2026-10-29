@@ -10,7 +10,10 @@ A Claude Code plugin that puts a small floating panel over your terminal, showin
 - **Your look.** Pick a colour scheme (Ember, Graphite, Moss, Serika, Paper, or your own three colours) and how see-through each window's background is. Every window follows at once.
 
 <p>
-  <img src="docs/images/panel-learn-tab.png" width="380" alt="The floating panel's Learn tab">
+  <img src="docs/images/panel-learn-tab.png" width="300" alt="The floating panel's Learn tab">
+  <img src="docs/images/panel-look.png" width="300" alt="The panel's colour scheme and see-through strip">
+  <img src="docs/images/panel-releases.png" width="300" alt="The panel's Releases tab">
+  <img src="docs/images/panel-paper.png" width="300" alt="The panel in the light Paper scheme">
 </p>
 
 | A course page, with its chat | What you already know, before a new course |
