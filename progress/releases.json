@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.3.0",
+      "date": "2026-10-29",
+      "by": "Yousif",
+      "notes": [
+        "Colour schemes, preset or your own, and see-through for every window",
+        "A Releases tab; tabs stay where you click them",
+        "Cleaner layout everywhere; Learn and the games link to each other"
+      ]
+    },
+    {
       "version": "0.2.0",
       "date": "2026-10-29",
       "by": "Mahmood",

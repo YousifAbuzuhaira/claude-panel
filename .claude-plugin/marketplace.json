@@ -7,7 +7,7 @@
     {
       "name": "progress",
       "source": "./progress",
-      "description": "A progress panel beside the chat (Phases, Tests and Learn tabs, plus games). A floating window on Windows + WSL2 + WezTerm; a Claude Code pane plus browser pages on macOS, Linux and any terminal."
+      "description": "A progress panel beside the chat (Phases, Tests, Learn and Releases tabs, plus games), in your own colour scheme and see-through. A floating window on Windows + WSL2 + WezTerm and on macOS; a Claude Code pane plus browser pages anywhere else."
     }
   ]
 }
