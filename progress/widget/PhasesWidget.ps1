@@ -174,6 +174,10 @@ function Find-WezTermProcessId {
   }
   $fg = [PhasesWin32]::GetForegroundWindow()
   if ([PhasesWin32]::ClassOf($fg) -eq $WEZTERM_CLASS) { return [int][PhasesWin32]::ProcessOf($fg) }
+  # Several WezTerms and none in front: the one whose window is highest (EnumWindows walks the
+  # top-level windows from the top), not whichever process happens to be listed first.
+  $front = [PhasesWin32]::WindowsOf(0, $WEZTERM_CLASS) | Select-Object -First 1
+  if ($front) { return [int][PhasesWin32]::ProcessOf($front) }
   $any = Get-Process wezterm-gui -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($any) { return [int]$any.Id }
   return 0
