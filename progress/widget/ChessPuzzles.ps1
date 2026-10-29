@@ -242,8 +242,12 @@ $SETTING_H = 24
 $CHIP_GAP = 4
 $CHIP_H = 26
 # The width of a themed scrollbar (Theme.ps1): the feed's and the picker's sit in the card's
-# right margin, so their content keeps the column's full width whether or not they scroll.
+# right margin, so their content keeps the column's full width whether or not they scroll. Both
+# scrollers reach this far into that margin (16), so both bars sit in one place, in its middle.
 $SCROLL_W = 9
+$SCROLL_REACH = 12
+# The rating curve shows from this many results on: two points are only a stroke.
+$SPARK_MIN = 3
 $SLIDE_MS = 170
 $SETUP_MS = 450
 $REPLY_MS = 400
@@ -427,6 +431,8 @@ function New-Text([string]$Text, $Foreground) {
   return $block
 }
 
+# The halo for low see-through is the shared one (Chrome.ps1 New-UiHaloFrame / Update-UiHalo).
+
 function New-Gap([double]$Left, [double]$Top, [double]$Right, [double]$Bottom) {
   return New-Object System.Windows.Thickness($Left, $Top, $Right, $Bottom)
 }
@@ -492,7 +498,7 @@ $card.BorderThickness = New-Object System.Windows.Thickness(1)
 $header = New-Object System.Windows.Controls.DockPanel
 $header.Cursor = [System.Windows.Input.Cursors]::SizeAll
 $header.Background = $noFill
-$titleText = New-UiTitle 'Puzzles'
+$titleText = New-UiTitle 'Chess'
 [System.Windows.Controls.DockPanel]::SetDock($titleText, 'Left')
 $closeText = New-UiMark $UI_GLYPHS.close 'Close'
 $closeText.Margin = New-Gap 4 0 0 0
@@ -522,19 +528,31 @@ $ratingFlash.RenderTransform = New-Object System.Windows.Media.TranslateTransfor
 [void]$ratingLayers.Children.Add($ratingFlash)
 $ratingBox.Child = $ratingLayers
 
+# The recent curve: a faint line where it started, the curve in the accent, a dot on where it is
+# now. Hidden until there are $SPARK_MIN points (Update-Rating); it keeps its place meanwhile.
 $sparkHost = New-Object System.Windows.Controls.Canvas
 $sparkHost.Width = 96
 $sparkHost.Height = 26
 $sparkHost.Margin = New-Gap 0 0 12 0
 $sparkHost.VerticalAlignment = 'Center'
 $sparkHost.Background = $noFill
-$sparkHost.ToolTip = 'Your rating over the last puzzles'
+$sparkHost.ToolTip = 'Your rating over the last puzzles (the faint line is where it started)'
+$sparkHost.Visibility = 'Hidden'
 [System.Windows.Controls.DockPanel]::SetDock($sparkHost, 'Right')
+$sparkBase = New-Object System.Windows.Shapes.Line
+$sparkBase.Stroke = $T.rule
+$sparkBase.StrokeThickness = 1
 $sparkLine = New-Object System.Windows.Shapes.Polyline
 $sparkLine.Stroke = $accent
 $sparkLine.StrokeThickness = 1.5
 $sparkLine.StrokeLineJoin = 'Round'
+$sparkDot = New-Object System.Windows.Shapes.Ellipse
+$sparkDot.Width = 5
+$sparkDot.Height = 5
+$sparkDot.Fill = $accent
+[void]$sparkHost.Children.Add($sparkBase)
 [void]$sparkHost.Children.Add($sparkLine)
+[void]$sparkHost.Children.Add($sparkDot)
 
 [void]$header.Children.Add($titleText)
 [void]$header.Children.Add($closeText)
@@ -543,11 +561,11 @@ $sparkLine.StrokeLineJoin = 'Round'
 [void]$header.Children.Add($sparkHost)
 [void]$header.Children.Add((New-Object System.Windows.Controls.Border))
 
-# Under the games mark: Learn and the other games, a click away.
+# Under the games mark: Learn and the other games, a click away. Right-aligned, it ends on the
+# close mark's right edge, and closes (switching the mark off) after a pick.
 $switcher = New-UiSwitcherRow 'chess' $OwnerHwnd $SessionId
-# Right-aligned: the last chip gives back its gap, so the row ends on the column's right edge.
-if ($switcher.Children.Count -gt 0) { $switcher.Children[$switcher.Children.Count - 1].Margin = New-Gap 0 0 0 0 }
-$switcher.Margin = New-Gap 0 10 0 0
+$switcher.Tag = @{ mark = $gamesMark }
+$switcher.Margin = New-Gap 0 8 0 0
 $switcher.HorizontalAlignment = 'Right'
 $switcher.Visibility = 'Collapsed'
 
@@ -1082,14 +1100,16 @@ $gameLink = New-Link "Source game $GLYPH_LINK" 'The game it comes from, on liche
 [void]$bottom.Children.Add($linkRow)
 
 # The feed scrolls with a thin scrollbar. The scroller reaches into the gap beside the board by a
-# feed line's inset, and its scrollbar sits in the card's right margin, so feed text starts at 0
-# and the lines keep one width whether the bar shows or not.
+# feed line's inset, so feed text starts at 0, and $SCROLL_REACH into the card's right margin,
+# where its bar sits (as the picker's does); the lines end on the column's right edge, as the
+# buttons below do, and keep one width whether the bar shows or not.
 $FEED_PAD = 6
 $feedScroll = New-Object System.Windows.Controls.ScrollViewer
 $feedScroll.VerticalScrollBarVisibility = 'Visible'
 $feedScroll.Focusable = $false
-$feedScroll.Margin = New-Gap (-$FEED_PAD) 0 (-($FEED_PAD + $SCROLL_W)) 0
+$feedScroll.Margin = New-Gap (-$FEED_PAD) 0 (-$SCROLL_REACH) 0
 $feedPanel = New-Object System.Windows.Controls.StackPanel
+$feedPanel.Margin = New-Gap 0 0 ($SCROLL_REACH - $SCROLL_W) 0
 $feedScroll.Content = $feedPanel
 
 [void]$side.Children.Add($infoLine)
@@ -1133,7 +1153,7 @@ $searchBox.FontSize = 12
 # Text 9px in, on the chips' text below (the box adds 1 for its border and 2 of its own);
 # room on the right for the close mark.
 $searchBox.Padding = New-Gap 6 0 30 0
-$searchHint = New-Text 'Search themes' $faint
+$searchHint = New-Text 'Search themes' $dim
 $searchHint.FontSize = 12
 $searchHint.Margin = New-Gap 9 0 30 0
 $searchHint.VerticalAlignment = 'Center'
@@ -1145,11 +1165,13 @@ $pickerClose.Margin = New-Gap 0 0 4 0
 [void]$searchHost.Children.Add($searchBox)
 [void]$searchHost.Children.Add($searchHint)
 [void]$searchHost.Children.Add($pickerClose)
+# Its bar in the card's right margin where the feed's is; the chips end on the search box's edge.
 $pickerScroll = New-Object System.Windows.Controls.ScrollViewer
 $pickerScroll.VerticalScrollBarVisibility = 'Visible'
-$pickerScroll.Margin = New-Gap 0 4 (-$SCROLL_W) 0
+$pickerScroll.Margin = New-Gap 0 4 (-$SCROLL_REACH) 0
 $pickerScroll.Focusable = $false
 $pickerList = New-Object System.Windows.Controls.StackPanel
+$pickerList.Margin = New-Gap 0 0 ($SCROLL_REACH - $SCROLL_W) 0
 $pickerScroll.Content = $pickerList
 [void]$picker.Children.Add($searchHost)
 [void]$picker.Children.Add($pickerScroll)
@@ -1162,7 +1184,7 @@ $sideHost.Margin = New-Gap $SIDE_GAP 12 0 0
 $body = New-Object System.Windows.Controls.StackPanel
 $body.Orientation = 'Horizontal'
 [void]$body.Children.Add($boardFrame)
-[void]$body.Children.Add($sideHost)
+[void]$body.Children.Add((New-UiHaloFrame $sideHost))
 
 # Footer: the keys under the board, the credits under the side column (on its edge, clear of the
 # resize grip in the corner).
@@ -1186,10 +1208,10 @@ $credits.ToolTip = 'Puzzles from the Lichess puzzle database (CC0). Pieces: the 
 
 $stack = New-Object System.Windows.Controls.StackPanel
 $stack.Margin = New-Gap 16 12 16 14
-[void]$stack.Children.Add($header)
-[void]$stack.Children.Add($switcher)
+[void]$stack.Children.Add((New-UiHaloFrame $header))
+[void]$stack.Children.Add((New-UiHaloFrame $switcher))
 [void]$stack.Children.Add($body)
-[void]$stack.Children.Add($footer)
+[void]$stack.Children.Add((New-UiHaloFrame $footer))
 
 # The resize grip sits in the card's bottom-right corner, so it scales with the card. The
 # window is pinned by its top-left corner, so pulling the grip out (right or down) grows it.
@@ -1198,7 +1220,7 @@ $grip.Margin = New-Gap 0 0 5 3
 
 $cardBody = New-Object System.Windows.Controls.Grid
 [void]$cardBody.Children.Add($stack)
-[void]$cardBody.Children.Add($grip)
+[void]$cardBody.Children.Add((New-UiHaloFrame $grip))
 $card.Child = $cardBody
 
 $cardScale = New-Object System.Windows.Media.ScaleTransform($script:scale, $script:scale)
@@ -1267,15 +1289,29 @@ function Update-Rating {
   if ($script:modeViews) { Update-Mode }
   $line = New-Object System.Windows.Media.PointCollection
   $sparkLine.Points = $line
-  if ($points.Count -lt 2) { return }
+  if ($points.Count -lt $SPARK_MIN) { $sparkHost.Visibility = 'Hidden'; return }
+  $sparkHost.Visibility = 'Visible'
   $low = [double]::MaxValue; $high = [double]::MinValue
-  foreach ($value in $points) { $low = [Math]::Min($low, $value); $high = [Math]::Max($high, $value) }
+  foreach ($value in $points) { $low = [Math]::Min($low, [double]$value); $high = [Math]::Max($high, [double]$value) }
   $span = [Math]::Max(20.0, $high - $low)
+  # Inset by the dot's radius, so the dot at either end stays inside the box.
+  $inset = $sparkDot.Width / 2
+  $width = [double]$sparkHost.Width - 2 * $inset
+  $height = [double]$sparkHost.Height - 2 * $inset
   for ($k = 0; $k -lt $points.Count; $k++) {
-    $x = $k * ($sparkHost.Width - 2) / ($points.Count - 1) + 1
-    $y = ($sparkHost.Height - 3) - ($points[$k] - $low) / $span * ($sparkHost.Height - 6)
+    $x = $inset + $k * $width / ($points.Count - 1)
+    $y = $inset + $height - ([double]$points[$k] - $low) / $span * $height
     $line.Add((New-Object System.Windows.Point($x, $y)))
   }
+  # The start line on a whole pixel, so it draws as one crisp line.
+  $startY = [Math]::Floor($line[0].Y) + 0.5
+  $sparkBase.X1 = 0
+  $sparkBase.X2 = $sparkHost.Width
+  $sparkBase.Y1 = $startY
+  $sparkBase.Y2 = $startY
+  $last = $line[$line.Count - 1]
+  [System.Windows.Controls.Canvas]::SetLeft($sparkDot, $last.X - $inset)
+  [System.Windows.Controls.Canvas]::SetTop($sparkDot, $last.Y - $inset)
 }
 
 function Show-RatingFlash([int]$Delta) {
@@ -2768,6 +2804,8 @@ function Test-Play {
   $before = $script:rating.r
   Invoke-WrongClick
   $checks.wrongCounted = $script:p.mistakes -eq 1 -and $script:p.result.applied -and $script:rating.r -lt $before
+  # Two points (the start and this result) are only a stroke: the curve waits for a third.
+  $checks.sparkWaitsForThree = $script:rating.history.Count -eq 2 -and $sparkHost.Visibility -eq 'Hidden'
   $checks.wrongWaits = $script:p.phase -eq 'refuting'
   Restore-AfterWrong
   $checks.wrongTakenBack = $script:p.phase -eq 'play' -and $script:board.ToFen() -eq (Get-LineBoard 1).ToFen()
@@ -2795,6 +2833,7 @@ function Test-Play {
   $checks.nextIsNew = $script:p.step -eq 1 -and $script:p.puzzle.Id -ne $saved.id
   Select-NextPuzzle
   $checks.skipCounts = $script:solved.Count -ge 2
+  $checks.sparkShowsFromThree = ($script:rating.history.Count -ge $SPARK_MIN) -eq ($sparkHost.Visibility -eq 'Visible')
   $script:settings.mode = 'climb'
   Select-NextPuzzle -Fresh
   $checks.climbStartsLow = $script:p.mode -eq 'climb' -and $script:p.puzzle.Rating -le $CLIMB_START + 400
@@ -2811,6 +2850,11 @@ function Test-Play {
   # The look: a rounded board clip, a chip grid that fills the column edge to edge, and the
   # picker in the side column's place while open.
   $checks.boardRounded = $boardHost.Clip -is [System.Windows.Media.RectangleGeometry] -and $boardHost.Clip.RadiusX -eq $BOARD_RADIUS
+  # The feed's and the picker's scrollbars sit in one place, so T doesn't make the bar jump.
+  $checks.barsInOnePlace = $feedScroll.Margin.Right -eq $pickerScroll.Margin.Right -and $feedPanel.Margin.Right -eq $pickerList.Margin.Right
+  # The halo is there exactly when the card is very see-through.
+  $isClear = [double]$script:THEME.appearance.opacity.games -lt $UI_HALO_BELOW
+  $checks.haloFollowsSeeThrough = ($null -ne $header.Effect) -eq $isClear -and ($null -ne $sideHost.Effect) -eq $isClear
   try {
     $chipRow = 2 * (Get-ChipWidth) + $CHIP_GAP
     $checks.chipGridFills = $chipRow -le $SIDE_W -and $chipRow -ge $SIDE_W - 1
@@ -2836,6 +2880,7 @@ Set-Orientation $false
 Update-Difficulty
 Update-Mode
 Update-Rating
+Update-UiHalo
 
 if ($PlayTest) {
   $ok = Test-Play
@@ -2863,8 +2908,9 @@ $win.Add_ContentRendered({
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(150)
 $timer.Add_Tick({
-  # A colour scheme or see-through change made in another window: the brushes repaint themselves.
-  [void](Update-Theme)
+  # A colour scheme or see-through change made in another window: the brushes repaint themselves,
+  # and the halo follows. A failed recolour is logged, never allowed to take the window down.
+  try { if (Update-Theme) { Update-UiHalo } } catch { Write-Failure $_ }
   if (-not $hasOwner) { return }
   if (-not [ChessCore.ChessWin32]::IsWindow($owner)) { $win.Close(); return }
   if ($script:moving -or $script:resizing -or [ChessCore.ChessWin32]::IsIconic($owner)) { return }
