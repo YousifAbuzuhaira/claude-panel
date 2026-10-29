@@ -1,8 +1,11 @@
 #Requires -Version 5.1
 # A typing test in Monkeytype's image: words mode, 10 words from its English
-# 200 list, its caret, its result screen, and its themes: all of Monkeytype's
-# colour themes, read from TypeThemes.txt (made from Monkeytype's themes.ts),
-# picked with Esc or the theme name in the footer.
+# 200 list, its caret, its result screen, and its themes, picked with Esc or the
+# theme name in the footer. The first, 'auto' ("follow colour scheme"), is the
+# colour scheme every window shares (Theme.ps1) and follows its changes; the
+# rest are all of Monkeytype's colour themes, read from TypeThemes.txt (made
+# from Monkeytype's themes.ts). In every theme the card takes the games'
+# background see-through from the appearance file; text stays solid.
 #
 # The test starts on the first letter and ends when the last word is typed
 # right (or a space ends it). Space moves on; a space at a word's start does
@@ -28,7 +31,9 @@ param(
   [switch]$SelfTest,
   [string]$SnapshotPath = '',
   [ValidateSet('typing', 'result', 'played', 'themes')][string]$SnapshotView = 'typing',
-  [string]$SnapshotTheme = ''
+  [string]$SnapshotTheme = '',
+  # Draws the snapshot with the other-windows row open under the games mark.
+  [switch]$SnapshotSwitcher
 )
 
 $ErrorActionPreference = 'Stop'
@@ -142,7 +147,56 @@ public static class TypeStats {
 }
 '@
 
-# --- Self-test: the scoring, on small cases -------------------------------------------
+# --- Theme colours: Monkeytype's roles and the shared scheme's, both ways -------------
+# Pure (no window): -SelfTest checks them. They call Theme.ps1, dot-sourced before any call.
+
+function ConvertTo-Color([string]$Hex) { return [System.Windows.Media.Color][System.Windows.Media.ColorConverter]::ConvertFromString($Hex) }
+function Brush([string]$Hex) { return New-Object System.Windows.Media.SolidColorBrush((ConvertTo-Color $Hex)) }
+
+function Get-Rgb([string]$Hex) {
+  $color = ConvertTo-Color $Hex
+  return @([int]$color.R, [int]$color.G, [int]$color.B)
+}
+
+# A colour at an alpha of its own (0-1), whatever alpha its hex had.
+function Get-AlphaColor([string]$Hex, [double]$Alpha) {
+  $color = ConvertTo-Color $Hex
+  return [System.Windows.Media.Color]::FromArgb((Get-ThemeByte ($Alpha * 255)), $color.R, $color.G, $color.B)
+}
+
+# A theme is bg, main, caret, sub, subAlt, text, error, errorExtra. 'auto' is the colour scheme.
+$AUTO_THEME = 'auto'
+$SERIKA_DARK = @('#323437', '#E2B714', '#E2B714', '#646669', '#2C2E31', '#D1D0C5', '#CA4754', '#7E2A33')
+
+# The scheme (a Theme.ps1 palette and its bg) as a Monkeytype theme: bg the card's colour, main
+# and caret the accent, sub the dim text, subAlt a step toward the text, text the ink, error the
+# red, errorExtra the red 45% of the way to the card. Solid, for its swatch; the window itself
+# wears the scheme's own brushes.
+function Get-SchemeAsTheme($Palette, [string]$BgHex) {
+  $bg = Get-Rgb $BgHex
+  return [string[]]@(
+    (Format-ThemeColor $bg), $Palette.accent, $Palette.accent, $Palette.dim,
+    (Format-ThemeColor (Get-ThemeMix $bg (Get-Rgb $Palette.ink) 0.08)), $Palette.ink, $Palette.red,
+    (Format-ThemeColor (Get-ThemeMix (Get-Rgb $Palette.red) $bg 0.45)))
+}
+
+# A Monkeytype theme as the scheme's roles (role -> Color), plus 'subAlt': every role worked
+# out from its bg, main and text the way the scheme's are (so the card takes the see-through
+# and text stays solid), then its own sub, error and edge (sub at alpha 80, as before). subAlt,
+# for fills and the graph's lines, takes the card's see-through too: Monkeytype means it as a
+# shade barely off the background, which a solid one on a see-through card no longer is.
+function Get-ThemeLook($Colors, [double]$Opacity) {
+  $palette = Get-ThemePalette @{ bg = $Colors[0]; accent = $Colors[1]; text = $Colors[5] } $Opacity
+  $look = @{}
+  foreach ($role in $THEME_ROLES) { $look[$role] = ConvertTo-Color $palette[$role] }
+  $look.dim = ConvertTo-Color $Colors[3]
+  $look.red = ConvertTo-Color $Colors[6]
+  $look.edge = Get-AlphaColor $Colors[3] (80 / 255)
+  $look.subAlt = Get-AlphaColor $Colors[4] $Opacity
+  return $look
+}
+
+# --- Self-test: the scoring, on small cases, and the theme colours ----------------------
 
 function Test-Near([double]$Value, [double]$Expected) { return [Math]::Abs($Value - $Expected) -lt 0.001 }
 
@@ -169,6 +223,23 @@ if ($SelfTest) {
   # Consistency: even speeds are 100, uneven ones lower.
   $checks.evenIsHundred = Test-Near ([TypeStats]::Consistency([double[]]@(80, 80, 80))) 100
   $checks.unevenIsLower = [TypeStats]::Consistency([double[]]@(40, 120, 80)) -lt 80
+  # The themes: the Ember scheme as 'auto', and a Monkeytype theme at 40% see-through.
+  Add-Type -AssemblyName PresentationCore, WindowsBase
+  . (Join-Path $PSScriptRoot 'Theme.ps1')
+  $ember = Get-ThemePalette @{ bg = '#1C1D20'; accent = '#E08A5F'; text = '#E8E6E3' } 0.95
+  $auto = Get-SchemeAsTheme $ember '#1C1D20'
+  $checks.autoBgIsTheCardColourSolid = $auto[0] -eq '#FF1C1D20'
+  $checks.autoMainAndCaretAreTheAccent = $auto[1] -eq '#FFE08A5F' -and $auto[2] -eq '#FFE08A5F'
+  $checks.autoSubIsTheDimText = $auto[3] -eq '#FF90908F'
+  $checks.autoSubAltIsAStepTowardTheText = $auto[4] -eq '#FF2C2D30'
+  $checks.autoTextIsInkErrorIsRed = $auto[5] -eq '#FFE8E6E3' -and $auto[6] -eq '#FFE0696B'
+  $checks.autoErrorExtraIsRedTowardTheCard = $auto[7] -eq '#FF884749'
+  $look = Get-ThemeLook $SERIKA_DARK 0.4
+  $checks.cardTakesTheGamesSeeThrough = $look.cardFill.ToString() -eq '#66323437'
+  $checks.textAndMainStaySolid = $look.ink.ToString() -eq '#FFD1D0C5' -and $look.accent.ToString() -eq '#FFE2B714'
+  $checks.subAndErrorAreTheThemesOwn = $look.dim.ToString() -eq '#FF646669' -and $look.red.ToString() -eq '#FFCA4754'
+  $checks.edgeIsSubAtAlpha80 = $look.edge.ToString() -eq '#50646669'
+  $checks.subAltFadesWithTheCard = $look.subAlt.ToString() -eq '#662C2E31'
   $ok = $true
   foreach ($key in @($checks.Keys)) { if (-not $checks[$key]) { $ok = $false } }
   $checks.ok = $ok
@@ -197,8 +268,6 @@ if (-not $isOwner -and -not $SnapshotPath) {
 $owner = [IntPtr]$OwnerHwnd
 $hasOwner = $owner -ne [IntPtr]::Zero -and [TypeWin32]::IsWindow($owner)
 
-$GLYPH_CLOSE = [string][char]0x2715
-$GLYPH_GRIP = [string][char]0x25E2
 $GLYPH_CROWN = [string][char]0x265B
 $MIN_SCALE = 0.7
 $MAX_SCALE = 2.5
@@ -206,6 +275,12 @@ $WORD_COUNT = 10
 $EXTRA_LIMIT = 10
 $WORDS_WIDTH = 640
 $LETTER_SIZE = 26
+# The theme picker's grid: as many swatches of at least this width as fit across, this far apart,
+# its scrollbar in the card's right padding so the grid spans exactly the search box's width.
+$SWATCH_MIN_W = 150
+$SWATCH_H = 34
+$SWATCH_GAP = 8
+$SCROLL_GUTTER = 16
 
 # Monkeytype's English 200.
 $WORD_LIST = @(('the be of and a to in he have it that for they i with as not on she at by this we you do but from or ' +
@@ -224,7 +299,8 @@ $prefsFile = Join-Path $env:LOCALAPPDATA 'ClaudePhases\typetest.json'
 $script:offset = $null
 $script:scale = 1.0
 $script:best = 0.0
-$script:themeName = 'serika_dark'
+# With no theme saved, the colour scheme every window shares.
+$script:themeName = 'auto'
 try {
   if (Test-Path $prefsFile) {
     $saved = Get-Content $prefsFile -Raw | ConvertFrom-Json
@@ -248,49 +324,93 @@ function Save-Prefs {
 
 # --- The window, in the chosen theme ----------------------------------------------------
 
-function ConvertTo-Color([string]$Hex) { return [System.Windows.Media.Color][System.Windows.Media.ColorConverter]::ConvertFromString($Hex) }
-function Brush([string]$Hex) { return New-Object System.Windows.Media.SolidColorBrush((ConvertTo-Color $Hex)) }
+# The colour scheme and see-through every window shares (appearance.json), and the shared pieces.
+. (Join-Path $PSScriptRoot 'Theme.ps1')
+$T = Initialize-Theme 'games'
+. (Join-Path $PSScriptRoot 'Chrome.ps1')
 
-# Monkeytype's themes: name -> bg, main, caret, sub, subAlt, text, error, errorExtra.
-$SERIKA_DARK = @('#323437', '#E2B714', '#E2B714', '#646669', '#2C2E31', '#D1D0C5', '#CA4754', '#7E2A33')
+# The scheme in use as a Monkeytype theme, for 'auto's swatch.
+function Get-AutoColors { return Get-SchemeAsTheme $script:THEME.palette $script:THEME.appearance.colors.bg }
+
+# The themes: first 'auto', the colour scheme, then Monkeytype's. A line with a colour that is
+# not a hex colour is left out, so one bad line can't break the window.
 $script:themes = [ordered]@{}
+$script:themes[$AUTO_THEME] = Get-AutoColors
 try {
   foreach ($line in Get-Content (Join-Path $PSScriptRoot 'TypeThemes.txt')) {
     if (-not $line -or $line.StartsWith('#')) { continue }
     $fields = $line.Split('|')
-    if ($fields.Length -eq 9) { $script:themes[$fields[0]] = [string[]]$fields[1..8] }
+    if ($fields.Length -ne 9 -or $fields[0] -eq $AUTO_THEME) { continue }
+    $isValid = $true
+    foreach ($hex in $fields[1..8]) { if ($hex -notmatch '^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$') { $isValid = $false } }
+    if ($isValid) { $script:themes[$fields[0]] = [string[]]$fields[1..8] }
   }
 } catch {}
 if (-not $script:themes.Contains('serika_dark')) { $script:themes['serika_dark'] = $SERIKA_DARK }
-if (-not $script:themes.Contains($script:themeName)) { $script:themeName = 'serika_dark' }
+if (-not $script:themes.Contains($script:themeName)) { $script:themeName = $AUTO_THEME }
 
-# Live brushes: every element painted with one of these changes with the theme.
-$bgBrush = Brush $SERIKA_DARK[0]
-$mainBrush = Brush $SERIKA_DARK[1]
+# Live brushes, changed in place with the theme, so whatever is painted with one follows it.
+# The roles every window shares are this window's own scheme brushes ($T). A Monkeytype theme
+# repaints them in its colours (Set-Colors), so the marks, chips, grip, tooltips and scrollbar
+# wear the theme too; 'auto' leaves them as the scheme paints them. The card is cardFill: the
+# theme's background at the games' see-through, in every theme.
+$bgBrush = $T.cardFill
+$mainBrush = $T.accent
+$subBrush = $T.dim
+$textBrush = $T.ink
+$errorBrush = $T.red
+$edgeBrush = $T.edge
 $caretBrush = Brush $SERIKA_DARK[2]
-$subBrush = Brush $SERIKA_DARK[3]
-$subAltBrush = Brush $SERIKA_DARK[4]
-$textBrush = Brush $SERIKA_DARK[5]
-$errorBrush = Brush $SERIKA_DARK[6]
 $extraBrush = Brush $SERIKA_DARK[7]
+# The key chips' and search box's fill: subAlt at the card's see-through, so it fades with it.
+$subAltBrush = Brush $SERIKA_DARK[4]
 $gridBrush = Brush $SERIKA_DARK[4]
-$edgeBrush = Brush '#40FFFFFF'
 $noFill = [System.Windows.Media.Brushes]::Transparent
+$script:shownTheme = ''
+$script:themeLooks = @{}
+# The roles Theme.ps1's scrollbar and tooltip styles look up by name (Sync-ThemeResources).
+$RESOURCE_ROLES = @('scroll', 'ink', 'popup', 'line')
+
+# Points those names at brushes of the colours now on $T: a new brush whenever a colour changed,
+# since the one a style already used is frozen.
+function Sync-ThemeResources {
+  if (-not $win) { return }
+  foreach ($role in $RESOURCE_ROLES) {
+    $key = 'Theme.' + $role
+    $color = $T[$role].Color
+    $current = $win.Resources[$key]
+    if ($current -is [System.Windows.Media.SolidColorBrush] -and $current.Color -eq $color) { continue }
+    $win.Resources[$key] = [System.Windows.Media.Brush](New-Object System.Windows.Media.SolidColorBrush($color))
+  }
+}
 
 function Set-Colors([string]$Name) {
   $colors = $script:themes[$Name]
   if (-not $colors) { return }
-  $bgBrush.Color = ConvertTo-Color $colors[0]
-  $mainBrush.Color = ConvertTo-Color $colors[1]
+  $script:shownTheme = $Name
+  $opacity = [double]$script:THEME.appearance.opacity.games
   $caretBrush.Color = ConvertTo-Color $colors[2]
-  $subBrush.Color = ConvertTo-Color $colors[3]
-  $subAltBrush.Color = ConvertTo-Color $colors[4]
-  $textBrush.Color = ConvertTo-Color $colors[5]
-  $errorBrush.Color = ConvertTo-Color $colors[6]
   $extraBrush.Color = ConvertTo-Color $colors[7]
-  $gridBrush.Color = ConvertTo-Color $colors[4]
-  $sub = ConvertTo-Color $colors[3]
-  $edgeBrush.Color = [System.Windows.Media.Color]::FromArgb(80, $sub.R, $sub.G, $sub.B)
+  if ($Name -eq $AUTO_THEME) {
+    # The scheme's brushes, as every other window wears them.
+    Set-ThemeAppearance $script:THEME.appearance
+    $subAltBrush.Color = $T.surface.Color
+    $gridBrush.Color = $T.rule.Color
+    Sync-ThemeResources
+    return
+  }
+  # A Monkeytype theme (Get-ThemeLook), kept per theme and see-through, so walking the picker
+  # stays quick.
+  $key = '{0}|{1}' -f $Name, $opacity
+  $look = $script:themeLooks[$key]
+  if (-not $look) {
+    $look = Get-ThemeLook $colors $opacity
+    $script:themeLooks[$key] = $look
+  }
+  foreach ($role in $THEME_ROLES) { $T[$role].Color = $look[$role] }
+  $subAltBrush.Color = $look.subAlt
+  $gridBrush.Color = $look.subAlt
+  Sync-ThemeResources
 }
 $typeFont = New-Object System.Windows.Media.FontFamily('Roboto Mono, Cascadia Mono, Consolas')
 
@@ -304,6 +424,16 @@ function New-Text([string]$Text, $Foreground, [double]$Size = 14) {
 
 function New-Gap([double]$Left, [double]$Top, [double]$Right, [double]$Bottom) {
   return New-Object System.Windows.Thickness($Left, $Top, $Right, $Bottom)
+}
+
+# How far a line of this font at this size reaches below its baseline: the gap that lines up text
+# of two sizes on one baseline when both sit on the same bottom edge.
+function Get-Descent([double]$Size) {
+  try {
+    $face = New-Object System.Windows.Media.Typeface($typeFont, [System.Windows.FontStyles]::Normal, [System.Windows.FontWeights]::Normal, [System.Windows.FontStretches]::Normal)
+    $sample = New-Object System.Windows.Media.FormattedText('Ag', [System.Globalization.CultureInfo]::InvariantCulture, [System.Windows.FlowDirection]::LeftToRight, $face, $Size, $textBrush)
+    return [double]($sample.Height - $sample.Baseline)
+  } catch { return $Size * 0.24 }
 }
 
 $win = New-Object System.Windows.Window
@@ -324,19 +454,20 @@ if ($hasOwner) {
 }
 
 $card = New-Object System.Windows.Controls.Border
-$card.CornerRadius = New-Object System.Windows.CornerRadius(10)
+$card.CornerRadius = New-Object System.Windows.CornerRadius($UI_CARD_RADIUS)
 $card.Background = $bgBrush
 $card.BorderBrush = $edgeBrush
 $card.BorderThickness = New-Object System.Windows.Thickness(1)
-$card.Padding = New-Gap 26 16 26 18
 
-# Header: the name, the test's settings, the close mark. Dragging it moves the window.
+# Header: the name, the test's settings, the other windows (games mark) and the close mark, all
+# on one centre line. Dragging it moves the window.
 $header = New-Object System.Windows.Controls.DockPanel
 $header.Cursor = [System.Windows.Input.Cursors]::SizeAll
 $header.Background = $noFill
 $logo = New-Object System.Windows.Controls.TextBlock
 $logo.FontSize = 20
 $logo.FontWeight = 'Bold'
+$logo.VerticalAlignment = 'Center'
 $logoSub = New-Object System.Windows.Documents.Run('type')
 $logoSub.Foreground = $subBrush
 $logoMain = New-Object System.Windows.Documents.Run('test')
@@ -344,28 +475,39 @@ $logoMain.Foreground = $textBrush
 [void]$logo.Inlines.Add($logoSub)
 [void]$logo.Inlines.Add($logoMain)
 [System.Windows.Controls.DockPanel]::SetDock($logo, 'Left')
-$closeText = New-Text $GLYPH_CLOSE $subBrush 13
-$closeText.Margin = New-Gap 16 0 0 0
-$closeText.VerticalAlignment = 'Center'
-$closeText.Cursor = [System.Windows.Input.Cursors]::Hand
-[System.Windows.Controls.DockPanel]::SetDock($closeText, 'Right')
+$closeMark = New-UiMark $UI_GLYPHS.close 'Close'
+$closeMark.Margin = New-Gap 4 0 0 0
+[System.Windows.Controls.DockPanel]::SetDock($closeMark, 'Right')
+$gamesMark = New-UiMark $UI_GLYPHS.games 'Learn and the other games'
+$gamesMark.Margin = New-Gap 12 0 0 0
+[System.Windows.Controls.DockPanel]::SetDock($gamesMark, 'Right')
 $settingsText = New-Object System.Windows.Controls.TextBlock
 $settingsText.FontSize = 13
 $settingsText.VerticalAlignment = 'Center'
-$settingsText.HorizontalAlignment = 'Right'
+[System.Windows.Controls.DockPanel]::SetDock($settingsText, 'Right')
 foreach ($part in @(@('words ', $mainBrush), @("$WORD_COUNT", $mainBrush), @('  english', $subBrush))) {
   $run = New-Object System.Windows.Documents.Run($part[0])
   $run.Foreground = $part[1]
   [void]$settingsText.Inlines.Add($run)
 }
 [void]$header.Children.Add($logo)
-[void]$header.Children.Add($closeText)
+[void]$header.Children.Add($closeMark)
+[void]$header.Children.Add($gamesMark)
 [void]$header.Children.Add($settingsText)
+[void]$header.Children.Add((New-Object System.Windows.Controls.Border))
+
+# Under the games mark: Learn and the other games, a click away.
+$switcher = New-UiSwitcherRow 'typing' $OwnerHwnd $SessionId
+# The last chip has no gap after it, so the row ends on the close mark's right edge.
+if ($switcher.Children.Count -gt 0) { $switcher.Children[$switcher.Children.Count - 1].Margin = New-Gap 0 0 0 0 }
+$switcher.Margin = New-Gap 0 8 0 0
+$switcher.HorizontalAlignment = 'Right'
+$switcher.Visibility = 'Collapsed'
 
 # The typing view: the live count, the words, the caret over them, and the
-# "click to focus" veil Monkeytype shows when the window is not in front.
+# "click to focus" veil Monkeytype shows when the window is not in front. It
+# sits in the middle of the space the result view holds, as Monkeytype's does.
 $typingView = New-Object System.Windows.Controls.StackPanel
-$typingView.Margin = New-Gap 0 26 0 0
 $typingView.VerticalAlignment = 'Center'
 $progressText = New-Text '' $mainBrush 22
 $progressText.Visibility = 'Hidden'
@@ -396,7 +538,6 @@ $focusVeil.IsHitTestVisible = $false
 # The result view: wpm and acc large on the left, the speed graph on the right,
 # then the details row.
 $resultView = New-Object System.Windows.Controls.Grid
-$resultView.Margin = New-Gap 0 22 0 0
 $resultView.Visibility = 'Hidden'
 foreach ($rowHeight in @('Auto', 'Auto')) {
   $row = New-Object System.Windows.Controls.RowDefinition
@@ -453,41 +594,72 @@ $graph.VerticalAlignment = 'Top'
 [System.Windows.Controls.Grid]::SetColumn($graph, 1)
 [void]$resultView.Children.Add($graph)
 
-$details = New-Object System.Windows.Controls.WrapPanel
-$details.Margin = New-Gap 0 18 0 0
+# The details row: the labels on one line, the values on one baseline under them. Each value sits
+# on its row's bottom edge; the two-line test type is lifted by the difference in descent so its
+# last line shares the numbers' baseline.
+$DETAIL_COUNT = 5
+$details = New-Object System.Windows.Controls.Grid
+$details.Margin = New-Gap 0 16 0 0
+for ($k = 0; $k -lt 2; $k++) {
+  $row = New-Object System.Windows.Controls.RowDefinition
+  $row.Height = [System.Windows.GridLength]::Auto
+  [void]$details.RowDefinitions.Add($row)
+}
+for ($k = 0; $k -lt $DETAIL_COUNT; $k++) {
+  $column = New-Object System.Windows.Controls.ColumnDefinition
+  $column.Width = [System.Windows.GridLength]::Auto
+  [void]$details.ColumnDefinitions.Add($column)
+}
 [System.Windows.Controls.Grid]::SetRow($details, 1)
 [System.Windows.Controls.Grid]::SetColumnSpan($details, 2)
-$typeStat = New-Stat 'test type' 16
-$typeStat.value.Text = "words $WORD_COUNT`nenglish"
-$rawStat = New-Stat 'raw' 30
-$charsStat = New-Stat 'characters' 30
-$charsStat.stack.ToolTip = 'correct, incorrect, extra, and missed'
-$consistencyStat = New-Stat 'consistency' 30
-$timeStat = New-Stat 'time' 30
-foreach ($stat in @($typeStat, $rawStat, $charsStat, $consistencyStat, $timeStat)) {
-  $stat.name.FontSize = 15
-  $stat.stack.Margin = New-Gap 0 0 40 0
-  [void]$details.Children.Add($stat.stack)
+
+function New-DetailStat([string]$Label, [int]$At, [double]$ValueSize = 30) {
+  $space = 40
+  if ($At -eq $DETAIL_COUNT - 1) { $space = 0 }
+  $name = New-Text $Label $subBrush 15
+  $name.Margin = New-Gap 0 0 $space 0
+  $value = New-Text '-' $mainBrush $ValueSize
+  $value.Margin = New-Gap 0 -2 $space 0
+  $value.VerticalAlignment = 'Bottom'
+  [System.Windows.Controls.Grid]::SetRow($name, 0)
+  [System.Windows.Controls.Grid]::SetColumn($name, $At)
+  [System.Windows.Controls.Grid]::SetRow($value, 1)
+  [System.Windows.Controls.Grid]::SetColumn($value, $At)
+  [void]$details.Children.Add($name)
+  [void]$details.Children.Add($value)
+  return @{ name = $name; value = $value }
 }
+
+$typeStat = New-DetailStat 'test type' 0 14
+$typeStat.value.Text = "words $WORD_COUNT`nenglish"
+$typeStat.value.Margin = New-Gap 0 -2 40 ((Get-Descent 30) - (Get-Descent 14))
+$rawStat = New-DetailStat 'raw' 1
+$charsStat = New-DetailStat 'characters' 2
+$charsStat.name.ToolTip = 'correct, incorrect, extra, and missed'
+$charsStat.value.ToolTip = $charsStat.name.ToolTip
+$consistencyStat = New-DetailStat 'consistency' 3
+$timeStat = New-DetailStat 'time' 4
 [void]$resultView.Children.Add($details)
 
 # The two views share one place; the hidden one still holds the size, so the
 # window does not jump between them.
-$views = New-Object System.Windows.Controls.Grid
-[void]$views.Children.Add($typingView)
-[void]$views.Children.Add($resultView)
+$testLayer = New-Object System.Windows.Controls.Grid
+[void]$testLayer.Children.Add($typingView)
+[void]$testLayer.Children.Add($resultView)
 
 # The theme picker: a search box and every theme as a swatch, in the theme's
-# own colours. It covers the test while open.
-$THEME_BUTTON_W = 150
+# own colours. It takes the test's place while open (the test is hidden under
+# it, so the see-through card shows nothing behind the swatches).
 $picker = New-Object System.Windows.Controls.DockPanel
-$picker.Background = $bgBrush
+$picker.Background = $noFill
 $picker.Visibility = 'Collapsed'
-$picker.Margin = New-Gap 0 12 0 0
-$searchHost = New-Object System.Windows.Controls.Grid
+$searchHost = New-Object System.Windows.Controls.Border
+$searchHost.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+$searchHost.Background = $subAltBrush
 [System.Windows.Controls.DockPanel]::SetDock($searchHost, 'Top')
+$searchLayers = New-Object System.Windows.Controls.Grid
 $searchBox = New-Object System.Windows.Controls.TextBox
-$searchBox.Background = $subAltBrush
+$searchBox.Background = $noFill
 $searchBox.Foreground = $textBrush
 $searchBox.CaretBrush = $caretBrush
 $searchBox.SelectionBrush = $mainBrush
@@ -495,46 +667,73 @@ $searchBox.BorderThickness = New-Object System.Windows.Thickness(0)
 $searchBox.FontFamily = $typeFont
 $searchBox.FontSize = 15
 $searchBox.Padding = New-Gap 10 6 10 6
+$searchBox.VerticalContentAlignment = 'Center'
 $searchBox.FocusVisualStyle = $null
+# The hint starts where typed text does: the box's padding plus the text box's own 2px.
 $searchHint = New-Text 'search themes...' $subBrush 15
-$searchHint.Margin = New-Gap 13 6 0 0
+$searchHint.Margin = New-Gap 12 0 12 0
+$searchHint.VerticalAlignment = 'Center'
+$searchHint.TextTrimming = 'CharacterEllipsis'
 $searchHint.IsHitTestVisible = $false
-[void]$searchHost.Children.Add($searchBox)
-[void]$searchHost.Children.Add($searchHint)
+[void]$searchLayers.Children.Add($searchBox)
+[void]$searchLayers.Children.Add($searchHint)
+$searchHost.Child = $searchLayers
 $themeScroll = New-Object System.Windows.Controls.ScrollViewer
-$themeScroll.VerticalScrollBarVisibility = 'Hidden'
-$themeScroll.Margin = New-Gap 0 10 0 0
+$themeScroll.VerticalScrollBarVisibility = 'Auto'
+$themeScroll.HorizontalScrollBarVisibility = 'Disabled'
+$themeScroll.Margin = New-Gap 0 8 (-$SCROLL_GUTTER) 0
+$themeScroll.Focusable = $false
 $themeGrid = New-Object System.Windows.Controls.WrapPanel
-$themeGrid.Width = $WORDS_WIDTH
+$themeGrid.HorizontalAlignment = 'Left'
 $themeScroll.Content = $themeGrid
 [void]$picker.Children.Add($searchHost)
 [void]$picker.Children.Add($themeScroll)
+
+$views = New-Object System.Windows.Controls.Grid
+$views.Margin = New-Gap 0 24 0 0
+[void]$views.Children.Add($testLayer)
 [void]$views.Children.Add($picker)
 
-# Footer: Tab restarts.
-# Footer: Tab restarts, Esc picks a theme; the theme's name sits on the right.
+# Footer, three columns: the keys in the middle, centred on the card, and the
+# theme's name on the right (trimmed rather than running into the keys). Tab
+# restarts, Esc or a click on the name picks a theme.
 function New-KeyChip([string]$Key) {
   $chip = New-Object System.Windows.Controls.Border
   $chip.Background = $subAltBrush
   $chip.CornerRadius = New-Object System.Windows.CornerRadius(4)
   $chip.Padding = New-Gap 6 1 6 2
+  $chip.VerticalAlignment = 'Center'
   $chip.Child = New-Text $Key $textBrush 12
   return $chip
 }
+
+function New-KeyHint([string]$Text) {
+  $hint = New-Text $Text $subBrush 12
+  $hint.VerticalAlignment = 'Center'
+  return $hint
+}
+
 $footer = New-Object System.Windows.Controls.Grid
-$footer.Margin = New-Gap 0 26 0 0
+$footer.Margin = New-Gap 0 24 0 0
+foreach ($width in @('*', 'Auto', '*')) {
+  $column = New-Object System.Windows.Controls.ColumnDefinition
+  if ($width -eq 'Auto') { $column.Width = [System.Windows.GridLength]::Auto } else { $column.Width = New-Object System.Windows.GridLength(1, 'Star') }
+  [void]$footer.ColumnDefinitions.Add($column)
+}
 $hints = New-Object System.Windows.Controls.StackPanel
 $hints.Orientation = 'Horizontal'
-$hints.HorizontalAlignment = 'Center'
+$hints.VerticalAlignment = 'Center'
 [void]$hints.Children.Add((New-KeyChip 'tab'))
-[void]$hints.Children.Add((New-Text ' - restart test' $subBrush 12))
+[void]$hints.Children.Add((New-KeyHint ' - restart test'))
 $escChip = New-KeyChip 'esc'
 $escChip.Margin = New-Gap 18 0 0 0
 [void]$hints.Children.Add($escChip)
-[void]$hints.Children.Add((New-Text ' - themes' $subBrush 12))
-$themeButton = New-Object System.Windows.Controls.StackPanel
-$themeButton.Orientation = 'Horizontal'
+[void]$hints.Children.Add((New-KeyHint ' - themes'))
+[System.Windows.Controls.Grid]::SetColumn($hints, 1)
+$themeButton = New-Object System.Windows.Controls.DockPanel
 $themeButton.HorizontalAlignment = 'Right'
+$themeButton.VerticalAlignment = 'Center'
+$themeButton.Margin = New-Gap 16 0 0 0
 $themeButton.Cursor = [System.Windows.Input.Cursors]::Hand
 $themeButton.ToolTip = 'Themes (Esc)'
 $themeButton.Background = $noFill
@@ -544,33 +743,51 @@ $themeDot.Height = 9
 $themeDot.Fill = $mainBrush
 $themeDot.VerticalAlignment = 'Center'
 $themeDot.Margin = New-Gap 0 1 6 0
+[System.Windows.Controls.DockPanel]::SetDock($themeDot, 'Left')
 $themeLabel = New-Text '' $subBrush 12
+$themeLabel.VerticalAlignment = 'Center'
+$themeLabel.TextTrimming = 'CharacterEllipsis'
+$themeLabel.MaxWidth = 160
 [void]$themeButton.Children.Add($themeDot)
 [void]$themeButton.Children.Add($themeLabel)
+[System.Windows.Controls.Grid]::SetColumn($themeButton, 2)
+$themeButton.Add_MouseEnter({ $themeLabel.Foreground = $textBrush })
+$themeButton.Add_MouseLeave({ $themeLabel.Foreground = $subBrush })
 [void]$footer.Children.Add($hints)
 [void]$footer.Children.Add($themeButton)
 
+# The card's content, at the card's padding; the grip sits in the padding's
+# corner, inside the card, so it scales with it.
 $stackAll = New-Object System.Windows.Controls.StackPanel
+$stackAll.Margin = New-Gap 24 16 24 16
 [void]$stackAll.Children.Add($header)
+[void]$stackAll.Children.Add($switcher)
 [void]$stackAll.Children.Add($views)
 [void]$stackAll.Children.Add($footer)
-$card.Child = $stackAll
+
+# The resize grip, bottom-right: the window is pinned by its top-left corner,
+# so pulling the grip out (right or down) grows it.
+$grip = New-UiGrip 'right'
+$grip.Margin = New-Gap 0 0 5 3
+
+$cardBody = New-Object System.Windows.Controls.Grid
+[void]$cardBody.Children.Add($stackAll)
+[void]$cardBody.Children.Add($grip)
+$card.Child = $cardBody
 
 $cardScale = New-Object System.Windows.Media.ScaleTransform($script:scale, $script:scale)
 $card.LayoutTransform = $cardScale
 
-# The resize grip, bottom-right: the window is pinned by its top-left corner,
-# so pulling the grip out (right or down) grows it.
-$grip = New-Text $GLYPH_GRIP $subBrush 11
-$grip.Margin = New-Gap 0 0 7 5
-$grip.HorizontalAlignment = 'Right'
-$grip.VerticalAlignment = 'Bottom'
-$grip.Cursor = [System.Windows.Input.Cursors]::SizeNWSE
-$grip.ToolTip = 'Drag to resize'
-
 $cardHost = New-Object System.Windows.Controls.Grid
 [void]$cardHost.Children.Add($card)
-[void]$cardHost.Children.Add($grip)
+Add-ThemeResources $win
+# The themed scrollbar and tooltips look their colours up by name. Two things go wrong with the
+# brushes Add-ThemeResources puts there: they are PowerShell-wrapped, so the first scrollbar or
+# tooltip throws "Unable to cast PSObject to Brush"; and a brush a template or style resolves
+# this way is frozen by WPF, after which recolouring it in place throws. So the names point at
+# brushes of this window's own, replaced (never recoloured) whenever the colours change.
+foreach ($role in $THEME_ROLES) { [void]$win.Resources.Remove('Theme.' + $role) }
+Sync-ThemeResources
 $win.Content = $cardHost
 
 # --- The test ---------------------------------------------------------------------
@@ -950,7 +1167,26 @@ $script:swatches = @()
 $script:shown = @()
 $script:pickIndex = -1
 
-function Get-ThemeTitle([string]$Name) { return $Name.Replace('_', ' ') }
+function Get-ThemeTitle([string]$Name) {
+  if ($Name -eq $AUTO_THEME) { return 'follow colour scheme' }
+  return $Name.Replace('_', ' ')
+}
+
+# What a search looks in: the title, and for 'auto' the other words someone might try.
+function Get-ThemeKeywords([string]$Name) {
+  if ($Name -eq $AUTO_THEME) { return 'follow colour scheme color auto default' }
+  return Get-ThemeTitle $Name
+}
+
+# The scheme in use, by its preset's name, or 'custom' for colours of one's own.
+function Get-SchemeName {
+  $current = $script:THEME.appearance
+  foreach ($preset in (Get-ThemePresets)) {
+    $isSame = $preset.name -eq $current.preset -and $preset.bg.ToUpperInvariant() -eq $current.colors.bg -and $preset.accent.ToUpperInvariant() -eq $current.colors.accent -and $preset.text.ToUpperInvariant() -eq $current.colors.text
+    if ($isSame) { return $preset.label.ToLowerInvariant() }
+  }
+  return 'custom'
+}
 
 function Set-Theme([string]$Name) {
   $script:themeName = $Name
@@ -958,59 +1194,113 @@ function Set-Theme([string]$Name) {
   $themeLabel.Text = Get-ThemeTitle $Name
 }
 
-# One swatch per theme, built the first time the picker opens: its name in the
-# theme's main colour on its background, and dots of its text and sub colours.
+# One swatch: the theme's name in its main colour on its background, and dots of its text and
+# sub colours. 'auto' spans the whole first row and names the scheme it follows.
+function New-Swatch([string]$Name, [int]$Index) {
+  $swatch = New-Object System.Windows.Controls.Border
+  $swatch.Height = $SWATCH_H
+  $swatch.Margin = New-Gap 0 0 $SWATCH_GAP $SWATCH_GAP
+  $swatch.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+  $swatch.Cursor = [System.Windows.Input.Cursors]::Hand
+  $swatch.Tag = $Index
+  # The ring is a layer of its own over the fill, so a swatch's fill reaches the grid's edges
+  # whether or not it is the one chosen, and choosing one moves nothing (Set-SwatchRing).
+  $ring = New-Object System.Windows.Controls.Border
+  $ring.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+  $ring.BorderThickness = New-Object System.Windows.Thickness(2)
+  $ring.BorderBrush = $noFill
+  $ring.IsHitTestVisible = $false
+  $entry = @{
+    name = $Name; swatch = $swatch; ring = $ring; note = $null
+    fill = Brush '#000000'; main = Brush '#000000'; text = Brush '#000000'; sub = Brush '#000000'
+  }
+  $swatch.Background = $entry.fill
+  $inside = New-Object System.Windows.Controls.DockPanel
+  $inside.Margin = New-Gap 9 0 8 0
+  $dots = New-Object System.Windows.Controls.StackPanel
+  $dots.Orientation = 'Horizontal'
+  $dots.VerticalAlignment = 'Center'
+  [System.Windows.Controls.DockPanel]::SetDock($dots, 'Right')
+  foreach ($fill in @($entry.text, $entry.sub)) {
+    $dot = New-Object System.Windows.Shapes.Ellipse
+    $dot.Width = 7
+    $dot.Height = 7
+    $dot.Margin = New-Gap 3 0 0 0
+    $dot.Fill = $fill
+    [void]$dots.Children.Add($dot)
+  }
+  [void]$inside.Children.Add($dots)
+  if ($Name -eq $AUTO_THEME) {
+    $swatch.ToolTip = 'The colour scheme every window shares'
+    $entry.note = New-Text '' $entry.sub 12
+    $entry.note.VerticalAlignment = 'Center'
+    $entry.note.Margin = New-Gap 12 0 6 0
+    [System.Windows.Controls.DockPanel]::SetDock($entry.note, 'Right')
+    [void]$inside.Children.Add($entry.note)
+  }
+  $title = New-Text (Get-ThemeTitle $Name) $entry.main 12
+  $title.VerticalAlignment = 'Center'
+  $title.TextTrimming = 'CharacterEllipsis'
+  [void]$inside.Children.Add($title)
+  $layers = New-Object System.Windows.Controls.Grid
+  [void]$layers.Children.Add($inside)
+  [void]$layers.Children.Add($ring)
+  $swatch.Child = $layers
+  $swatch.Add_MouseEnter({ param($sender, $e) Select-Swatch ([array]::IndexOf($script:shown, $script:swatches[[int]$sender.Tag])) })
+  $swatch.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Close-Picker $true })
+  Update-SwatchLook $entry
+  return $entry
+}
+
+# The chosen swatch is ringed in the text colour of the theme it previews.
+function Set-SwatchRing($Entry, [bool]$On) {
+  if ($On) { $Entry.ring.BorderBrush = $textBrush } else { $Entry.ring.BorderBrush = $noFill }
+}
+
+function Update-SwatchLook($Entry) {
+  $colors = $script:themes[$Entry.name]
+  $Entry.fill.Color = ConvertTo-Color $colors[0]
+  $Entry.main.Color = ConvertTo-Color $colors[1]
+  $Entry.text.Color = ConvertTo-Color $colors[5]
+  $Entry.sub.Color = ConvertTo-Color $colors[3]
+  if ($Entry.note) { $Entry.note.Text = Get-SchemeName }
+}
+
+# Every swatch, built the first time the picker opens.
 function Build-Swatches {
   if ($script:swatches.Count -gt 0) { return }
   $built = @()
   foreach ($name in $script:themes.Keys) {
-    $colors = $script:themes[$name]
-    $swatch = New-Object System.Windows.Controls.Border
-    $swatch.Width = $THEME_BUTTON_W
-    $swatch.Height = 34
-    $swatch.Margin = New-Gap 4 4 4 4
-    $swatch.CornerRadius = New-Object System.Windows.CornerRadius(6)
-    $swatch.Background = Brush $colors[0]
-    $swatch.BorderThickness = New-Object System.Windows.Thickness(2)
-    $swatch.BorderBrush = $noFill
-    $swatch.Cursor = [System.Windows.Input.Cursors]::Hand
-    $swatch.Tag = $built.Count
-    $inside = New-Object System.Windows.Controls.DockPanel
-    $inside.Margin = New-Gap 9 0 8 0
-    $dots = New-Object System.Windows.Controls.StackPanel
-    $dots.Orientation = 'Horizontal'
-    $dots.VerticalAlignment = 'Center'
-    [System.Windows.Controls.DockPanel]::SetDock($dots, 'Right')
-    foreach ($index in 5, 3) {
-      $dot = New-Object System.Windows.Shapes.Ellipse
-      $dot.Width = 7
-      $dot.Height = 7
-      $dot.Margin = New-Gap 3 0 0 0
-      $dot.Fill = Brush $colors[$index]
-      [void]$dots.Children.Add($dot)
-    }
-    $title = New-Text (Get-ThemeTitle $name) (Brush $colors[1]) 12
-    $title.VerticalAlignment = 'Center'
-    $title.TextTrimming = 'CharacterEllipsis'
-    [void]$inside.Children.Add($dots)
-    [void]$inside.Children.Add($title)
-    $swatch.Child = $inside
-    $swatch.Add_MouseEnter({ param($sender, $e) Select-Swatch ([array]::IndexOf($script:shown, $script:swatches[[int]$sender.Tag])) })
-    $swatch.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Close-Picker $true })
-    [void]$themeGrid.Children.Add($swatch)
-    $built += , @{ name = $name; swatch = $swatch }
+    $entry = New-Swatch $name $built.Count
+    [void]$themeGrid.Children.Add($entry.swatch)
+    $built += , $entry
   }
   $script:swatches = $built
+}
+
+# Sizes the grid from the width the picker really has: as many columns as fit, the swatches
+# stretched to fill it, so the grid's edges are the search box's edges. The trailing gap of each
+# row falls outside the scroll area, and the scrollbar sits in the card's right padding.
+function Set-SwatchSizes {
+  $width = [Math]::Floor([double]$views.ActualWidth)
+  if ($width -le 0) { $width = [double]$WORDS_WIDTH }
+  $columns = [Math]::Max(1, [int][Math]::Floor(($width + $SWATCH_GAP) / ($SWATCH_MIN_W + $SWATCH_GAP)))
+  $each = [Math]::Floor(($width - ($columns - 1) * $SWATCH_GAP) / $columns)
+  $themeGrid.Width = $columns * ($each + $SWATCH_GAP)
+  $themeScroll.Width = $width + $SCROLL_GUTTER
+  foreach ($entry in $script:swatches) {
+    if ($entry.name -eq $AUTO_THEME) { $entry.swatch.Width = $width } else { $entry.swatch.Width = $each }
+  }
 }
 
 # Moves the choice to the index-th shown swatch and previews its theme.
 function Select-Swatch([int]$Index) {
   if ($script:shown.Count -eq 0 -or $Index -lt 0) { return }
   $Index = [Math]::Min($script:shown.Count - 1, $Index)
-  if ($script:pickIndex -ge 0 -and $script:pickIndex -lt $script:shown.Count) { $script:shown[$script:pickIndex].swatch.BorderBrush = $noFill }
+  if ($script:pickIndex -ge 0 -and $script:pickIndex -lt $script:shown.Count) { Set-SwatchRing $script:shown[$script:pickIndex] $false }
   $script:pickIndex = $Index
   $chosen = $script:shown[$Index]
-  $chosen.swatch.BorderBrush = $textBrush
+  Set-SwatchRing $chosen $true
   $chosen.swatch.BringIntoView()
   Set-Colors $chosen.name
 }
@@ -1021,9 +1311,9 @@ function Update-Filter {
   if ($query) { $searchHint.Visibility = 'Hidden' } else { $searchHint.Visibility = 'Visible' }
   $kept = @()
   foreach ($entry in $script:swatches) {
-    $isKept = -not $query -or (Get-ThemeTitle $entry.name).Contains($query)
+    $isKept = -not $query -or (Get-ThemeKeywords $entry.name).Contains($query)
     if ($isKept) { $entry.swatch.Visibility = 'Visible'; $kept += , $entry } else { $entry.swatch.Visibility = 'Collapsed' }
-    $entry.swatch.BorderBrush = $noFill
+    Set-SwatchRing $entry $false
   }
   $script:shown = $kept
   $script:pickIndex = -1
@@ -1033,13 +1323,15 @@ function Update-Filter {
 function Open-Picker {
   if ($script:isPicking) { return }
   Build-Swatches
+  Set-SwatchSizes
   $script:isPicking = $true
   $script:themeBefore = $script:themeName
-  $picker.Height = [Math]::Max(240, $views.ActualHeight - 12)
+  $picker.Height = [Math]::Max(240, $testLayer.ActualHeight)
   $searchBox.Text = ''
   Update-Filter
   $current = 0
   for ($k = 0; $k -lt $script:shown.Count; $k++) { if ($script:shown[$k].name -eq $script:themeName) { $current = $k; break } }
+  $testLayer.Visibility = 'Hidden'
   $picker.Visibility = 'Visible'
   $caret.Visibility = 'Hidden'
   $win.UpdateLayout()
@@ -1058,16 +1350,51 @@ function Close-Picker([bool]$Keep) {
   }
   $script:isPicking = $false
   $picker.Visibility = 'Collapsed'
+  $testLayer.Visibility = 'Visible'
   [void]$win.Focus()
   [void][System.Windows.Input.Keyboard]::Focus($win)
   if (-not $script:isFinished) { $caret.Visibility = 'Visible'; Move-Caret -Jump }
 }
 
-# Arrows walk the swatch grid: a row is as many swatches as fit across.
+# Where a swatch sits in the grid (its top-left corner), for walking it with the arrows.
+function Get-SwatchSpot($Swatch) {
+  return $Swatch.TranslatePoint((New-Object System.Windows.Point(0, 0)), $themeGrid)
+}
+
+# Left and Right step through the themes in order; Up and Down go to the nearest row above or
+# below, to the swatch whose left edge is nearest. Read from the grid as laid out, so it holds
+# for any width, and for the 'auto' row that spans it.
 function Move-Pick([int]$Columns, [int]$Rows) {
-  $perRow = [Math]::Max(1, [int][Math]::Floor($themeGrid.Width / ($THEME_BUTTON_W + 8)))
-  $next = $script:pickIndex + $Columns + $Rows * $perRow
-  Select-Swatch ([Math]::Max(0, [Math]::Min($script:shown.Count - 1, $next)))
+  if ($script:shown.Count -eq 0) { return }
+  if ($script:pickIndex -lt 0) { Select-Swatch 0; return }
+  if ($Rows -eq 0) {
+    Select-Swatch ([Math]::Max(0, [Math]::Min($script:shown.Count - 1, $script:pickIndex + $Columns)))
+    return
+  }
+  $themeGrid.UpdateLayout()
+  $from = Get-SwatchSpot $script:shown[$script:pickIndex].swatch
+  $best = -1
+  $bestDy = [double]::MaxValue
+  $bestDx = [double]::MaxValue
+  for ($k = 0; $k -lt $script:shown.Count; $k++) {
+    $spot = Get-SwatchSpot $script:shown[$k].swatch
+    $dy = ($spot.Y - $from.Y) * $Rows
+    if ($dy -lt 1) { continue }
+    $dx = [Math]::Abs($spot.X - $from.X)
+    $isNearerRow = $dy -lt $bestDy - 1
+    $isSameRow = [Math]::Abs($dy - $bestDy) -le 1
+    if ($isNearerRow -or ($isSameRow -and $dx -lt $bestDx)) { $best = $k; $bestDy = $dy; $bestDx = $dx }
+  }
+  if ($best -ge 0) { Select-Swatch $best }
+}
+
+# The colour scheme changed in another window: 'auto' takes the new scheme, and every theme the
+# games' new see-through. The scheme's brushes were just repainted from the file, so a Monkeytype
+# theme in use (or being previewed) is laid over them again.
+function Update-SchemeColors {
+  $script:themes[$AUTO_THEME] = Get-AutoColors
+  foreach ($entry in $script:swatches) { if ($entry.name -eq $AUTO_THEME) { Update-SwatchLook $entry } }
+  Set-Colors $script:shownTheme
 }
 
 $searchBox.Add_TextChanged({ if ($script:isPicking) { Update-Filter } })
@@ -1143,8 +1470,14 @@ $win.Add_Activated({
   if (-not $script:isFinished -and -not $script:isPicking) { $caret.Visibility = 'Visible'; Move-Caret -Jump }
 })
 
-$closeText.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
-$closeText.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $win.Close() })
+$closeMark.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $win.Close() })
+$gamesMark.Add_MouseLeftButtonUp({
+  param($sender, $e)
+  $e.Handled = $true
+  $isOpen = $switcher.Visibility -ne 'Visible'
+  $switcher.Visibility = if ($isOpen) { 'Visible' } else { 'Collapsed' }
+  Set-UiMarkOn $gamesMark $isOpen
+})
 
 # --- Placement: over the WezTerm window, where the person last dragged it -------
 
@@ -1242,9 +1575,13 @@ $win.Add_SourceInitialized({
 
 function Show-Demo {
   if ($SnapshotTheme) { Set-Theme $SnapshotTheme }
+  if ($SnapshotSwitcher) {
+    $switcher.Visibility = 'Visible'
+    Set-UiMarkOn $gamesMark $true
+  }
+  # 'themes': the picker open on the theme in use, scrolled to it.
   if ($SnapshotView -eq 'themes') {
     Open-Picker
-    if ($SnapshotTheme) { $searchBox.Text = (Get-ThemeTitle $SnapshotTheme).Split(' ')[0] }
     return
   }
   # 'played': a whole test typed through the real input path, then its result.
@@ -1303,6 +1640,9 @@ $win.Add_ContentRendered({
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(150)
 $timer.Add_Tick({
+  # A colour scheme or see-through change made in another window: the scheme's brushes repaint
+  # themselves, and the theme in use is laid over them again.
+  if (Update-Theme) { Update-SchemeColors }
   if (-not $hasOwner) { return }
   if (-not [TypeWin32]::IsWindow($owner)) { $win.Close(); return }
   if ($script:dragging -or $script:resizing -or [TypeWin32]::IsIconic($owner)) { return }
