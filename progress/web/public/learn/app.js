@@ -1,13 +1,14 @@
 // Learn in the browser: the shell (tabs, build chip, toast, banner, keys) and the events.
 // Every action is one helper command through /api/rpc; the page never touches files.
-import { onEvents } from '../shared/api.js';
+import { onEvents, openWindow, withToken } from '../shared/api.js';
+import { isNative, watchAppearance } from '../shared/look.js';
 import { buildAskView, openAdvisor } from './ask.js';
 import { chatEvent, forgetChats } from './chat.js';
 import { GLYPH, MAX_SCALE, MIN_SCALE, S, VIEW_NAMES, banner, call, loadPrefs, nav, savePrefs, short, toast } from './core.js';
 import { buildCourseView, courseStatus, openCourse, openOverlap, overlapOpen, saveProgress, showOverlap, stepPage } from './course.js';
 import { buildLearnedView, leaveLearnedModes, refreshLearned, resetLearned } from './learned.js';
 import { buildLibraryView, libraryDue, refreshLibrary, resetLibraryModes } from './library.js';
-import { buildSettingsView, refreshSettings, showSettings } from './settings.js';
+import { appearanceChanged, buildSettingsView, leaveSettings, refreshSettings, settingsStatus } from './settings.js';
 
 const hosts = Object.fromEntries(VIEW_NAMES.map(name => [name, document.getElementById(`view-${name}`)]));
 const tabs = Object.fromEntries(VIEW_NAMES.map(name => [name, document.querySelector(`[data-tab="${name}"]`)]));
@@ -16,6 +17,7 @@ const buildChip = document.getElementById('build-chip');
 function showView(name) {
   if (name === 'course' && !S.courseId) name = 'library';
   if (S.view === 'course' && name !== 'course') saveProgress();
+  if (S.view === 'settings' && name !== 'settings') leaveSettings();
   S.view = name;
   for (const key of VIEW_NAMES) {
     hosts[key].hidden = key !== name;
@@ -37,11 +39,13 @@ function showView(name) {
 /** Opening a course from anywhere: the Course tab, then the page. */
 function openCourseView(id, page) {
   if (S.view === 'course' && S.courseId === id && !page) return;
+  if (S.view === 'settings') leaveSettings();
   S.courseId = id;
   S.view = 'course';
   for (const key of VIEW_NAMES) {
     hosts[key].hidden = key !== 'course';
     tabs[key].classList.toggle('on', key === 'course');
+    tabs[key].setAttribute('aria-selected', String(key === 'course'));
   }
   tabs.course.hidden = false;
   savePrefs();
@@ -119,7 +123,7 @@ function onEvent(event) {
       S.status = event.status;
       updateBuildChip();
       if (S.view === 'library' && libraryDue()) refreshLibrary();
-      if (S.view === 'settings') showSettings();
+      if (S.view === 'settings') settingsStatus();
       courseStatus(event.status?.build);
       break;
     case 'chat.delta':
@@ -179,6 +183,28 @@ buildSettingsView(hosts.settings, { onLibraryChanged });
 for (const name of VIEW_NAMES) tabs[name].addEventListener('click', () => showView(name));
 buildChip.addEventListener('click', () => showView('library'));
 
+// The header's marks: the colour scheme lives at the top of Settings; the games hub is a link
+// (with the token), or in the macOS window app a window of its own, as /games opens it.
+document.getElementById('look-mark').addEventListener('click', () => {
+  showView('settings');
+  hosts.settings.scrollTop = 0;
+});
+const gamesMark = document.getElementById('games-mark');
+gamesMark.href = withToken('../games/');
+gamesMark.addEventListener('click', async event => {
+  if (!isNative() || event.metaKey || event.ctrlKey || event.shiftKey) return;
+  event.preventDefault();
+  if (!(await openWindow('games'))) location.href = gamesMark.href;
+});
+
+// Every change is also kept for first-look.js, which paints it before the next load.
+watchAppearance('learn', appearance => {
+  try {
+    localStorage.setItem('claude-learn-look', JSON.stringify(appearance));
+  } catch {}
+  appearanceChanged(appearance);
+});
+
 const events = onEvents(onEvent);
 let lost = false;
 events.addEventListener('error', () => {
@@ -193,18 +219,22 @@ events.addEventListener('open', () => {
   hello().then(ok => { if (ok) showView(S.view); });
 });
 
+/** A view asked for by a link (`open learn --view ...`): a view name, or 'course'/'overlap' with a course. */
+function showAsked(view, courseId, page = null) {
+  if (courseId) S.courseId = courseId;
+  if ((view === 'course' || view === 'overlap') && S.courseId) {
+    openCourseView(S.courseId, page);
+    if (view === 'overlap') setTimeout(() => openOverlap(true), 400);
+  } else {
+    showView(VIEW_NAMES.includes(view) ? view : S.view);
+  }
+}
+
 // A view to open straight away, for snapshots and links: ?view=<name>[&course=<id>&page=<n>],
 // or ?view=overlap to open the course's overlap screen.
 const params = new URLSearchParams(location.search);
-const asked = params.get('view');
-if (params.get('course')) S.courseId = params.get('course');
 if (await hello()) {
-  if ((asked === 'course' || asked === 'overlap') && S.courseId) {
-    openCourseView(S.courseId, Number(params.get('page')) || null);
-    if (asked === 'overlap') setTimeout(() => openOverlap(true), 400);
-  } else {
-    showView(VIEW_NAMES.includes(asked) ? asked : S.view);
-  }
+  showAsked(params.get('view'), params.get('course'), Number(params.get('page')) || null);
 } else {
   for (const key of VIEW_NAMES) hosts[key].hidden = key !== 'library';
 }

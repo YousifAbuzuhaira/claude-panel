@@ -23,14 +23,19 @@ let ui = null;
 let chat = null;
 
 export function buildCourseView(host) {
+  // Each column opens with a caption row of one height, so the three line up across the page.
   const courseTitle = h('h2.course-name');
   const courseMeta = h('div.course-meta');
-  const overlapLink = action('What I already know', () => openOverlap(true), 'blue');
-  const hideLink = action('hide contents', () => setContentsShown(false), 'faint');
+  const hideLink = action('hide', () => setContentsShown(false), 'faint');
+  hideLink.title = 'Hide the contents; the page takes the room';
   const pageList = h('ol.page-list');
-  const contents = h('aside.contents', { 'aria-label': 'Contents' }, courseTitle, courseMeta, h('div.contents-tools', null, overlapLink, hideLink), pageList);
+  const contents = h('aside.contents', { 'aria-label': 'Contents' },
+    h('div.col-head', null, h('span.caption', null, 'Contents'), hideLink), courseTitle, courseMeta, pageList);
 
   const pageCount = h('span.page-count');
+  // Beside PAGE x OF y, so it stays when the contents are hidden.
+  const overlapLink = action('What I already know', () => openOverlap(true), 'blue');
+  overlapLink.title = 'What this course covers that you have met before';
   const showLink = action('show contents', () => setContentsShown(true), 'faint');
   const pageTitle = h('h1.page-title');
   const sourceLine = h('div.source-line');
@@ -38,10 +43,12 @@ export function buildCourseView(host) {
   const body = h('div.page-body.prose');
   const checks = h('div.checks');
   const prev = action(`${GLYPH.left} Previous`, () => stepPage(-1), 'dim');
+  prev.title = 'The page before (Left arrow)';
   const next = action(`Next ${GLYPH.right}`, () => stepPage(1), 'accent');
+  next.title = 'The next page (Right arrow)';
   const skip = action('Skip this page', toggleSkip, 'faint');
   const pageNav = h('nav.page-nav', null, prev, skip, next);
-  const article = h('article.page', null, h('div.page-head', null, pageCount, showLink), pageTitle, sourceLine, conceptChips, body, checks, pageNav);
+  const article = h('article.page', null, h('div.col-head', null, pageCount, h('span.col-tools', null, overlapLink, showLink)), pageTitle, sourceLine, conceptChips, body, checks, pageNav);
   const overlap = h('section.overlap', { hidden: true });
   const pageScroll = h('div.page-scroll', null, article, overlap);
   pageScroll.addEventListener('scroll', onScroll, { passive: true });
@@ -261,6 +268,16 @@ function showContents() {
     }))
     : h('li.page-add', null, action('+ Add a page', () => { C.addingPage = true; showContents(); }, 'blue'));
   ui.pageList.replaceChildren(...items, add);
+  keepInView(ui.pageList.querySelector('.page-item.current'), ui.contents);
+}
+
+/** Scrolls `box` just enough to show `item` (the page you're on, in a long contents). */
+function keepInView(item, box) {
+  if (!item) return;
+  const shown = box.getBoundingClientRect();
+  const at = item.getBoundingClientRect();
+  if (at.top < shown.top) box.scrollTop -= shown.top - at.top + 8;
+  else if (at.bottom > shown.bottom) box.scrollTop += Math.min(at.top - shown.top - 8, at.bottom - shown.bottom + 8);
 }
 
 function updatePages(course) {
@@ -499,7 +516,9 @@ function renderOverlap() {
     return positions.length === 1 ? `here: page ${positions[0]}` : `here: pages ${positions.join(', ')}`;
   };
   const line = (cls, name, detail) => h(`div.overlap-line.${cls}`, null, h('div.overlap-name', null, name), h('div.overlap-detail', null, detail));
+  // The same caption row as a page, so its title sits where the page's title sits.
   const out = [
+    h('div.col-head', null, h('span.page-count', null, 'What I already know'), action('close', () => showOverlap(false), 'faint')),
     h('h1.page-title', null, 'Before you start'),
     h('p.dim', null, 'What this course covers that you have met before. Nothing is skipped unless you tick it.'),
   ];

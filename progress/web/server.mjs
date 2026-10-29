@@ -2,7 +2,8 @@
 // server that bridges HTTP + Server-Sent Events to Learn's helper (`learn.sh serve`,
 // contract 2 in CLAUDE.md) and serves the pages in ./public. Node's own modules only.
 //
-//   node server.mjs open [learn | games/<name>]   find or start the server, open the page
+//   node server.mjs open [learn [--view <v>] [--course <id>] | games | games/<name>]
+//                                                 find or start the server, open the page
 //   node server.mjs serve                         run it in the foreground (what `open` starts)
 //
 // Security: it can start `claude -p` runs on the person's subscription and delete their
@@ -12,7 +13,7 @@
 // also stops DNS rebinding. The token travels only in the URL's #hash.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, extname, join, normalize, sep } from 'node:path';
@@ -34,6 +35,9 @@ const PLUGIN_FILE = join(HERE, '..', '.claude-plugin', 'plugin.json');
 const STOCKFISH_DIR = join(homedir(), '.cache', 'claude-learn', 'stockfish');
 const APP_SOURCE = join(HERE, '..', 'mac', 'ClaudePanel.swift');
 const APP_CACHE = join(homedir(), '.cache', 'claude-panel', 'app');
+// The window app keeps `<pid> <port>` here for each page it shows (pidFile in ClaudePanel.swift),
+// and loads the path in `<id>.open` when one appears (a deep link for a window already open).
+const WINDOWS_DIR = join(homedir(), '.cache', 'claude-panel', 'windows');
 const IDLE_MS = 30 * 60_000;
 const RPC_TIMEOUT_MS = 10 * 60_000;
 const MAX_BODY = 4 * 1024 * 1024;
@@ -46,6 +50,32 @@ const STOCKFISH = {
   'stockfish-19-lite-single.js': { size: 28_230, sha256: 'zLEw1/8pQIUxxH2Fmkn5HVnU9ILQWlPrGjIxpPYkyRo=' },
   'stockfish-19-lite-single.wasm': { size: 1_845_971, sha256: '7k8RW9stMsrflsraEEoFtewlfXrW9XWCGQtJvHHwlt4=' },
 };
+
+// --- The pages that open on their own, and their window titles --------------------------------
+
+export const WINDOW_TITLES = { learn: 'Learn', games: 'Games', 'games/sudoku': 'Sudoku', 'games/2048': '2048', 'games/typing': 'Typing', 'games/chess': 'Chess' };
+// Learn's views a link can ask for (web/public/learn/app.js reads ?view= and ?course=).
+const LEARN_VIEWS = new Set(['library', 'course', 'learned', 'ask', 'settings', 'overlap']);
+const COURSE_ID = /^[\w.-]{1,160}$/;
+
+/**
+ * Where a page lives on this server: 'learn' with { view: 'settings' } is 'learn/?view=settings',
+ * and a course alone opens that course. A view or course that isn't well formed is left out, so
+ * the page opens where it would anyway. Null for a page that doesn't exist.
+ */
+export function pagePath(page, { view, course } = {}) {
+  const key = String(page ?? '').replace(/^\/+|\/+$/g, '') || 'learn';
+  if (!Object.hasOwn(WINDOW_TITLES, key)) return null;
+  const query = new URLSearchParams();
+  if (key === 'learn') {
+    const hasCourse = typeof course === 'string' && COURSE_ID.test(course);
+    if (typeof view === 'string' && LEARN_VIEWS.has(view)) query.set('view', view);
+    else if (hasCourse) query.set('view', 'course');
+    if (hasCourse) query.set('course', course);
+  }
+  const search = query.toString();
+  return { key, path: `${key}/${search ? `?${search}` : ''}`, view: query.get('view'), course: query.get('course') };
+}
 
 // WebAssembly and a worker for Stockfish; YouTube frames for Learn's videos; inline styles only.
 const CSP = [
@@ -233,11 +263,24 @@ function serve() {
       if (path === '/api/ping') return send(200, { ok: true, pid: process.pid });
 
       if (path === '/api/launch' && req.method === 'POST') {
-        const page = String(JSON.parse((await readBody(req)) || '{}').page || '');
-        if (!/^(learn|games\/(sudoku|2048|typing|chess))\/$/.test(page)) return send(400, { error: 'no such page' });
+        const { page, view, course } = JSON.parse((await readBody(req)) || '{}') || {};
+        const target = typeof page === 'string' && page ? pagePath(page, { view, course }) : null;
+        if (!target) return send(400, { error: 'no such page' });
         const nonce = randomBytes(16).toString('hex');
-        launches.set(nonce, { page, until: Date.now() + LAUNCH_MS });
+        launches.set(nonce, { page: target.path, until: Date.now() + LAUNCH_MS });
         return send(200, { nonce });
+      }
+
+      // A page in a native window opening another page in its own window (Learn's games mark):
+      // one window per page, as `open` gives. Only where the window app is already built.
+      if (path === '/api/open' && req.method === 'POST') {
+        const { page, view, course } = JSON.parse((await readBody(req)) || '{}') || {};
+        const target = typeof page === 'string' && page ? pagePath(page, { view, course }) : null;
+        if (!target) return send(400, { error: 'no such page' });
+        const app = nativeApp({ build: false });
+        if (!app) return send(200, { ok: false, error: 'no window app here' });
+        startWindow(app, { port, token }, target, { program: process.env.TERM_PROGRAM, itermSession: process.env.ITERM_SESSION_ID });
+        return send(200, { ok: true, shown: 'window' });
       }
 
       if (path === '/api/events' && req.method === 'GET') {
@@ -389,31 +432,11 @@ function readRecord() {
   }
 }
 
-/** A one-time /launch/<nonce> address for `page`, from the running server. */
-function launchNonce(record, page) {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({ page });
-    const req = httpRequest(
-      { host: '127.0.0.1', port: record.port, path: '/api/launch', method: 'POST', timeout: 3000,
-        headers: { 'X-Learn-Token': record.token, Host: `127.0.0.1:${record.port}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
-      res => {
-        let text = '';
-        res.on('data', chunk => { text += chunk; });
-        res.on('end', () => {
-          try {
-            const { nonce } = JSON.parse(text);
-            if (typeof nonce === 'string') resolve(nonce);
-            else reject(new Error('the server gave no launch link'));
-          } catch (error) {
-            reject(error);
-          }
-        });
-      },
-    );
-    req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error('the server did not answer')));
-    req.end(body);
-  });
+/** A one-time /launch/<nonce> address for `target` (from pagePath), from the running server. */
+async function launchNonce(record, target) {
+  const { nonce } = await postJson(record, '/api/launch', { page: target.key, view: target.view, course: target.course });
+  if (typeof nonce !== 'string') throw new Error('the server gave no launch link');
+  return nonce;
 }
 
 function ping(record) {
@@ -458,14 +481,24 @@ function browserArgv(url) {
 
 // --- The native window on macOS -------------------------------------------------------------
 
-const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+/** The plugin's version from plugin.json, for the window app's About box. */
+export function pluginVersion() {
+  try {
+    const { version } = JSON.parse(readFileSync(PLUGIN_FILE, 'utf8'));
+    return typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version) ? version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+export const infoPlist = version => `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>dev.claude-panel.window</string>
   <key>CFBundleName</key><string>Claude Panel</string>
   <key>CFBundleExecutable</key><string>ClaudePanel</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleShortVersionString</key><string>${version}</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppleEventsUsageDescription</key><string>The progress panel asks iTerm2 which window holds your Claude session, so it can sit on that window and follow it.</string>
@@ -476,16 +509,30 @@ const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 /**
  * The window app's binary (mac/ClaudePanel.swift), built with swiftc the first time and
  * cached by the source's hash, so an update rebuilds it. Null where it can't be built
- * (no Xcode or Command Line Tools): the browser stands in.
+ * (no Xcode or Command Line Tools): the browser stands in. `build: false` only finds one
+ * already built (a request handler must never wait minutes for swiftc).
+ *
+ * The hash leaves the version out: a release that doesn't touch the Swift keeps its binary,
+ * and only the Info.plist beside it is rewritten with the new version.
  */
-function nativeApp() {
+function nativeApp({ build = true } = {}) {
   if (process.platform !== 'darwin' || process.env.CLAUDE_PANEL_BROWSER === '1' || !existsSync(APP_SOURCE)) return null;
-  const hash = createHash('sha256').update(readFileSync(APP_SOURCE)).update(INFO_PLIST).digest('hex').slice(0, 16);
+  const hash = createHash('sha256').update(readFileSync(APP_SOURCE)).update(infoPlist('')).digest('hex').slice(0, 16);
   const bundle = join(APP_CACHE, hash, 'Claude Panel.app');
   const binary = join(bundle, 'Contents', 'MacOS', 'ClaudePanel');
-  if (existsSync(binary)) return binary;
+  const plistFile = join(bundle, 'Contents', 'Info.plist');
+  const plist = infoPlist(pluginVersion());
+  if (existsSync(binary)) {
+    try {
+      if (readFileSync(plistFile, 'utf8') !== plist) writeFileSync(plistFile, plist);
+    } catch {
+      // A plist that can't be rewritten only shows an old version number.
+    }
+    return binary;
+  }
+  if (!build) return null;
   mkdirSync(dirname(binary), { recursive: true });
-  writeFileSync(join(bundle, 'Contents', 'Info.plist'), INFO_PLIST);
+  writeFileSync(plistFile, plist);
   const built = spawnSync('xcrun', ['swiftc', '-O', APP_SOURCE, '-o', `${binary}.tmp`], { encoding: 'utf8', timeout: 180_000 });
   if (built.status !== 0) {
     process.stderr.write(`claude-panel: couldn't build the window app, using the browser: ${(built.stderr || built.error?.message || '').slice(0, 500)}\n`);
@@ -495,25 +542,82 @@ function nativeApp() {
   return binary;
 }
 
-const WINDOW_TITLES = { learn: 'Learn', 'games/sudoku': 'Sudoku', 'games/2048': '2048', 'games/typing': 'Typing', 'games/chess': 'Chess puzzles' };
+/** The window app's id for a page: 'games/chess' is 'games-chess'. */
+export const windowId = key => key.replace('/', '-');
 
-async function open(page, terminal = {}) {
-  const target = page === 'learn' || page === '' ? 'learn/' : /^games\/(sudoku|2048|typing|chess)$/.test(page) ? `${page}/` : null;
+/** True when the window app already shows this page for this server (its pid file, ClaudePanel.swift). */
+function windowShowing(key, port) {
+  try {
+    const [pid, shownPort] = readFileSync(join(WINDOWS_DIR, `${windowId(key)}.pid`), 'utf8').trim().split(/\s+/).map(Number);
+    if (!(pid > 0) || shownPort !== port) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One native window for `target` (from pagePath): no tabs or address bar. One per page; a
+ * second start brings the first forward. Given the chat's terminal, it sticks to it as the
+ * floating panel does.
+ */
+function startWindow(app, record, target, terminal = {}) {
+  // A window that's already open and asked for a view (`open learn --view settings`) gets the
+  // path in its mailbox and loads it (no token: the page keeps it for the session); the new
+  // process below only brings that window forward.
+  if (target.path !== `${target.key}/` && windowShowing(target.key, record.port)) {
+    try {
+      writeAtomic(join(WINDOWS_DIR, `${windowId(target.key)}.open`), `/${target.path}\n`);
+    } catch {
+      // No mailbox: the window still comes forward, on the page it shows.
+    }
+  }
+  const url = `http://127.0.0.1:${record.port}/${target.path}`;
+  const follow = terminal.program ? ['--terminal', terminal.program, '--iterm-session', terminal.itermSession || ''] : [];
+  // The token goes on stdin, never in argv: any user on the Mac can read a process's arguments.
+  const window = spawn(app, ['--url', url, '--token-stdin', '--id', windowId(target.key), '--title', WINDOW_TITLES[target.key], ...follow], { detached: true, stdio: ['pipe', 'ignore', 'ignore'] });
+  window.on('error', () => {});
+  window.stdin.on('error', () => {});
+  window.stdin.end(`${record.token}\n`);
+  window.unref();
+}
+
+/** POSTs JSON to the running server; resolves the answer's JSON. */
+function postJson(record, path, value) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(value);
+    const req = httpRequest(
+      { host: '127.0.0.1', port: record.port, path, method: 'POST', timeout: 3000,
+        headers: { 'X-Learn-Token': record.token, Host: `127.0.0.1:${record.port}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+      res => {
+        let text = '';
+        res.on('data', chunk => { text += chunk; });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(text));
+          } catch (error) {
+            reject(error);
+          }
+        });
+      },
+    );
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('the server did not answer')));
+    req.end(body);
+  });
+}
+
+async function open(page, terminal = {}, deep = {}) {
+  const target = pagePath(page, deep);
   if (target === null) throw new Error(`no such page: ${page}`);
   const record = await findOrStart();
-  const url = `http://127.0.0.1:${record.port}/${target}#token=${record.token}`;
+  const url = `http://127.0.0.1:${record.port}/${target.path}`;
   let shown = 'browser';
   if (process.env.CLAUDE_PANEL_NO_BROWSER !== '1') {
     const app = nativeApp();
-    const key = page === '' ? 'learn' : page;
     if (app) {
-      // Its own window: no tabs or address bar. One per page; a second open brings it forward.
-      // Given the chat's terminal, the window sticks to it as the floating panel does.
-      const follow = terminal.program ? ['--terminal', terminal.program, '--iterm-session', terminal.itermSession || ''] : [];
-      // The token goes on stdin, never in argv: any user on the Mac can read a process's arguments.
-      const window = spawn(app, ['--url', url.replace(/#.*$/, ''), '--token-stdin', '--id', key.replace('/', '-'), '--title', WINDOW_TITLES[key] || 'Learn', ...follow], { detached: true, stdio: ['pipe', 'ignore', 'ignore'] });
-      window.stdin.end(`${record.token}\n`);
-      window.unref();
+      startWindow(app, record, target, terminal);
       shown = 'window';
     } else {
       // A one-time link, so the token never sits on the browser's command line.
@@ -523,25 +627,41 @@ async function open(page, terminal = {}) {
     }
   }
   // The URL without its token: the token stays out of logs and transcripts.
-  process.stdout.write(JSON.stringify({ ok: true, url: url.replace(/#.*$/, ''), port: record.port, shown }) + '\n');
+  process.stdout.write(JSON.stringify({ ok: true, url, port: record.port, shown }) + '\n');
 }
 
-const [mode = 'open', page = 'learn', ...rest] = process.argv.slice(2);
-// `open <page> --terminal <TERM_PROGRAM> --iterm-session <id>`: the terminal a window sticks to.
-const flag = name => (rest.indexOf(name) >= 0 ? rest[rest.indexOf(name) + 1] : undefined);
-const terminal = { program: flag('--terminal') || process.env.TERM_PROGRAM, itermSession: flag('--iterm-session') || process.env.ITERM_SESSION_ID };
-if (mode === 'serve') serve();
-else if (mode === 'app-path') {
-  // The plugin's floating panel on macOS runs this binary (in panel mode); null: no Swift here.
-  const binary = nativeApp();
-  process.stdout.write(JSON.stringify(binary ? { ok: true, binary } : { ok: false, error: 'the window app could not be built here' }) + '\n');
-}
-else if (mode === 'open') {
-  open(page, terminal).catch(error => {
-    process.stdout.write(JSON.stringify({ ok: false, error: String(error.message || error) }) + '\n');
-    process.exit(1);
-  });
-} else {
-  process.stderr.write('usage: node server.mjs open [learn | games/<sudoku|2048|typing|chess>] | serve | app-path\n');
-  process.exit(2);
+// Run as a command (web.sh, findOrStart's child), not when a test imports the helpers above.
+const isMain = (() => {
+  try {
+    return realpathSync(process.argv[1] || '') === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return true;
+  }
+})();
+
+if (isMain) {
+  const args = process.argv.slice(2);
+  const mode = args.shift() || 'open';
+  // `open` with only flags (`open --view settings`) is Learn.
+  const page = args.length && !args[0].startsWith('--') ? args.shift() : 'learn';
+  // `open <page> --terminal <TERM_PROGRAM> --iterm-session <id>`: the terminal a window sticks to;
+  // `open learn --view <library|course|learned|ask|settings> --course <id>`: where Learn opens.
+  const flag = name => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
+  const terminal = { program: flag('--terminal') || process.env.TERM_PROGRAM, itermSession: flag('--iterm-session') || process.env.ITERM_SESSION_ID };
+  const deep = { view: flag('--view'), course: flag('--course') };
+  if (mode === 'serve') serve();
+  else if (mode === 'app-path') {
+    // The plugin's floating panel on macOS runs this binary (in panel mode); null: no Swift here.
+    const binary = nativeApp();
+    process.stdout.write(JSON.stringify(binary ? { ok: true, binary } : { ok: false, error: 'the window app could not be built here' }) + '\n');
+  }
+  else if (mode === 'open') {
+    open(page, terminal, deep).catch(error => {
+      process.stdout.write(JSON.stringify({ ok: false, error: String(error.message || error) }) + '\n');
+      process.exit(1);
+    });
+  } else {
+    process.stderr.write('usage: node server.mjs open [learn [--view <view>] [--course <id>] | games | games/<sudoku|2048|typing|chess>] | serve | app-path\n');
+    process.exit(2);
+  }
 }

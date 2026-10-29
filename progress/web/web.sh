@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Starts (or finds) the Learn + games web server and opens a page in the browser, with a
 # Node 22+ found the way learn/learn.sh finds one. Always run as `bash web.sh ...`.
-#   bash web.sh open [learn | games/<sudoku|2048|typing|chess>]
+#   bash web.sh open [learn [--view <library|course|learned|ask|settings>] [--course <id>]
+#                     | games | games/<sudoku|2048|typing|chess>]
+# Every argument goes to server.mjs as it is.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="$HOME/.local/bin:$PATH"
 

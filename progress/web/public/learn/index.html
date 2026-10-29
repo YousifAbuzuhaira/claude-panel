@@ -4,23 +4,31 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<meta name="color-scheme" content="light dark">
 <title>Learn</title>
 <link rel="icon" href="data:,">
+<link rel="stylesheet" href="/shared/theme.css">
 <link rel="stylesheet" href="style.css">
+<script src="/shared/theme.js"></script>
+<script src="first-look.js"></script>
 <script type="module" src="app.js"></script>
 </head>
 <body>
 <header class="top">
-  <span class="brand">Learn</span>
-  <nav class="tabs" role="tablist" aria-label="Views">
-    <button type="button" class="tab" role="tab" data-tab="library" title="Ctrl+1">Library</button>
-    <button type="button" class="tab" role="tab" data-tab="course" title="Ctrl+2" hidden>Course</button>
-    <button type="button" class="tab" role="tab" data-tab="learned" title="Ctrl+3">Learned</button>
-    <button type="button" class="tab" role="tab" data-tab="ask" title="Ctrl+4">Ask</button>
-    <button type="button" class="tab" role="tab" data-tab="settings" title="Ctrl+5">Settings</button>
-  </nav>
-  <button type="button" id="build-chip" class="build-chip" hidden></button>
+  <div class="top-in">
+    <h1 class="ui-title brand">Learn</h1>
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button type="button" class="tab" role="tab" data-tab="library" title="Library (Ctrl+1)">Library</button>
+      <button type="button" class="tab" role="tab" data-tab="course" title="The open course (Ctrl+2)" hidden>Course</button>
+      <button type="button" class="tab" role="tab" data-tab="learned" title="What you have learned (Ctrl+3)">Learned</button>
+      <button type="button" class="tab" role="tab" data-tab="ask" title="Ask what to learn next (Ctrl+4)">Ask</button>
+      <button type="button" class="tab" role="tab" data-tab="settings" title="Settings (Ctrl+5)">Settings</button>
+    </nav>
+    <button type="button" id="build-chip" class="build-chip" hidden></button>
+    <div class="marks">
+      <button type="button" id="look-mark" class="ui-mark" title="Colour scheme and see-through" aria-label="Colour scheme and see-through">&#x25D0;</button>
+      <a id="games-mark" class="ui-mark" href="../games/" title="Games" aria-label="Games">&#x25A6;</a>
+    </div>
+  </div>
 </header>
 <div id="banner" class="banner" role="alert" hidden></div>
 <div class="views">

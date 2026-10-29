@@ -35,11 +35,14 @@ const allLearned = ids => ids.every(id => conceptInfo(id)?.state === 'learned');
 /** Set by course.js: marks a concept learned and refreshes the page's chips. */
 export const chatHooks = { learn: async (id, learned) => act('concept.learn', { id, learned }) };
 
+// One concept is named on the button; several are counted, with their names in the tooltip.
 function offerButton(ids) {
   const names = ids.map(conceptName).join(', ');
-  if (allLearned(ids)) return h('button.chat-button.done', { type: 'button', disabled: true }, `${GLYPH.check} Learned: ${names}`);
+  const several = ids.length > 1;
+  if (allLearned(ids)) return h('button.chat-button.done', { type: 'button', disabled: true, title: names }, `${GLYPH.check} Learned${several ? '' : `: ${names}`}`);
   const button = h('button.chat-button.learn', {
     type: 'button',
+    title: names,
     onclick: async () => {
       button.disabled = true;
       // The person's own click: the only way anything becomes Learned.
@@ -47,7 +50,7 @@ function offerButton(ids) {
       button.textContent = `${GLYPH.check} Learned`;
       button.classList.add('done');
     },
-  }, `Mark learned: ${names}`);
+  }, several ? `Mark ${ids.length} learned` : `Mark learned: ${names}`);
   return button;
 }
 

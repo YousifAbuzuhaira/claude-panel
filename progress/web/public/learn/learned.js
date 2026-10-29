@@ -188,9 +188,12 @@ function conceptRow(concept, depth) {
         : ['rename', 'edit', 'nest', 'move', 'merge'];
   const isTarget = ['into', 'under', 'top level'].includes(keys[0]);
   const editing = M.renamingConcept === id || M.movingConcept === id || M.editingDefinition === id;
-  const tools = h(`span.concept-tools${isTarget || editing ? '.shown' : ''}`, null,
+  // Where it was learned and the row's tools share one place by the remove mark: the tools
+  // show on hover (or while in use) and the line steps aside, so nothing moves.
+  const toolsShown = isTarget || editing;
+  const tools = h(`span.concept-tools${toolsShown ? '.shown' : ''}`, null,
     keys.map(key => action(key, event => conceptAction(key, id, event.currentTarget), isTarget && key !== 'cancel' ? 'accent' : 'faint')));
-  const actions = h('div.concept-actions', null, where ? h('span.where', null, where) : null, tools,
+  const actions = h('div.concept-actions', null, where && !toolsShown ? h('span.where', { title: where }, where) : null, tools,
     isTarget ? null : (() => {
       // Always there, so removing never depends on finding the hover actions.
       const remove = action(GLYPH.close, event => conceptAction('remove', id, event.currentTarget), 'faint.remove');

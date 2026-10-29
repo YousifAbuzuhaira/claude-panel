@@ -55,5 +55,22 @@ export async function writeSave(game, value) {
   } catch {}
 }
 
+/**
+ * In the macOS window app: opens another page ('learn', 'games', 'games/chess') in a window of
+ * its own, or brings it forward. False where there's no window app; the page then links.
+ */
+export async function openWindow(page) {
+  try {
+    const response = await fetch('/api/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Learn-Token': token },
+      body: JSON.stringify({ page }),
+    });
+    return response.ok && (await response.json()).ok === true;
+  } catch {
+    return false;
+  }
+}
+
 /** Pages link to each other with the token carried along. */
 export const withToken = path => `${path}#token=${token}`;
