@@ -44,11 +44,11 @@
   color-scheme: dark;
 }
 
-/* The page behind the card: the card's own colour, solid in a browser; a native window
-   (html.native) is see-through, so its page has no background of its own. */
+/* The whole window is the card: the page's one background is --card-fill on <html>. In a
+   native window (html.native, macOS) it carries the see-through; in a browser look.js keeps it
+   solid. So no page paints an opaque background of its own: surfaces are tints of the text. */
 html { background: var(--card-fill); }
-html.native { background: transparent; }
-html.native body { background: transparent; }
+body { background: transparent; }
 
 ::selection { background: var(--accent-soft); }
 * { scrollbar-width: thin; scrollbar-color: var(--scroll) transparent; }

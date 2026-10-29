@@ -239,8 +239,31 @@ function Initialize-Theme([string]$Group) {
     brushes = $brushes
     stamp = Get-AppearanceStamp
     checkedAt = [Environment]::TickCount
+    tints = New-Object System.Collections.Generic.List[object]
   }
   return $brushes
+}
+
+# For the few colours a window needs that are not a role (a game's own line weight, say): a
+# role at an alpha, optionally mixed toward another role first. It is a brush of its own that
+# follows the scheme like the roles do.
+#   New-ThemeTint 'ink' 0.45                 the text colour at 45%
+#   New-ThemeTint 'red' 1.0 'cardFill' 0.45  red, 45% of the way to the background, solid
+function New-ThemeTint([string]$Role, [double]$Alpha = 1.0, [string]$MixWith = '', [double]$MixT = 0) {
+  $tint = @{ role = $Role; alpha = $Alpha; mixWith = $MixWith; mixT = $MixT; brush = $null }
+  $tint.brush = New-Object System.Windows.Media.SolidColorBrush((Get-ThemeTintColor $tint))
+  $script:THEME.tints.Add($tint)
+  return $tint.brush
+}
+
+function Get-ThemeTintColor($Tint) {
+  $base = ConvertTo-ThemeMediaColor $script:THEME.palette[$Tint.role]
+  $rgb = @([int]$base.R, [int]$base.G, [int]$base.B)
+  if ($Tint.mixWith) {
+    $other = ConvertTo-ThemeMediaColor $script:THEME.palette[$Tint.mixWith]
+    $rgb = Get-ThemeMix $rgb @([int]$other.R, [int]$other.G, [int]$other.B) $Tint.mixT
+  }
+  return [System.Windows.Media.Color]::FromArgb((Get-ThemeByte ($Tint.alpha * 255)), $rgb[0], $rgb[1], $rgb[2])
 }
 
 # Repaints every brush from the given appearance (or the file's), in place.
@@ -251,6 +274,7 @@ function Set-ThemeAppearance($Appearance) {
   foreach ($role in $THEME_ROLES) { $script:THEME.brushes[$role].Color = ConvertTo-ThemeMediaColor $palette[$role] }
   $script:THEME.appearance = $Appearance
   $script:THEME.palette = $palette
+  foreach ($tint in $script:THEME.tints) { $tint.brush.Color = Get-ThemeTintColor $tint }
 }
 
 # Call from the window's timer. At most once a second it looks at the file's stamp; when the file
