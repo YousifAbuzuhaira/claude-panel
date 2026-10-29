@@ -38,7 +38,8 @@ function showView(name) {
 
 /** Opening a course from anywhere: the Course tab, then the page. */
 function openCourseView(id, page) {
-  if (S.view === 'course' && S.courseId === id && !page) return;
+  // Already showing this course: nothing to do (at start the saved view says 'course' before it is shown).
+  if (S.view === 'course' && S.courseId === id && !page && !hosts.course.hidden) return;
   if (S.view === 'settings') leaveSettings();
   S.courseId = id;
   S.view = 'course';

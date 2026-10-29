@@ -515,9 +515,10 @@ function renderOverlap() {
     const positions = list.map(n => positionOf(n)).filter(Boolean);
     return positions.length === 1 ? `here: page ${positions[0]}` : `here: pages ${positions.join(', ')}`;
   };
-  // The detail's last part ('here: page 4') is kept on one line.
+  // The detail's last part (the dot, then 'here: page 4') is kept on one line, so a line never
+  // ends on a dangling dot.
   const line = (cls, name, detail, pageList) => h(`div.overlap-line.${cls}`, null, h('div.overlap-name', null, name),
-    h('div.overlap-detail', null, `${detail}  ${GLYPH.dot} `, h('span.here', null, pagesText(pageList))));
+    h('div.overlap-detail', null, `${detail} `, h('span.here', null, `${GLYPH.dot} ${pagesText(pageList)}`)));
   // The same caption row as a page, so its title sits where the page's title sits.
   const out = [
     h('div.col-head', null, h('span.page-count', null, 'What I already know'), action('close', () => showOverlap(false), 'faint')),

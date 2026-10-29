@@ -2,7 +2,7 @@
 // the models, the Advisor's work folders, text size, usage, yt-dlp, and what's new.
 import { isNative, loadAppearance, loadPresets, loadReleases, previewAppearance, saveAppearance } from '../shared/look.js';
 import {
-  COLOR_KEYS, GROUPS, customColours, normalizeHex, percent, releaseMeta, sameColours, seeThroughWarning, shownScheme, withColors, withOpacity, withPreset,
+  COLOR_KEYS, GROUPS, afterSave, customColours, normalizeHex, percent, releaseMeta, sameColours, seeThroughWarning, shownScheme, withColors, withOpacity, withPreset,
 } from './appearance.js';
 import { S, act, action, chip, formatDate, h, nav, savePrefs, toast } from './core.js';
 
@@ -114,7 +114,8 @@ export function showSettings() {
 // with *Use these*; a slider shows while dragged and saves when let go.
 
 const A = {
-  saved: null, // the appearance on file
+  saved: null, // the appearance shown: on file, or a pick on its way there
+  onFile: null, // the appearance last read from or written to the file
   presets: [],
   typing: false, // colours typed and shown here, not yet saved
   sliding: null, // the group whose slider is held
@@ -175,6 +176,7 @@ function buildAppearance() {
   Promise.all([loadPresets(), loadAppearance()]).then(([presets, appearance]) => {
     A.presets = presets;
     if (!A.saved && appearance) A.saved = appearance;
+    if (!A.onFile && appearance) A.onFile = appearance;
     syncAppearance();
   });
 }
@@ -287,22 +289,35 @@ function resetLook() {
   commit({ ...withPreset(A.saved, ember), opacity: { ...theme().DEFAULT_OPACITY } });
 }
 
-/** Shows `next` here at once and saves it for every window. */
+/**
+ * Shows `next` here at once and saves it for every window. Refused, the page and the editor go
+ * back to what is on file before the toast says so.
+ */
 async function commit(next) {
   A.typing = false;
   A.saved = next;
   previewAppearance(next, 'learn');
   syncAppearance();
+  let kept = null;
   try {
-    A.saved = await saveAppearance(next);
+    kept = await saveAppearance(next);
+    A.onFile = kept;
   } catch {
-    toast("Couldn't save the colour scheme", 'error');
+    // kept stays null: refused, or the server could not be reached
   }
+  const settled = afterSave(A.saved, next, kept, A.onFile);
+  A.saved = settled.appearance;
+  if (settled.revert) {
+    previewAppearance(A.saved, 'learn');
+    syncAppearance();
+  }
+  if (!kept) toast("Couldn't save the colour scheme", 'error');
 }
 
 /** Another window changed the appearance (shared/look.js saw the file change). */
 export function appearanceChanged(appearance) {
   A.saved = appearance;
+  A.onFile = appearance;
   syncAppearance();
 }
 

@@ -42,6 +42,21 @@ export function withOpacity(appearance, group, value) {
   return { preset: appearance.preset, colors: { ...appearance.colors }, opacity: { ...copyOpacity(appearance), [group]: value } };
 }
 
+/**
+ * What the editor holds once the save of `sent` comes back: `kept` (what the server stored) or,
+ * when it refused (null), `onFile` (the appearance last read from or written to the file), so
+ * this window never goes on showing a scheme that no other window has. A pick made while `sent`
+ * was on its way (`current` is no longer `sent`) settles itself, so it is left alone. With
+ * nothing known on file the editor keeps `current` until the page's watcher reads the file.
+ * {appearance, revert}: revert says the page must be shown `appearance` again.
+ */
+export function afterSave(current, sent, kept, onFile) {
+  if (current !== sent) return { appearance: current, revert: false };
+  if (kept) return { appearance: kept, revert: false };
+  if (onFile) return { appearance: onFile, revert: true };
+  return { appearance: current, revert: false };
+}
+
 /** The name of the swatch to mark: the preset, or 'custom' when the colours are no preset's. */
 export function shownScheme(appearance, presets) {
   const named = presets.find(p => p.name === appearance.preset);

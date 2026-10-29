@@ -2,9 +2,9 @@
 // block's release line, and the stylesheet rules the overhaul depends on.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import {
-  COLOR_KEYS, GROUPS, LIGHT_SEE_THROUGH_MIN, customColours, normalizeHex, percent, releaseLine, releaseMeta, sameColours, seeThroughWarning,
+  COLOR_KEYS, GROUPS, LIGHT_SEE_THROUGH_MIN, afterSave, customColours, normalizeHex, percent, releaseLine, releaseMeta, sameColours, seeThroughWarning,
   shortDate, shownScheme, withColors, withOpacity, withPreset,
 } from '../public/learn/appearance.js';
 
@@ -47,6 +47,34 @@ test('one group\'s see-through changes alone, and nothing is changed in place', 
   assert.deepEqual(next.opacity, { panel: 0.92, learn: 0.4, games: 0.95 });
   assert.equal(next.preset, 'ember');
   assert.equal(JSON.stringify(saved), before);
+});
+
+test('a refused save goes back to the scheme on file; a kept one stays', () => {
+  const onFile = saved;
+  const sent = withPreset(saved, paper);
+  const kept = { ...sent };
+  assert.deepEqual(afterSave(sent, sent, kept, onFile), { appearance: kept, revert: false });
+  // Refused: back to what every other window shows, and the page is shown it again.
+  assert.deepEqual(afterSave(sent, sent, null, onFile), { appearance: onFile, revert: true });
+  // A later pick on its way when this one came back: it settles itself, kept or refused.
+  const later = withOpacity(sent, 'learn', 0.5);
+  assert.deepEqual(afterSave(later, sent, null, onFile), { appearance: later, revert: false });
+  assert.deepEqual(afterSave(later, sent, kept, onFile), { appearance: later, revert: false });
+  // Nothing known on file yet: keep what is shown until the watcher reads the file.
+  assert.deepEqual(afterSave(sent, sent, null, null), { appearance: sent, revert: false });
+});
+
+test('Settings saves through afterSave, and every appearance it shows goes through look.js', () => {
+  const settings = read('../public/learn/settings.js');
+  assert.match(settings, /afterSave\(A\.saved, next, kept, A\.onFile\)/);
+  // The revert comes before the toast, so the toast never sits over a scheme that wasn't saved.
+  const commit = /async function commit\(next\) \{([\s\S]*?)\n\}/.exec(settings)[1];
+  assert.ok(commit.indexOf('settled.revert') > 0 && commit.indexOf('settled.revert') < commit.lastIndexOf('toast('));
+  // look.js marks the page for the halo from every palette it applies, so no Learn file calls
+  // ClaudeTheme.applyAppearance itself.
+  for (const file of readdirSync(new URL('../public/learn/', import.meta.url)).filter(name => name.endsWith('.js'))) {
+    assert.doesNotMatch(read(`../public/learn/${file}`), /applyAppearance/, file);
+  }
 });
 
 test('the marked swatch is the preset, or Custom for colours no preset has', () => {
@@ -185,4 +213,20 @@ test('a deep link\'s query leaves the address once its view is shown', () => {
   assert.match(app, /showAsked\(.*\);\n\s*if \(location\.search\) history\.replaceState\(null, '', location\.pathname\);/);
   // The Library reads ?pick as the page loads, before the query is cleared.
   assert.match(read('../public/learn/library.js'), /^const ASKED_PICK = new URLSearchParams\(location\.search\)\.has\('pick'\);/m);
+});
+
+test('at low see-through the halo stays off text on a solid fill of its own', () => {
+  const css = read('../public/learn/style.css');
+  const rule = /html\[data-see-through\] :is\(([^)]*(?:\([^)]*\))?[^)]*)\)\s*\{\s*text-shadow:\s*none;\s*\}/.exec(css);
+  assert.ok(rule, 'an exclusion rule');
+  for (const selector of ['.ui-btn.green', '.chat-button.learn:not(.done)', '.toast']) assert.ok(rule[1].includes(selector), selector);
+  // A Learned button once clicked is plain green text: it keeps the halo like any text.
+  assert.doesNotMatch(rule[1], /\.chat-button\.done/);
+});
+
+test("an overlap detail's '· here: page 4' stays one piece, so no line ends on a bare dot", () => {
+  const course = read('../public/learn/course.js');
+  assert.match(course, /h\('span\.here', null, `\$\{GLYPH\.dot\} \$\{pagesText\(pageList\)\}`\)/);
+  assert.doesNotMatch(course, /\$\{detail\}\s+\$\{GLYPH\.dot\}/);
+  assert.match(read('../public/learn/style.css'), /\.overlap-detail \.here\s*\{\s*white-space:\s*nowrap;/);
 });

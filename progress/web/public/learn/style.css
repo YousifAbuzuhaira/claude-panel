@@ -322,7 +322,8 @@ textarea.inline-edit[rows="1"] { resize: none; overflow: hidden; height: 30px; w
 .overlap-line.blue .overlap-name { color: var(--blue); }
 .overlap-line.dim .overlap-name { color: var(--dim); }
 .overlap-detail { font-size: 12px; color: var(--dim); margin-left: 18px; overflow-wrap: anywhere; }
-/* 'here: page 4' never breaks from its number. */
+/* The dot and 'here: page 4' are one piece: the dot never dangles at a line end, nor the page
+   from its number. */
 .overlap-detail .here { white-space: nowrap; }
 .fresh { line-height: 1.7; }
 .skip-pick { display: block; background: none; border: 0; padding: 4px 0; cursor: pointer; text-align: left; font-size: 14px; }
@@ -464,6 +465,12 @@ textarea.inline-edit[rows="1"] { resize: none; overflow: hidden; height: 30px; w
 .release-head b { color: var(--ink); }
 .release-notes { margin: 4px 0 0; padding-left: 18px; }
 .release-notes li { margin: 2px 0; }
+
+/* --- Low see-through ------------------------------------------------------------------------ */
+/* Below 85% shared/theme.css gives the text a halo of the background (--bg-solid), so it stands
+   on its own over whatever shows through. Not where text sits on a solid fill of its own, which
+   a halo of the background would only smudge: the green buttons and the toast. */
+html[data-see-through] :is(.ui-btn.green, .chat-button.learn:not(.done), .toast) { text-shadow: none; }
 
 /* --- Narrower windows --------------------------------------------------------------------------- */
 @media (max-width: 1100px) {
