@@ -8,6 +8,12 @@
 # alive, duplicate, error. PowerShell names ignore case, so glyphs are $GLYPH_*
 # and no variable may reuse a parameter's name. Kept to ASCII: Windows PowerShell reads a .ps1
 # without a BOM as ANSI, so every non-ASCII glyph is built from its code point.
+#
+# It wears the colour scheme every window shares (Theme.ps1, group 'panel') and is built from
+# the shared pieces (Chrome.ps1). It never takes keyboard focus, so everything here is a click:
+#   row 1  the open/closed mark, the chat's title, and the marks for colour scheme, games, close
+#   row 2  the tabs (Phases, Tests, Learn) and, on the right, the version: the Releases tab
+#   then   the colour-scheme strip or the games strip when one is open, a rule, the tab, a footer
 
 param(
   [Parameter(Mandatory = $true)][string]$StateFile,
@@ -18,10 +24,13 @@ param(
   [int]$PadLeft = 12,
   [int]$PadTop = 10,
   [int]$PadBottom = 6,
-  # Testing aid: draw the panel to this PNG (whatever window is in front) and exit.
+  # Testing aids: draw the panel to this PNG (whatever window is in front) and exit. A snapshot
+  # ignores the saved prefs, so the same arguments always draw the same picture. -SnapshotTab is
+  # taken as a click on that tab; -SnapshotStrip draws it with a strip open.
   [string]$SnapshotPath = '',
-  [ValidateSet('', 'phases', 'tests', 'learn')][string]$SnapshotTab = '',
-  [ValidateSet('', 'open', 'closed')][string]$SnapshotLook = ''
+  [ValidateSet('', 'phases', 'tests', 'learn', 'releases')][string]$SnapshotTab = '',
+  [ValidateSet('', 'open', 'closed')][string]$SnapshotLook = '',
+  [ValidateSet('', 'look', 'games')][string]$SnapshotStrip = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -109,18 +118,36 @@ if (-not $isOwner -and -not $SnapshotPath) {
   exit 0
 }
 
+# The colour scheme and see-through every window shares (appearance.json), and the shared pieces.
+. (Join-Path $PSScriptRoot 'Theme.ps1')
+$T = Initialize-Theme 'panel'
+. (Join-Path $PSScriptRoot 'Chrome.ps1')
+
 $WEZTERM_CLASS = 'org.wezfurlong.wezterm'
-$GLYPH_CHECK = [string][char]0x2713
-$GLYPH_NOW = [string][char]0x25B8
-$GLYPH_CLOSE = [string][char]0x2715
-$GLYPH_GRIP = [string][char]0x25E3
+$GLYPH_CHECK = $UI_GLYPHS.check
+$GLYPH_FAILED = $UI_GLYPHS.cross
+# One mark for "now": the phase in progress, a live run, a build at work, something new.
+$GLYPH_LIVE = $UI_GLYPHS.dot
+$GLYPH_DOT = $UI_GLYPHS.middot
+$GLYPH_ARROW = $UI_GLYPHS.arrow
+$GLYPH_COURSE = [string][char]0x2261
+$GLYPH_FULL = [string][char]0x2588
+$GLYPH_EMPTY = [string][char]0x2591
 $MIN_SCALE = 0.7
 $MAX_SCALE = 2.5
-$GLYPH_EXPANDED = [string][char]0x25BE
-$GLYPH_COLLAPSED = [string][char]0x25B8
-$GLYPH_DOT = [string][char]0x00B7
-$GLYPH_GAMES = [string][char]0x25A6
-$GLYPH_ARROW = [string][char]0x2192
+$BAR_CELLS = 18
+
+# Sizes, in the card's own units (the grip scales the whole card).
+$PANEL_W = 340                       # fixed, so no tab or line ever moves the left edge
+$CONTENT_W = $PANEL_W - 2 - 24       # inside the 1px border and the 12px side padding
+$MARK_W = 14                         # the glyph column of runs, Learn and releases: second lines start here
+$BOX_W = 28                          # the [x] column of phase rows
+$ROW_GAP = 2                         # between the rows of one thing
+$GROUP_GAP = 8                       # between things: runs, Learn blocks, releases; and around the rule
+$TAB_GAP = 12
+$MARK_PULL = 6                       # header marks reach into the padding so their glyphs line up with the text
+$RELEASES_SHOWN = 4
+$PICKABLE_TABS = @('phases', 'tests', 'learn')
 
 # --- Which WezTerm window and pane this chat lives in -------------------------
 
@@ -199,45 +226,105 @@ function Measure-Pane {
   }
 }
 
-# --- What the person left it as: where, how big, open or not, which tab --------
-
-$GLYPH_RUNNING = [string][char]0x25CF
-$GLYPH_FAILED = [string][char]0x2717
-$GLYPH_FULL = [string][char]0x2588
-$GLYPH_EMPTY = [string][char]0x2591
-$BAR_CELLS = 18
+# --- What the person left it as: where, how big, open or not, which tab -------
+# One file for every chat's panel on this machine; the last write wins. A snapshot reads none of
+# it and writes none of it.
 
 $prefsFile = Join-Path $env:LOCALAPPDATA 'ClaudePhases\offset.json'
 $script:offset = @{ dx = 0; dy = 0 }
 $script:isExpanded = $true
 $script:scale = 1.0
-try {
-  if (Test-Path $prefsFile) {
-    $saved = Get-Content $prefsFile -Raw | ConvertFrom-Json
-    $script:offset = @{ dx = [int]$saved.dx; dy = [int]$saved.dy }
-    if ($null -ne $saved.expanded) { $script:isExpanded = [bool]$saved.expanded }
-    if ($saved.scale) { $script:scale = [Math]::Max($MIN_SCALE, [Math]::Min($MAX_SCALE, [double]$saved.scale)) }
-  }
-} catch {}
+# The tab the person clicked, or $null while the panel picks (see Show-State).
+$script:manualTab = $null
+# The newest version whose notes the person has seen in the Releases tab.
+$script:seenRelease = $null
+if (-not $SnapshotPath) {
+  try {
+    if (Test-Path $prefsFile) {
+      $saved = Get-Content $prefsFile -Raw | ConvertFrom-Json
+      $script:offset = @{ dx = [int]$saved.dx; dy = [int]$saved.dy }
+      if ($null -ne $saved.expanded) { $script:isExpanded = [bool]$saved.expanded }
+      if ($saved.scale) { $script:scale = [Math]::Max([double]$MIN_SCALE, [Math]::Min([double]$MAX_SCALE, [double]$saved.scale)) }
+      # Releases is a look, not a place to come back to: only the other tabs reopen.
+      if ($PICKABLE_TABS -contains [string]$saved.tab) { $script:manualTab = [string]$saved.tab }
+      if ($saved.seenRelease) { $script:seenRelease = [string]$saved.seenRelease }
+    }
+  } catch {}
+}
 
 function Save-Prefs {
+  if ($SnapshotPath) { return }
   try {
     New-Item -ItemType Directory -Force -Path (Split-Path $prefsFile) | Out-Null
-    @{ dx = $script:offset.dx; dy = $script:offset.dy; expanded = $script:isExpanded; scale = [Math]::Round($script:scale, 3) } |
-      ConvertTo-Json -Compress | Set-Content -Path $prefsFile -Encoding ASCII
+    @{
+      dx = $script:offset.dx; dy = $script:offset.dy; expanded = $script:isExpanded; scale = [Math]::Round($script:scale, 3)
+      tab = $script:manualTab; seenRelease = $script:seenRelease
+    } | ConvertTo-Json -Compress | Set-Content -Path $prefsFile -Encoding ASCII
   } catch {}
+}
+
+# --- Releases: what each version changed, read once from the plugin's own files ---
+
+$PLUGIN_DIR = Split-Path -Parent $PSScriptRoot
+
+function Read-JsonFile([string]$Path) {
+  try {
+    if (-not [System.IO.File]::Exists($Path)) { return $null }
+    return ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
+  } catch {
+    return $null
+  }
+}
+
+# -1, 0 or 1, by version number ("0.10.0" after "0.9.1"); text order when one isn't a number.
+function Compare-Version([string]$A, [string]$B) {
+  $left = $null
+  $right = $null
+  if ([version]::TryParse(($A -replace '[^0-9.]', ''), [ref]$left) -and [version]::TryParse(($B -replace '[^0-9.]', ''), [ref]$right)) {
+    return $left.CompareTo($right)
+  }
+  return [Math]::Sign([string]::CompareOrdinal($A, $B))
+}
+
+function Format-ReleaseDate([string]$Date) {
+  $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+  try { return [DateTime]::ParseExact($Date, 'yyyy-MM-dd', $invariant).ToString('d MMM', $invariant) } catch { return $Date }
+}
+
+$script:releases = New-Object System.Collections.Generic.List[object]
+$releaseData = Read-JsonFile (Join-Path $PLUGIN_DIR 'releases.json')
+if ($releaseData -and $releaseData.releases) {
+  foreach ($entry in @($releaseData.releases)) {
+    if (-not $entry -or -not $entry.version) { continue }
+    $notes = @(@($entry.notes) | Where-Object { $_ } | ForEach-Object { [string]$_ } | Select-Object -First 3)
+    $script:releases.Add(@{ version = [string]$entry.version; date = [string]$entry.date; by = [string]$entry.by; notes = $notes })
+  }
+}
+$pluginData = Read-JsonFile (Join-Path $PLUGIN_DIR '.claude-plugin\plugin.json')
+$PLUGIN_VERSION = ''
+if ($pluginData -and $pluginData.version) { $PLUGIN_VERSION = [string]$pluginData.version }
+elseif ($script:releases.Count -gt 0) { $PLUGIN_VERSION = $script:releases[0].version }
+$NEWEST_RELEASE = $PLUGIN_VERSION
+if ($script:releases.Count -gt 0) { $NEWEST_RELEASE = $script:releases[0].version }
+# What had been seen when the Releases tab last opened: the entries after it wear the new mark.
+$script:seenBefore = $script:seenRelease
+
+function Test-ReleaseUnseen {
+  if (-not $NEWEST_RELEASE) { return $false }
+  if (-not $script:seenRelease) { return $true }
+  return (Compare-Version $NEWEST_RELEASE $script:seenRelease) -gt 0
 }
 
 # --- The panel ----------------------------------------------------------------
 
-function Brush([string]$Hex) { return [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex) }
-$ink = Brush '#E8E6E3'
-$dim = Brush '#8B8A88'
-$green = Brush '#5FB98A'
-$red = Brush '#E0696B'
-$accent = Brush '#E08A5F'
-$gold = Brush '#E6BE47'
-$font = New-Object System.Windows.Media.FontFamily('Cascadia Mono, Consolas')
+$ink = $T.ink
+$dim = $T.dim
+$faint = $T.faint
+$accent = $T.accent
+$green = $T.green
+$red = $T.red
+$gold = $T.gold
+$blue = $T.blue
 
 function New-Text([string]$Text, $Foreground) {
   $block = New-Object System.Windows.Controls.TextBlock
@@ -250,6 +337,35 @@ function New-Gap([double]$Left, [double]$Top, [double]$Right, [double]$Bottom) {
   return New-Object System.Windows.Thickness($Left, $Top, $Right, $Bottom)
 }
 
+# A glyph in a column of fixed width, so the text after it lines up row to row.
+function New-Cell([string]$Glyph, $Foreground, [double]$Width) {
+  $cell = New-Text $Glyph $Foreground
+  $cell.Width = $Width
+  [System.Windows.Controls.DockPanel]::SetDock($cell, 'Left')
+  return $cell
+}
+
+# A row: the glyph column, then the text, which takes the rest.
+function New-MarkRow($Cell, $Text, [double]$Top) {
+  $row = New-Object System.Windows.Controls.DockPanel
+  $row.Margin = New-Gap 0 $Top 0 0
+  [void]$row.Children.Add($Cell)
+  [void]$row.Children.Add($Text)
+  return $row
+}
+
+# A link (blue, underlined while hovered). Its click handler is the caller's; it never starts a drag.
+function New-Link([string]$Text, [string]$Tip) {
+  $link = New-Text $Text $blue
+  $link.Cursor = [System.Windows.Input.Cursors]::Hand
+  $link.HorizontalAlignment = 'Left'
+  if ($Tip) { $link.ToolTip = $Tip }
+  $link.Add_MouseEnter({ param($sender, $e) $sender.TextDecorations = [System.Windows.TextDecorations]::Underline })
+  $link.Add_MouseLeave({ param($sender, $e) $sender.TextDecorations = $null })
+  $link.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
+  return $link
+}
+
 $win = New-Object System.Windows.Window
 $win.WindowStyle = 'None'
 $win.AllowsTransparency = $true
@@ -258,117 +374,180 @@ $win.ShowInTaskbar = $false
 $win.ShowActivated = $false
 $win.Topmost = $false
 $win.ResizeMode = 'NoResize'
-$win.SizeToContent = 'WidthAndHeight'
+# The width is the card's, fixed; only the height follows what the tab shows.
+$win.SizeToContent = 'Height'
+$win.Width = $PANEL_W * $script:scale
 $win.Left = -32000
 $win.Top = -32000
-$win.FontFamily = $font
+$win.FontFamily = $UI_MONO
 $win.FontSize = 12
+Add-ThemeResources $win
 
 $card = New-Object System.Windows.Controls.Border
-$card.CornerRadius = New-Object System.Windows.CornerRadius(10)
-$card.Background = Brush '#EB1C1D20'
-$card.BorderBrush = Brush '#33FFFFFF'
+$card.CornerRadius = New-Object System.Windows.CornerRadius($UI_CARD_RADIUS)
+$card.Background = $T.cardFill
+$card.BorderBrush = $T.edge
 $card.BorderThickness = New-Object System.Windows.Thickness(1)
-$card.Padding = New-Gap 12 9 12 10
 $card.Cursor = [System.Windows.Input.Cursors]::SizeAll
-$card.MinWidth = 220
-$card.MaxWidth = 360
+$card.Width = $PANEL_W
 $cardScale = New-Object System.Windows.Media.ScaleTransform($script:scale, $script:scale)
 $card.LayoutTransform = $cardScale
 
-# Header: the open/closed arrow, the two tabs (or the one-line summary), and the close mark.
-$header = New-Object System.Windows.Controls.DockPanel
-$toggleText = New-Text '' $dim
-$toggleText.Margin = New-Gap 0 0 8 0
-$toggleText.Cursor = [System.Windows.Input.Cursors]::Hand
-[System.Windows.Controls.DockPanel]::SetDock($toggleText, 'Left')
-$closeText = New-Text $GLYPH_CLOSE $dim
-$closeText.Margin = New-Gap 12 0 0 0
-$closeText.Cursor = [System.Windows.Input.Cursors]::Hand
-[System.Windows.Controls.DockPanel]::SetDock($closeText, 'Right')
-$gamesText = New-Text $GLYPH_GAMES $dim
-$gamesText.Margin = New-Gap 12 0 0 0
-$gamesText.Cursor = [System.Windows.Input.Cursors]::Hand
-$gamesText.ToolTip = 'Games'
-[System.Windows.Controls.DockPanel]::SetDock($gamesText, 'Right')
+# Row 1: the open/closed mark, the chat's title (the one-line summary when closed), and the marks.
+$headRow = New-Object System.Windows.Controls.DockPanel
+$toggleMark = New-UiMark $UI_GLYPHS.collapse 'Collapse'
+$toggleMark.Margin = New-Gap (0 - $MARK_PULL) 0 4 0
+[System.Windows.Controls.DockPanel]::SetDock($toggleMark, 'Left')
+$closeMark = New-UiMark $UI_GLYPHS.close 'Hide until something new'
+$closeMark.Margin = New-Gap 2 0 (0 - $MARK_PULL) 0
+[System.Windows.Controls.DockPanel]::SetDock($closeMark, 'Right')
+$gamesMark = New-UiMark $UI_GLYPHS.games 'Games'
+$gamesMark.Margin = New-Gap 2 0 0 0
+[System.Windows.Controls.DockPanel]::SetDock($gamesMark, 'Right')
+$lookMark = New-UiMark $UI_GLYPHS.look 'Colour scheme and see-through'
+$lookMark.Margin = New-Gap 8 0 0 0
+[System.Windows.Controls.DockPanel]::SetDock($lookMark, 'Right')
 
+$headText = New-Text 'Progress' $dim
+if ($Title) { $headText.Text = $Title; $headText.ToolTip = $Title }
+$headText.TextTrimming = 'CharacterEllipsis'
+$headText.VerticalAlignment = 'Center'
+$summaryText = New-Object System.Windows.Controls.TextBlock
+$summaryText.TextTrimming = 'CharacterEllipsis'
+$summaryText.VerticalAlignment = 'Center'
+$summaryText.Visibility = 'Collapsed'
+$headFill = New-Object System.Windows.Controls.Grid
+[void]$headFill.Children.Add($headText)
+[void]$headFill.Children.Add($summaryText)
+
+[void]$headRow.Children.Add($toggleMark)
+[void]$headRow.Children.Add($closeMark)
+[void]$headRow.Children.Add($gamesMark)
+[void]$headRow.Children.Add($lookMark)
+[void]$headRow.Children.Add($headFill)
+
+# Row 2: the tabs, and the version on the right, which is the Releases tab. A click on any of them
+# keeps it in front (see Show-State).
+function New-Tab([string]$Name) {
+  $tab = New-Text '' $dim
+  $tab.Cursor = [System.Windows.Input.Cursors]::Hand
+  $tab.Padding = New-Gap 0 2 0 2
+  $tab.Margin = New-Gap 0 0 $TAB_GAP 0
+  $tab.VerticalAlignment = 'Center'
+  $tab.Tag = @{ name = $Name; hot = $false }
+  $tab.Add_MouseEnter({ param($sender, $e) $sender.Tag.hot = $true; Update-TabLook $sender })
+  $tab.Add_MouseLeave({ param($sender, $e) $sender.Tag.hot = $false; Update-TabLook $sender })
+  $tab.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
+  $tab.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Select-Tab $sender.Tag.name })
+  return $tab
+}
+
+function Update-TabLook($Tab) {
+  if ($script:activeTab -eq $Tab.Tag.name) { $Tab.Foreground = $ink; $Tab.FontWeight = 'Bold' }
+  elseif ($Tab.Tag.hot) { $Tab.Foreground = $ink; $Tab.FontWeight = 'Normal' }
+  else { $Tab.Foreground = $dim; $Tab.FontWeight = 'Normal' }
+}
+
+$tabRow = New-Object System.Windows.Controls.DockPanel
+$tabRow.Margin = New-Gap 0 4 0 0
+$releasesTab = New-Tab 'releases'
+$releasesTab.Margin = New-Gap 0 0 0 0
+$releasesTab.ToolTip = 'Releases: what is new in each version'
+[System.Windows.Controls.DockPanel]::SetDock($releasesTab, 'Right')
 $tabs = New-Object System.Windows.Controls.StackPanel
 $tabs.Orientation = 'Horizontal'
-$phasesTab = New-Text '' $ink
-$phasesTab.Cursor = [System.Windows.Input.Cursors]::Hand
-$testsTab = New-Text '' $dim
-$testsTab.Cursor = [System.Windows.Input.Cursors]::Hand
-$testsTab.Margin = New-Gap 14 0 0 0
-# Learn: courses Claude builds (widget/Learn.ps1). The tab only shows; typing happens in its window.
-$learnTab = New-Text 'Learn' $dim
-$learnTab.Cursor = [System.Windows.Input.Cursors]::Hand
-$learnTab.Margin = New-Gap 14 0 0 0
+$phasesTab = New-Tab 'phases'
+$testsTab = New-Tab 'tests'
+# Learn: courses Claude builds (widget/Learn.ps1). The tab only shows; reading happens in its window.
+$learnTab = New-Tab 'learn'
 [void]$tabs.Children.Add($phasesTab)
 [void]$tabs.Children.Add($testsTab)
 [void]$tabs.Children.Add($learnTab)
+[void]$tabRow.Children.Add($releasesTab)
+[void]$tabRow.Children.Add($tabs)
 
-$summaryText = New-Object System.Windows.Controls.TextBlock
-$summaryText.TextTrimming = 'CharacterEllipsis'
+# Under the colour-scheme mark: the presets, how see-through each kind of window is, and the way to
+# the full editor in Learn. All clicks: the panel never takes the keyboard.
+$lookStrip = New-Object System.Windows.Controls.StackPanel
+$lookStrip.Margin = New-Gap 0 $GROUP_GAP 0 0
+$lookStrip.Visibility = 'Collapsed'
+$schemeCaption = New-UiCaption 'Colour scheme'
+$schemeCaption.Margin = New-Gap 0 0 0 6
+$swatchRow = New-UiSwatchRow
+$clearCaption = New-UiCaption 'See-through'
+$clearCaption.Margin = New-Gap 0 6 0 6
+[void]$lookStrip.Children.Add($schemeCaption)
+[void]$lookStrip.Children.Add($swatchRow)
+[void]$lookStrip.Children.Add($clearCaption)
+# The bar fills what its 52px label and 40px percentage leave, so the percentages end at the edge.
+$opacityRows = @()
+foreach ($group in @(@('panel', 'Panel'), @('learn', 'Learn'), @('games', 'Games'))) {
+  $opacityRow = New-UiOpacityBar $group[0] $group[1] ($CONTENT_W - 52 - 40)
+  $opacityRow.Margin = New-Gap 0 0 0 $ROW_GAP
+  [void]$lookStrip.Children.Add($opacityRow)
+  $opacityRows += $opacityRow
+}
+$customLink = New-Link "Custom colours $GLYPH_ARROW" "Your own background, accent and text colours, in Learn's settings"
+$customLink.Margin = New-Gap 0 6 0 0
+[void]$lookStrip.Children.Add($customLink)
 
-[void]$header.Children.Add($toggleText)
-[void]$header.Children.Add($closeText)
-[void]$header.Children.Add($gamesText)
-[void]$header.Children.Add($tabs)
-[void]$header.Children.Add($summaryText)
+# Under the games mark: Learn and the games, each a click away (brought forward when already open).
+$gamesStrip = New-Object System.Windows.Controls.WrapPanel
+$gamesStrip.Margin = New-Gap 0 $GROUP_GAP 0 0
+$gamesStrip.Visibility = 'Collapsed'
+$gameChips = @()
+foreach ($sibling in $UI_SIBLINGS) {
+  $chip = New-UiChip $sibling.label $false ('Open ' + $sibling.label) -Mono
+  # Learn is not a game: a wider gap after it.
+  if ($sibling.id -eq 'learn') { $chip.Margin = New-Gap 0 0 12 0 } else { $chip.Margin = New-Gap 0 0 6 0 }
+  $chip.Tag.sibling = $sibling.id
+  [void]$gamesStrip.Children.Add($chip)
+  $gameChips += $chip
+}
 
 $rule = New-Object System.Windows.Controls.Border
 $rule.Height = 1
-$rule.Background = Brush '#26FFFFFF'
-$rule.Margin = New-Gap 0 6 0 6
+$rule.Background = $T.rule
+$rule.Margin = New-Gap 0 $GROUP_GAP 0 $GROUP_GAP
 
 $body = New-Object System.Windows.Controls.StackPanel
 $footer = New-Text '' $dim
-$footer.Margin = New-Gap 0 6 0 0
-
-# The games the header's games mark offers, in a row under the header.
-$gamesRow = New-Object System.Windows.Controls.StackPanel
-$gamesRow.Orientation = 'Horizontal'
-$gamesRow.HorizontalAlignment = 'Right'
-$gamesRow.Margin = New-Gap 0 6 0 0
-$gamesRow.Visibility = 'Collapsed'
-$gameChoices = @()
-foreach ($choice in @(@{ label = 'Sudoku'; script = 'Sudoku.ps1'; title = 'ClaudeSudoku' }, @{ label = '2048'; script = 'Game2048.ps1'; title = 'Claude2048' }, @{ label = 'Typing'; script = 'TypeTest.ps1'; title = 'ClaudeTypeTest' }, @{ label = 'Chess'; script = 'ChessPuzzles.ps1'; title = 'ClaudeChess' })) {
-  $pick = New-Text $choice.label $ink
-  $pick.Tag = $choice
-  $pick.Margin = New-Gap 14 0 0 0
-  $pick.Cursor = [System.Windows.Input.Cursors]::Hand
-  [void]$gamesRow.Children.Add($pick)
-  $gameChoices += $pick
-}
+$footer.TextTrimming = 'CharacterEllipsis'
+$footer.Margin = New-Gap 0 $GROUP_GAP 0 0
 
 $stack = New-Object System.Windows.Controls.StackPanel
-[void]$stack.Children.Add($header)
-[void]$stack.Children.Add($gamesRow)
+$stack.Margin = New-Gap 12 10 12 10
+[void]$stack.Children.Add($headRow)
+[void]$stack.Children.Add($tabRow)
+[void]$stack.Children.Add($lookStrip)
+[void]$stack.Children.Add($gamesStrip)
 [void]$stack.Children.Add($rule)
 [void]$stack.Children.Add($body)
 [void]$stack.Children.Add($footer)
-$card.Child = $stack
 
-# The resize grip, bottom-left: the panel is pinned by its top-right corner, so
-# pulling the grip out (left or down) grows it toward the chat.
-$grip = New-Text $GLYPH_GRIP $dim
-$grip.FontSize = 11
-$grip.Margin = New-Gap 3 0 0 1
-$grip.HorizontalAlignment = 'Left'
-$grip.VerticalAlignment = 'Bottom'
-$grip.Cursor = [System.Windows.Input.Cursors]::SizeNESW
-$grip.ToolTip = 'Drag to resize'
+# The resize grip, in the card's bottom-left corner so it scales with the card: the panel is pinned
+# by its top-right corner, so pulling the grip out (left or down) grows it toward the chat.
+$grip = New-UiGrip 'left'
+$grip.Margin = New-Gap 4 0 0 3
+
+$cardBody = New-Object System.Windows.Controls.Grid
+[void]$cardBody.Children.Add($stack)
+[void]$cardBody.Children.Add($grip)
+$card.Child = $cardBody
 
 $cardHost = New-Object System.Windows.Controls.Grid
 [void]$cardHost.Children.Add($card)
-[void]$cardHost.Children.Add($grip)
 $win.Content = $cardHost
 
 # --- Drawing ------------------------------------------------------------------
 
 $script:state = $null
 $script:activeTab = 'phases'
+if ($script:manualTab) { $script:activeTab = $script:manualTab }
 $script:seenFocus = $null
+$script:seenPlan = $null
+# The strip open under the header: '', 'look' or 'games'.
+$script:strip = ''
 
 function Get-Bar($Ratio) {
   if ($null -eq $Ratio) { return $GLYPH_EMPTY * $BAR_CELLS }
@@ -383,39 +562,47 @@ function Get-RunLook($Run) {
     default {
       $color = $accent
       if ([int]$Run.failed -gt 0) { $color = $red }
-      return @{ glyph = $GLYPH_RUNNING; color = $color }
+      return @{ glyph = $GLYPH_LIVE; color = $color }
     }
+  }
+}
+
+# What a tab says when it has nothing: what it is for, and what fills it.
+function Add-EmptyState([string]$Headline, [string]$Hint) {
+  [void]$body.Children.Add((New-Text $Headline $dim))
+  if ($Hint) {
+    $hintText = New-Text $Hint $faint
+    $hintText.FontSize = 11.5
+    $hintText.TextWrapping = 'Wrap'
+    $hintText.Margin = New-Gap 0 $ROW_GAP 0 0
+    [void]$body.Children.Add($hintText)
   }
 }
 
 function Add-PhaseRows($Plan) {
   if ($null -eq $Plan) {
-    [void]$body.Children.Add((New-Text 'No plan yet.' $dim))
-    $footer.Text = ''
+    Add-EmptyState 'No plan yet' 'When Claude plans a task, its phases show here as it works through them.'
     return
   }
   $heading = New-Text ([string]$Plan.title) $ink
   $heading.FontWeight = 'Bold'
   $heading.TextWrapping = 'Wrap'
-  $heading.Margin = New-Gap 0 0 0 4
+  $heading.Margin = New-Gap 0 0 0 6
   [void]$body.Children.Add($heading)
+  $top = 0
   foreach ($item in @($Plan.items)) {
-    $line = New-Object System.Windows.Controls.DockPanel
-    $line.Margin = New-Gap 0 1 0 1
     $name = New-Text ([string]$item.name) $ink
     $name.TextWrapping = 'Wrap'
     switch ([string]$item.status) {
-      'done' { $box = New-Text "[$GLYPH_CHECK] " $green; $name.Foreground = $dim }
+      'done' { $box = New-Cell "[$GLYPH_CHECK]" $green $BOX_W; $name.Foreground = $dim }
       'in_progress' {
-        $box = New-Text "[$GLYPH_NOW] " $accent; $box.FontWeight = 'Bold'
+        $box = New-Cell "[$GLYPH_LIVE]" $accent $BOX_W; $box.FontWeight = 'Bold'
         $name.Foreground = $accent; $name.FontWeight = 'Bold'
       }
-      default { $box = New-Text '[ ] ' $ink }
+      default { $box = New-Cell '[ ]' $dim $BOX_W }
     }
-    [System.Windows.Controls.DockPanel]::SetDock($box, 'Left')
-    [void]$line.Children.Add($box)
-    [void]$line.Children.Add($name)
-    [void]$body.Children.Add($line)
+    [void]$body.Children.Add((New-MarkRow $box $name $top))
+    $top = $ROW_GAP
   }
   $footer.Text = "$($Plan.done) of $($Plan.total) done"
 }
@@ -423,26 +610,23 @@ function Add-PhaseRows($Plan) {
 function Add-RunRows($Runs) {
   $list = @($Runs)
   if ($list.Count -eq 0) {
-    [void]$body.Children.Add((New-Text 'No test runs yet.' $dim))
-    $footer.Text = ''
+    Add-EmptyState 'No test runs yet' 'Test commands Claude runs show here as they go, with their counts.'
     return
   }
   [array]::Reverse($list)
+  $top = 0
   foreach ($run in $list) {
     $look = Get-RunLook $run
     $isLive = [string]$run.status -eq 'running'
-
-    $top = New-Object System.Windows.Controls.DockPanel
-    $mark = New-Text "$($look.glyph) " $look.color
-    [System.Windows.Controls.DockPanel]::SetDock($mark, 'Left')
     $label = New-Text ([string]$run.label) $ink
     $label.TextTrimming = 'CharacterEllipsis'
     if (-not $isLive) { $label.Foreground = $dim }
-    [void]$top.Children.Add($mark)
-    [void]$top.Children.Add($label)
+    [void]$body.Children.Add((New-MarkRow (New-Cell $look.glyph $look.color $MARK_W) $label $top))
+    $top = $GROUP_GAP
 
     $counts = New-Object System.Windows.Controls.TextBlock
-    $counts.Margin = New-Gap 14 1 0 8
+    $counts.Margin = New-Gap $MARK_W $ROW_GAP 0 0
+    $counts.TextTrimming = 'CharacterEllipsis'
     $barRun = New-Object System.Windows.Documents.Run((Get-Bar $run.ratio))
     $barRun.Foreground = $look.color
     [void]$counts.Inlines.Add($barRun)
@@ -457,13 +641,10 @@ function Add-RunRows($Runs) {
       $failRun.Foreground = $red
       [void]$counts.Inlines.Add($failRun)
     }
-
-    [void]$body.Children.Add($top)
     [void]$body.Children.Add($counts)
   }
   # All the runs shown, together.
   $totals = $script:state.totals
-  $footer.Text = ''
   if ($totals -and [int]$totals.tests -gt 0) {
     $runWord = 'runs'
     if ([int]$totals.runs -eq 1) { $runWord = 'run' }
@@ -473,39 +654,43 @@ function Add-RunRows($Runs) {
   }
 }
 
-# A link that opens the Learn window; a click on it never starts a drag.
-function New-LearnLink([string]$Text) {
-  $link = New-Text $Text $accent
-  $link.Cursor = [System.Windows.Input.Cursors]::Hand
-  $link.Margin = New-Gap 0 4 0 0
-  $link.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
-  $link.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Open-Game 'Learn.ps1' 'ClaudeLearn' -Shared })
+# A link that opens the Learn window (at a view, when given).
+function New-LearnLink([string]$Text, [string]$View) {
+  $link = New-Link $Text ''
+  $link.Tag = @{ view = $View }
+  $link.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Open-PanelSibling 'learn' $sender.Tag.view })
   return $link
 }
 
+function Get-BuildColor([string]$State) {
+  switch ($State) { 'failed' { return $red } 'waiting-picks' { return $gold } 'done' { return $green } default { return $accent } }
+}
+
 function Add-LearnRows($Learn) {
-  $footer.Text = ''
   $build = if ($Learn) { $Learn.build } else { $null }
   $course = if ($Learn) { $Learn.course } else { $null }
+  if (-not $build -and -not $course) {
+    Add-EmptyState 'No course yet' 'Courses Claude builds from free videos and docs, to read while it works.'
+    $link = New-LearnLink "Open Learn $GLYPH_ARROW" ''
+    $link.Margin = New-Gap 0 6 0 0
+    [void]$body.Children.Add($link)
+    return
+  }
   if ($build) {
-    $state = [string]$build.state
-    $color = switch ($state) { 'failed' { $red } 'waiting-picks' { $gold } 'done' { $green } default { $accent } }
-    $glyph = switch ($state) { 'done' { $GLYPH_CHECK } 'failed' { $GLYPH_FAILED } default { $GLYPH_RUNNING } }
-    $top = New-Object System.Windows.Controls.DockPanel
-    $mark = New-Text "$glyph " $color
-    [System.Windows.Controls.DockPanel]::SetDock($mark, 'Left')
+    $buildState = [string]$build.state
+    $color = Get-BuildColor $buildState
+    $glyph = switch ($buildState) { 'done' { $GLYPH_CHECK } 'failed' { $GLYPH_FAILED } default { $GLYPH_LIVE } }
     $topic = New-Text ([string]$build.topic) $ink
     $topic.TextTrimming = 'CharacterEllipsis'
-    [void]$top.Children.Add($mark)
-    [void]$top.Children.Add($topic)
-    [void]$body.Children.Add($top)
+    [void]$body.Children.Add((New-MarkRow (New-Cell $glyph $color $MARK_W) $topic 0))
     $message = New-Text ([string]$build.message) $dim
     $message.TextWrapping = 'Wrap'
-    $message.Margin = New-Gap 14 1 0 0
+    $message.Margin = New-Gap $MARK_W $ROW_GAP 0 0
     [void]$body.Children.Add($message)
-    if ([int]$build.total -gt 0 -and $state -ne 'done') {
+    if ([int]$build.total -gt 0 -and $buildState -ne 'done') {
       $counts = New-Object System.Windows.Controls.TextBlock
-      $counts.Margin = New-Gap 14 2 0 6
+      $counts.Margin = New-Gap $MARK_W $ROW_GAP 0 0
+      $counts.TextTrimming = 'CharacterEllipsis'
       $barRun = New-Object System.Windows.Documents.Run((Get-Bar ([double]$build.done / [double]$build.total)))
       $barRun.Foreground = $color
       [void]$counts.Inlines.Add($barRun)
@@ -516,115 +701,244 @@ function Add-LearnRows($Learn) {
     }
   }
   if ($course) {
-    $title = New-Text ([string]$course.title) $ink
-    $title.FontWeight = 'Bold'
-    $title.TextWrapping = 'Wrap'
-    $title.Margin = New-Gap 0 $(if ($build) { 6 } else { 0 }) 0 0
-    [void]$body.Children.Add($title)
+    $courseTitle = New-Text ([string]$course.title) $ink
+    $courseTitle.FontWeight = 'Bold'
+    $courseTitle.TextWrapping = 'Wrap'
+    $top = 0
+    if ($build) { $top = $GROUP_GAP }
+    [void]$body.Children.Add((New-MarkRow (New-Cell $GLYPH_COURSE $dim $MARK_W) $courseTitle $top))
     $where = "Page $([int]$course.page) of $([int]$course.total)"
     if ($course.next) { $where += " $GLYPH_DOT next: $([string]$course.next)" }
     $line = New-Text $where $dim
     $line.TextWrapping = 'Wrap'
+    $line.Margin = New-Gap $MARK_W $ROW_GAP 0 0
     [void]$body.Children.Add($line)
   }
-  if (-not $build -and -not $course) {
-    $intro = New-Text 'Courses Claude builds from free videos and docs, to read while it works.' $dim
-    $intro.TextWrapping = 'Wrap'
-    [void]$body.Children.Add($intro)
+  if ($course) { $link = New-LearnLink "Carry on reading $GLYPH_ARROW" 'course' } else { $link = New-LearnLink "Open Learn $GLYPH_ARROW" '' }
+  $link.Margin = New-Gap $MARK_W 6 0 0
+  [void]$body.Children.Add($link)
+}
+
+# Newest first: "0.2.0 . 29 Oct . Mahmood", then its notes. The entries the person had not seen
+# when they opened the tab wear the new mark (with nothing seen before, the newest alone).
+function Add-ReleaseRows {
+  $list = $script:releases
+  $top = 0
+  if ($PLUGIN_VERSION -and $NEWEST_RELEASE -and (Compare-Version $PLUGIN_VERSION $NEWEST_RELEASE) -gt 0) {
+    # A version shipped without its entry in releases.json: say so where its author will see it.
+    $missing = New-Text "v$PLUGIN_VERSION has no release note yet" $red
+    $missing.TextTrimming = 'CharacterEllipsis'
+    [void]$body.Children.Add($missing)
+    $top = $GROUP_GAP
   }
-  [void]$body.Children.Add((New-LearnLink $(if ($course) { "Carry on reading $GLYPH_ARROW" } else { "Open Learn $GLYPH_ARROW" })))
+  if ($list.Count -eq 0) {
+    Add-EmptyState 'No release notes' 'This copy of the plugin has no releases.json beside its widget folder.'
+    return
+  }
+  $shown = [Math]::Min($list.Count, $RELEASES_SHOWN)
+  for ($i = 0; $i -lt $shown; $i++) {
+    $release = $list[$i]
+    $isNew = $false
+    if ($script:seenBefore) { $isNew = (Compare-Version $release.version $script:seenBefore) -gt 0 } else { $isNew = $i -eq 0 }
+    $mark = ''
+    if ($isNew) { $mark = $GLYPH_LIVE }
+    $head = New-Object System.Windows.Controls.TextBlock
+    $head.TextTrimming = 'CharacterEllipsis'
+    $versionRun = New-Object System.Windows.Documents.Run($release.version)
+    $versionRun.Foreground = $ink
+    $versionRun.FontWeight = 'Bold'
+    [void]$head.Inlines.Add($versionRun)
+    $meta = ''
+    if ($release.date) { $meta += " $GLYPH_DOT $(Format-ReleaseDate $release.date)" }
+    if ($release.by) { $meta += " $GLYPH_DOT $($release.by)" }
+    $metaRun = New-Object System.Windows.Documents.Run($meta)
+    $metaRun.Foreground = $dim
+    [void]$head.Inlines.Add($metaRun)
+    [void]$body.Children.Add((New-MarkRow (New-Cell $mark $accent $MARK_W) $head $top))
+    $top = $GROUP_GAP
+    foreach ($note in $release.notes) {
+      $noteText = New-Text $note $ink
+      $noteText.TextWrapping = 'Wrap'
+      $noteRow = New-MarkRow (New-Cell $GLYPH_DOT $dim $MARK_W) $noteText $ROW_GAP
+      $noteRow.Margin = New-Gap $MARK_W $ROW_GAP 0 0
+      [void]$body.Children.Add($noteRow)
+    }
+  }
+  $noun = 'releases'
+  if ($list.Count -eq 1) { $noun = 'release' }
+  if ($shown -lt $list.Count) { $footer.Text = "Newest $shown of $($list.Count) $noun" } else { $footer.Text = "$($list.Count) $noun" }
+}
+
+# The collapsed card's one line: a lead (bold, in its colour) and the rest (dim).
+function Set-Summary([string]$Lead, $LeadBrush, [string]$Rest, [switch]$Plain) {
+  $summaryText.Inlines.Clear()
+  $leadRun = New-Object System.Windows.Documents.Run($Lead)
+  $leadRun.Foreground = $LeadBrush
+  if (-not $Plain) { $leadRun.FontWeight = 'Bold' }
+  [void]$summaryText.Inlines.Add($leadRun)
+  if ($Rest) {
+    $restRun = New-Object System.Windows.Documents.Run($Rest)
+    $restRun.Foreground = $dim
+    [void]$summaryText.Inlines.Add($restRun)
+  }
+}
+
+function Show-Summary($Plan, $Runs, $Learn) {
+  $learnBuild = if ($Learn) { $Learn.build } else { $null }
+  switch ($script:activeTab) {
+    'releases' {
+      $rest = ''
+      if ($script:releases.Count -gt 0 -and $script:releases[0].notes.Count -gt 0) { $rest = " $GLYPH_DOT $($script:releases[0].notes[0])" }
+      if ($PLUGIN_VERSION) { Set-Summary "v$PLUGIN_VERSION" $ink $rest } else { Set-Summary 'Releases' $ink $rest }
+    }
+    'learn' {
+      if ($learnBuild) { Set-Summary 'Learn' (Get-BuildColor ([string]$learnBuild.state)) " $GLYPH_DOT $([string]$learnBuild.message)" }
+      elseif ($Learn -and $Learn.course) { Set-Summary 'Learn' $ink " $GLYPH_DOT $([string]$Learn.course.title)" }
+      else { Set-Summary 'Learn' $ink " $GLYPH_DOT no course yet" }
+    }
+    'tests' {
+      if ($Runs.Count -gt 0) {
+        $run = $Runs[-1]
+        $look = Get-RunLook $run
+        Set-Summary "$($look.glyph) $($run.count)" $look.color " $([string]$run.label)"
+      } else {
+        Set-Summary 'No test runs yet' $dim '' -Plain
+      }
+    }
+    default {
+      if ($Plan) {
+        $current = @($Plan.items) | Where-Object { $_.status -eq 'in_progress' } | Select-Object -First 1
+        if (-not $current) { $current = @($Plan.items) | Where-Object { $_.status -eq 'todo' } | Select-Object -First 1 }
+        if ($current) { Set-Summary ([string]$current.name) $accent " $GLYPH_DOT $($Plan.done)/$($Plan.total)" }
+        else { Set-Summary 'All done' $green " $GLYPH_DOT $($Plan.done)/$($Plan.total)" }
+      } else {
+        Set-Summary 'No plan yet' $dim '' -Plain
+      }
+    }
+  }
+}
+
+# Full labels when they fit beside the version; else the tabs not in front drop their counts; else all do.
+function Set-TabLabels($Full, $Short) {
+  $infinite = New-Object System.Windows.Size([double]::PositiveInfinity, [double]::PositiveInfinity)
+  # Each tab is measured itself: a panel's own Measure would hand back its last size, since a
+  # child's new text only marks the child.
+  $releasesTab.Measure($infinite)
+  foreach ($level in @(0, 1, 2)) {
+    $used = $releasesTab.DesiredSize.Width
+    foreach ($tab in @($phasesTab, $testsTab, $learnTab)) {
+      $tabName = $tab.Tag.name
+      $isFront = $tabName -eq $script:activeTab
+      if ($level -eq 0 -or ($level -eq 1 -and $isFront)) { $tab.Text = $Full[$tabName] } else { $tab.Text = $Short[$tabName] }
+      Update-TabLook $tab
+      $tab.Measure($infinite)
+      $used += $tab.DesiredSize.Width
+    }
+    if ($used -le $CONTENT_W) { return }
+  }
 }
 
 function Show-State {
   $state = $script:state
-  if ($null -eq $state) { return }
+  if ($null -eq $state) { $state = @{ plan = $null; runs = @(); focus = $null; totals = $null; learn = $null } }
   $plan = $state.plan
   $runs = @($state.runs | Where-Object { $_ })
   $live = @($runs | Where-Object { $_.status -eq 'running' })
-
-  # A new test run turns the panel to its Tests tab; with no plan, Tests is all there is.
-  if ($state.focus -and $state.focus -ne $script:seenFocus) {
-    if ($null -ne $script:seenFocus -or $live.Count -gt 0) { $script:activeTab = 'tests' }
-    $script:seenFocus = $state.focus
-  }
-  if ($null -eq $plan -and $runs.Count -gt 0 -and $script:activeTab -ne 'learn') { $script:activeTab = 'tests' }
-  if ($runs.Count -eq 0 -and $script:activeTab -eq 'tests') { $script:activeTab = 'phases' }
-  # With no plan and no tests, a Learn build is what there is to show.
   $learn = $state.learn
-  if ($null -eq $plan -and $runs.Count -eq 0 -and $learn -and $learn.build) { $script:activeTab = 'learn' }
   $learnBuild = if ($learn) { $learn.build } else { $null }
 
-  $phasesLabel = 'Phases'
-  if ($plan) { $phasesLabel = "Phases $($plan.done)/$($plan.total)" }
-  $testsLabel = 'Tests'
-  if ($live.Count -gt 0) { $testsLabel = "Tests $GLYPH_RUNNING $($live[-1].count)" }
-  elseif ($runs.Count -gt 0) { $testsLabel = "Tests $((Get-RunLook $runs[-1]).glyph)" }
-  $learnLabel = 'Learn'
-  if ($learnBuild -and [string]$learnBuild.state -eq 'running' -and [int]$learnBuild.total -gt 0) { $learnLabel = "Learn $([int]$learnBuild.done)/$([int]$learnBuild.total)" }
-  elseif ($learnBuild -and [string]$learnBuild.state -eq 'running') { $learnLabel = "Learn $GLYPH_RUNNING" }
-  $phasesTab.Text = $phasesLabel
-  $testsTab.Text = $testsLabel
-  $learnTab.Text = $learnLabel
-  $phasesTab.Foreground = $dim; $phasesTab.FontWeight = 'Normal'
-  $testsTab.Foreground = $dim; $testsTab.FontWeight = 'Normal'
-  $learnTab.Foreground = $dim; $learnTab.FontWeight = 'Normal'
-  if ($script:activeTab -eq 'tests') { $testsTab.Foreground = $ink; $testsTab.FontWeight = 'Bold' }
-  elseif ($script:activeTab -eq 'learn') { $learnTab.Foreground = $ink; $learnTab.FontWeight = 'Bold' }
-  else { $phasesTab.Foreground = $ink; $phasesTab.FontWeight = 'Bold' }
+  # Which tab is in front. Something new (a new test run, a new plan) brings its tab forward and
+  # ends the person's pick. Otherwise the tab they clicked stays; with no pick, the panel shows
+  # what there is. Releases is only ever a click.
+  $planTitle = $null
+  if ($plan) { $planTitle = [string]$plan.title }
+  $isNewRun = $false
+  if ($state.focus -and $state.focus -ne $script:seenFocus) {
+    if ($null -ne $script:seenFocus -or $live.Count -gt 0) { $script:activeTab = 'tests'; $script:manualTab = $null; $isNewRun = $true }
+    $script:seenFocus = $state.focus
+  }
+  if ($planTitle -and $planTitle -ne $script:seenPlan -and -not $isNewRun) { $script:activeTab = 'phases'; $script:manualTab = $null }
+  $script:seenPlan = $planTitle
+  if ($script:manualTab) {
+    $script:activeTab = $script:manualTab
+  } else {
+    if ($script:activeTab -eq 'releases') { $script:activeTab = 'phases' }
+    if ($null -eq $plan -and $runs.Count -gt 0 -and $script:activeTab -ne 'learn') { $script:activeTab = 'tests' }
+    if ($runs.Count -eq 0 -and $script:activeTab -eq 'tests') {
+      if ($plan -or -not $learnBuild) { $script:activeTab = 'phases' } else { $script:activeTab = 'learn' }
+    }
+    # With no plan and no tests, a Learn build is what there is to show.
+    if ($null -eq $plan -and $runs.Count -eq 0 -and $learnBuild) { $script:activeTab = 'learn' }
+  }
+
+  # The version, with the new mark while there are notes the person has not opened.
+  $releasesTab.Inlines.Clear()
+  $versionLabel = 'Releases'
+  if ($PLUGIN_VERSION) { $versionLabel = "v$PLUGIN_VERSION" }
+  [void]$releasesTab.Inlines.Add((New-Object System.Windows.Documents.Run($versionLabel)))
+  if (Test-ReleaseUnseen) {
+    $newRun = New-Object System.Windows.Documents.Run(" $GLYPH_LIVE")
+    $newRun.Foreground = $accent
+    [void]$releasesTab.Inlines.Add($newRun)
+  }
+  Update-TabLook $releasesTab
+
+  $full = @{ phases = 'Phases'; tests = 'Tests'; learn = 'Learn' }
+  $short = @{ phases = 'Phases'; tests = 'Tests'; learn = 'Learn' }
+  if ($plan) { $full.phases = "Phases $($plan.done)/$($plan.total)" }
+  if ($live.Count -gt 0) {
+    $full.tests = "Tests $GLYPH_LIVE $($live[-1].count)"
+    $short.tests = "Tests $GLYPH_LIVE"
+  } elseif ($runs.Count -gt 0) {
+    $full.tests = "Tests $((Get-RunLook $runs[-1]).glyph)"
+    $short.tests = $full.tests
+  }
+  if ($learnBuild -and [string]$learnBuild.state -eq 'running') {
+    $short.learn = "Learn $GLYPH_LIVE"
+    $full.learn = $short.learn
+    if ([int]$learnBuild.total -gt 0) { $full.learn = "Learn $([int]$learnBuild.done)/$([int]$learnBuild.total)" }
+  }
+  Set-TabLabels $full $short
 
   $body.Children.Clear()
+  $footer.Text = ''
   if (-not $script:isExpanded) {
-    # Collapsed: one line for the tab in front.
-    $toggleText.Text = $GLYPH_COLLAPSED
-    $tabs.Visibility = 'Collapsed'
+    # Collapsed: one line for the tab in front, and the close mark.
+    Set-UiMarkGlyph $toggleMark $UI_GLYPHS.expand
+    $toggleMark.ToolTip = 'Expand'
+    $headText.Visibility = 'Collapsed'
     $summaryText.Visibility = 'Visible'
-    $summaryText.Inlines.Clear()
-    if ($script:activeTab -eq 'learn') {
-      $lead = New-Object System.Windows.Documents.Run('Learn ')
-      $lead.Foreground = $accent
-      $lead.FontWeight = 'Bold'
-      $restText = if ($learnBuild) { [string]$learnBuild.message } elseif ($learn -and $learn.course) { [string]$learn.course.title } else { '' }
-      $rest = New-Object System.Windows.Documents.Run($restText)
-      $rest.Foreground = $dim
-      [void]$summaryText.Inlines.Add($lead)
-      [void]$summaryText.Inlines.Add($rest)
-    } elseif ($script:activeTab -eq 'tests' -and $runs.Count -gt 0) {
-      $run = $runs[-1]
-      $look = Get-RunLook $run
-      $lead = New-Object System.Windows.Documents.Run("$($look.glyph) $($run.count) ")
-      $lead.Foreground = $look.color
-      $lead.FontWeight = 'Bold'
-      $rest = New-Object System.Windows.Documents.Run([string]$run.label)
-      $rest.Foreground = $dim
-      [void]$summaryText.Inlines.Add($lead)
-      [void]$summaryText.Inlines.Add($rest)
-    } elseif ($plan) {
-      $current = @($plan.items) | Where-Object { $_.status -eq 'in_progress' } | Select-Object -First 1
-      if (-not $current) { $current = @($plan.items) | Where-Object { $_.status -eq 'todo' } | Select-Object -First 1 }
-      $name = 'All done'
-      if ($current) { $name = [string]$current.name }
-      $lead = New-Object System.Windows.Documents.Run($name)
-      $lead.Foreground = $accent
-      $lead.FontWeight = 'Bold'
-      $rest = New-Object System.Windows.Documents.Run(" $GLYPH_DOT $($plan.done)/$($plan.total)")
-      $rest.Foreground = $dim
-      [void]$summaryText.Inlines.Add($lead)
-      [void]$summaryText.Inlines.Add($rest)
-    }
+    $lookMark.Visibility = 'Collapsed'
+    $gamesMark.Visibility = 'Collapsed'
+    $tabRow.Visibility = 'Collapsed'
+    $lookStrip.Visibility = 'Collapsed'
+    $gamesStrip.Visibility = 'Collapsed'
     $rule.Visibility = 'Collapsed'
     $body.Visibility = 'Collapsed'
     $footer.Visibility = 'Collapsed'
+    $grip.Visibility = 'Collapsed'
+    Show-Summary $plan $runs $learn
     return
   }
 
-  $toggleText.Text = $GLYPH_EXPANDED
-  $tabs.Visibility = 'Visible'
+  Set-UiMarkGlyph $toggleMark $UI_GLYPHS.collapse
+  $toggleMark.ToolTip = 'Collapse'
+  $headText.Visibility = 'Visible'
   $summaryText.Visibility = 'Collapsed'
+  $lookMark.Visibility = 'Visible'
+  $gamesMark.Visibility = 'Visible'
+  $tabRow.Visibility = 'Visible'
+  if ($script:strip -eq 'look') { $lookStrip.Visibility = 'Visible' } else { $lookStrip.Visibility = 'Collapsed' }
+  if ($script:strip -eq 'games') { $gamesStrip.Visibility = 'Visible' } else { $gamesStrip.Visibility = 'Collapsed' }
   $rule.Visibility = 'Visible'
   $body.Visibility = 'Visible'
-  if ($script:activeTab -eq 'tests') { Add-RunRows $runs }
-  elseif ($script:activeTab -eq 'learn') { Add-LearnRows $learn }
-  else { Add-PhaseRows $plan }
+  $grip.Visibility = 'Visible'
+  switch ($script:activeTab) {
+    'tests' { Add-RunRows $runs }
+    'learn' { Add-LearnRows $learn }
+    'releases' { Add-ReleaseRows }
+    default { Add-PhaseRows $plan }
+  }
   if ($footer.Text) { $footer.Visibility = 'Visible' } else { $footer.Visibility = 'Collapsed' }
 }
 
@@ -632,6 +946,31 @@ function Update-Panel {
   Show-State
   $win.UpdateLayout()
   Set-CardPosition
+}
+
+# A tab click: that tab stays in front until something new comes (see Show-State). Opening
+# Releases marks its newest version seen.
+function Select-Tab([string]$Name) {
+  if ($Name -eq 'releases' -and $script:activeTab -ne 'releases') {
+    $script:seenBefore = $script:seenRelease
+    if ($NEWEST_RELEASE) { $script:seenRelease = $NEWEST_RELEASE }
+  }
+  $script:manualTab = $Name
+  $script:activeTab = $Name
+  Save-Prefs
+  Update-Panel
+}
+
+# Opens a strip under the header ('look' or 'games'; '' closes it). One at a time; its mark shows it.
+function Set-Strip([string]$Name) {
+  $script:strip = $Name
+  Set-UiMarkOn $lookMark ($Name -eq 'look')
+  Set-UiMarkOn $gamesMark ($Name -eq 'games')
+  if ($Name -eq 'look') {
+    # The choice may have changed in another window since the strip was last drawn.
+    Update-UiSwatchRow $swatchRow
+    foreach ($opacityRow in $opacityRows) { Update-UiOpacityRow $opacityRow }
+  }
 }
 
 # --- Placement ----------------------------------------------------------------
@@ -679,6 +1018,8 @@ function Get-Cursor {
 
 function Switch-Expanded {
   $script:isExpanded = -not $script:isExpanded
+  # A strip belongs to the open card: closing the card closes it.
+  if (-not $script:isExpanded) { Set-Strip '' }
   Save-Prefs
   Update-Panel
 }
@@ -724,9 +1065,10 @@ $grip.Add_MouseMove({
   $start = $script:resizeStart
   $grow = (($start.cx - $cursor.X) + ($cursor.Y - $start.cy)) / 2
   $next = $start.scale * ($start.width + $grow) / $start.width
-  $script:scale = [Math]::Max($MIN_SCALE, [Math]::Min($MAX_SCALE, $next))
+  $script:scale = [Math]::Max([double]$MIN_SCALE, [Math]::Min([double]$MAX_SCALE, [double]$next))
   $cardScale.ScaleX = $script:scale
   $cardScale.ScaleY = $script:scale
+  $win.Width = $PANEL_W * $script:scale
   $win.UpdateLayout()
   Set-CardPosition
 })
@@ -740,55 +1082,62 @@ $grip.Add_MouseLeftButtonUp({
   Save-Prefs
 })
 
-# Clicks on these never start a drag.
-foreach ($control in @($toggleText, $closeText, $gamesText, $phasesTab, $testsTab, $learnTab) + $gameChoices) {
-  $control.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
-}
-$toggleText.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Switch-Expanded })
-$phasesTab.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $script:activeTab = 'phases'; Update-Panel })
-$testsTab.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $script:activeTab = 'tests'; Update-Panel })
-$learnTab.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $script:activeTab = 'learn'; Update-Panel })
-$gamesText.Add_MouseLeftButtonUp({
+# The marks take their own presses (they never start a drag or count toward a double-click).
+$toggleMark.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Switch-Expanded })
+$lookMark.Add_MouseLeftButtonUp({
   param($sender, $e)
   $e.Handled = $true
-  if ($gamesRow.Visibility -eq 'Visible') { $gamesRow.Visibility = 'Collapsed' } else { $gamesRow.Visibility = 'Visible' }
+  if ($script:strip -eq 'look') { Set-Strip '' } else { Set-Strip 'look' }
   Update-Panel
 })
-foreach ($pick in $gameChoices) {
-  $pick.Add_MouseLeftButtonUp({
+$gamesMark.Add_MouseLeftButtonUp({
+  param($sender, $e)
+  $e.Handled = $true
+  if ($script:strip -eq 'games') { Set-Strip '' } else { Set-Strip 'games' }
+  Update-Panel
+})
+foreach ($chip in $gameChips) {
+  $chip.Add_MouseLeftButtonUp({
     param($sender, $e)
     $e.Handled = $true
-    $gamesRow.Visibility = 'Collapsed'
+    Set-Strip ''
     Update-Panel
-    Open-Game $sender.Tag.script $sender.Tag.title
+    Open-PanelSibling $sender.Tag.sibling ''
   })
 }
-$closeText.Add_MouseLeftButtonUp({
+$customLink.Add_MouseLeftButtonUp({
+  param($sender, $e)
+  $e.Handled = $true
+  Set-Strip ''
+  Update-Panel
+  Open-PanelSibling 'learn' 'settings'
+})
+$closeMark.Add_MouseLeftButtonUp({
   param($sender, $e)
   $e.Handled = $true
   [void](Send-Event @{ event = 'closed' })
   $win.Close()
 })
 
-# --- Games: each its own process, so a game outlives the panel ----------------
+# --- Learn and the games: each its own process, so it outlives the panel -------
 
-function Open-Game([string]$ScriptName, [string]$WindowTitle, [switch]$Shared) {
+# Opens one of the other windows ($UI_SIBLINGS), owned by the chat's WezTerm window; Learn can be
+# sent to a view. One open already comes forward at once, through this panel's own Win32 (the
+# shared Open-Sibling compiles its own the first time); a new one starts through Open-Sibling.
+function Open-PanelSibling([string]$Id, [string]$View) {
   try {
-    # One of each game per chat (Learn: one per machine, its library is one): a second
-    # pick brings it forward. The panel just took the click, so it may hand the foreground over.
-    $existingTitle = if ($Shared) { $WindowTitle } else { "${WindowTitle}:$SessionId" }
-    $existing = [PhasesWin32]::WindowByText($existingTitle)
-    if ($existing -ne [IntPtr]::Zero) { [void][PhasesWin32]::SetForegroundWindow($existing); return }
-    $start = New-Object System.Diagnostics.ProcessStartInfo
-    $start.FileName = 'powershell.exe'
-    $start.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSScriptRoot\$ScriptName`" -OwnerHwnd $([int64]$owner) -SessionId $SessionId"
-    # Shell-started: it inherits no handle, so the mod still sees this panel's
-    # output end when the panel goes.
-    $start.UseShellExecute = $true
-    $start.WindowStyle = 'Hidden'
-    $start.WorkingDirectory = $env:TEMP
-    $game = [System.Diagnostics.Process]::Start($start)
-    if ($game) { [void][PhasesWin32]::AllowSetForegroundWindow($game.Id) }
+    $sibling = $UI_SIBLINGS | Where-Object { $_.id -eq $Id } | Select-Object -First 1
+    if (-not $sibling) { return }
+    $windowText = $sibling.title
+    if (-not $sibling.shared) { $windowText = '{0}:{1}' -f $sibling.title, $SessionId }
+    $existing = [PhasesWin32]::WindowByText($windowText)
+    if ($existing -ne [IntPtr]::Zero) {
+      if ($sibling.id -eq 'learn') { Write-LearnRequest $View '' }
+      # The panel just took the click, so it may hand the foreground over.
+      [void][PhasesWin32]::SetForegroundWindow($existing)
+      return
+    }
+    Open-Sibling $Id ([int64]$owner) $SessionId -View $View
   } catch {
     # No game is no reason to lose the panel.
   }
@@ -837,8 +1186,9 @@ $win.Add_SourceInitialized({
 })
 
 function Save-Snapshot {
-  if ($SnapshotTab) { $script:activeTab = $SnapshotTab }
+  if ($SnapshotTab) { Select-Tab $SnapshotTab }
   if ($SnapshotLook) { $script:isExpanded = $SnapshotLook -eq 'open' }
+  if ($SnapshotStrip -and $script:isExpanded) { Set-Strip $SnapshotStrip }
   Show-State
   $win.UpdateLayout()
   $dpi = 96.0 * [PhasesWin32]::GetDpiForWindow($owner) / 96.0
@@ -863,9 +1213,20 @@ $win.Add_ContentRendered({
 })
 
 $script:tick = 0
+$script:isThemeStale = $false
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(100)
 $timer.Add_Tick({
+  # A colour scheme or see-through change made in another window (at most one look a second):
+  # the brushes repaint themselves; the strip's swatches and bars follow and the tab is redrawn,
+  # once no drag is under way.
+  if (Update-Theme) { $script:isThemeStale = $true }
+  if ($script:isThemeStale -and -not $script:dragging -and -not $script:resizing) {
+    $script:isThemeStale = $false
+    Update-UiSwatchRow $swatchRow
+    foreach ($opacityRow in $opacityRows) { Update-UiOpacityRow $opacityRow }
+    Update-Panel
+  }
   $script:tick++
   if (-not [PhasesWin32]::IsWindow($owner)) { $win.Close(); return }
   if ($script:tick % 3 -eq 0 -and -not $script:dragging -and -not $script:resizing) { Sync-State }
@@ -889,6 +1250,8 @@ $timer.Add_Tick({
 $script:panes = $panes
 $script:pane = $pane
 Sync-State
+# Nothing to read yet (or a snapshot of a missing file): still draw the header and an empty tab.
+if ($null -eq $script:state) { Show-State }
 $owned = New-Object System.Windows.Interop.WindowInteropHelper($win)
 $owned.Owner = $owner
 $timer.Start()
