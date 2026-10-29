@@ -326,7 +326,7 @@ $THEME_RESOURCES_XAML = @'
     <Setter Property="Width" Value="9"/>
     <Setter Property="MinWidth" Value="9"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ScrollBar">
-      <Track x:Name="PART_Track" Orientation="Vertical" IsDirectionReversed="True"><Track.Thumb><Thumb Style="{StaticResource ThemeThumb}" Margin="2,2,1,2"/></Track.Thumb></Track>
+      <Track x:Name="PART_Track" Orientation="Vertical" IsDirectionReversed="True"><Track.Thumb><Thumb Style="{StaticResource ThemeThumb}" Margin="2,2,1,2" MinHeight="24"/></Track.Thumb></Track>
     </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers>
       <Trigger Property="Orientation" Value="Horizontal">
@@ -334,7 +334,7 @@ $THEME_RESOURCES_XAML = @'
         <Setter Property="MinWidth" Value="0"/>
         <Setter Property="Height" Value="9"/>
         <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ScrollBar">
-          <Track x:Name="PART_Track" Orientation="Horizontal"><Track.Thumb><Thumb Style="{StaticResource ThemeThumb}" Margin="2,2,2,1"/></Track.Thumb></Track>
+          <Track x:Name="PART_Track" Orientation="Horizontal"><Track.Thumb><Thumb Style="{StaticResource ThemeThumb}" Margin="2,2,2,1" MinWidth="24"/></Track.Thumb></Track>
         </ControlTemplate></Setter.Value></Setter>
       </Trigger>
     </Style.Triggers>
@@ -346,9 +346,12 @@ $THEME_RESOURCES_XAML = @'
     <Setter Property="FontFamily" Value="Segoe UI"/>
     <Setter Property="FontSize" Value="12"/>
     <Setter Property="HasDropShadow" Value="False"/>
+    <Setter Property="MaxWidth" Value="360"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToolTip">
       <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="8,5,8,6">
-        <ContentPresenter/>
+        <ContentPresenter>
+          <ContentPresenter.Resources><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style></ContentPresenter.Resources>
+        </ContentPresenter>
       </Border>
     </ControlTemplate></Setter.Value></Setter>
   </Style>

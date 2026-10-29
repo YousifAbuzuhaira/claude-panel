@@ -233,7 +233,6 @@ function New-UiStatBox([string]$Label, [string]$Value = '0') {
   $box.VerticalAlignment = 'Center'
   $stack = New-Object System.Windows.Controls.StackPanel
   $caption = New-UiCaption $Label 'dim'
-  $caption.FontSize = 10
   $caption.HorizontalAlignment = 'Center'
   $number = New-UiText $Value 'ink' 15 -Bold -Mono
   $number.HorizontalAlignment = 'Center'
@@ -386,7 +385,7 @@ function New-UiOpacityBar([string]$Key, [string]$Label, [double]$Width = 150) {
   [System.Windows.Controls.DockPanel]::SetDock($percent, 'Left')
   [void]$row.Children.Add($percent)
 
-  $bar.Tag = @{ key = $Key; width = $Width; fill = $fill; knob = $knob; percent = $percent; value = $script:THEME.appearance.opacity[$Key] }
+  $bar.Tag = @{ key = $Key; width = $Width; fill = $fill; knob = $knob; percent = $percent; value = $script:THEME.appearance.opacity[$Key]; dirty = $false; previewAt = $null }
   $row.Tag = $bar
   $bar.Add_MouseLeftButtonDown({
     param($sender, $e)
@@ -401,12 +400,10 @@ function New-UiOpacityBar([string]$Key, [string]$Label, [double]$Width = 150) {
   $bar.Add_MouseLeftButtonUp({
     param($sender, $e)
     $e.Handled = $true
-    if (-not $sender.IsMouseCaptured) { return }
-    $sender.ReleaseMouseCapture()
-    $next = Copy-Appearance
-    $next.opacity[$sender.Tag.key] = $sender.Tag.value
-    try { Set-Appearance $next } catch {}
+    if ($sender.IsMouseCaptured) { $sender.ReleaseMouseCapture() }
   })
+  # Let go, or capture lost some other way: the value is saved either way.
+  $bar.Add_LostMouseCapture({ param($sender, $e) Save-UiOpacity $sender })
   Update-UiOpacityBar $bar
   return $row
 }
@@ -414,14 +411,28 @@ function New-UiOpacityBar([string]$Key, [string]$Label, [double]$Width = 150) {
 function Set-UiOpacityFromMouse($Bar, $MouseEvent) {
   $x = $MouseEvent.GetPosition($Bar).X
   $value = [Math]::Round([Math]::Max($THEME_MIN_OPACITY, [Math]::Min(1.0, [double]$x / [double]$Bar.Tag.width)), 2)
+  if ($value -eq $Bar.Tag.value) { return }
   $Bar.Tag.value = $value
+  $Bar.Tag.dirty = $true
   Update-UiOpacityBar $Bar
-  # This window shows it at once when the bar is its own group's.
+  # This window shows it as it moves when the bar is its own group's, at most every 60 ms.
   if ($Bar.Tag.key -eq $script:THEME.group) {
+    $now = [Environment]::TickCount
+    if ($Bar.Tag.previewAt -and [Math]::Abs($now - $Bar.Tag.previewAt) -lt 60) { return }
+    $Bar.Tag.previewAt = $now
     $preview = Copy-Appearance
     $preview.opacity[$Bar.Tag.key] = $value
     Set-ThemeAppearance $preview
   }
+}
+
+function Save-UiOpacity($Bar) {
+  if (-not $Bar.Tag.dirty) { return }
+  $Bar.Tag.dirty = $false
+  $Bar.Tag.previewAt = $null
+  $next = Copy-Appearance
+  $next.opacity[$Bar.Tag.key] = $Bar.Tag.value
+  try { Set-Appearance $next } catch {}
 }
 
 function Update-UiOpacityBar($Bar) {
@@ -508,8 +519,8 @@ function Open-Sibling([string]$Id, [int64]$OwnerHwnd, [string]$SessionId, [strin
   } catch {}
 }
 
-# The other windows as a row of chips (this one left out); a pick opens it. Games put this under
-# their games mark, as the panel does.
+# The other windows as a row of chips (this one left out); a pick opens it and closes the row.
+# Games put this under their games mark, as the panel does, and set $row.Tag = @{ mark = $mark }.
 function New-UiSwitcherRow([string]$Current, [int64]$OwnerHwnd, [string]$SessionId) {
   $row = New-Object System.Windows.Controls.WrapPanel
   foreach ($sibling in $UI_SIBLINGS) {
@@ -522,6 +533,13 @@ function New-UiSwitcherRow([string]$Current, [int64]$OwnerHwnd, [string]$Session
     $chip.Add_MouseLeftButtonUp({
       param($sender, $e)
       $e.Handled = $true
+      # The row closes after a pick; a window that set $row.Tag = @{ mark = <its games mark> }
+      # gets that mark switched off too.
+      $row = $sender.Parent
+      if ($row) {
+        $row.Visibility = 'Collapsed'
+        if ($row.Tag -is [hashtable] -and $row.Tag.mark) { Set-UiMarkOn $row.Tag.mark $false }
+      }
       Open-Sibling $sender.Tag.sibling $sender.Tag.owner $sender.Tag.session
     })
     [void]$row.Children.Add($chip)
