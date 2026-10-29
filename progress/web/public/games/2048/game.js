@@ -1,15 +1,17 @@
 // The 2048 page: draws the board, takes keys and swipes, keeps the save.
 import { loadSave, writeSave, withToken } from '../../shared/api.js';
 import { watchAppearance } from '../../shared/look.js';
+import { markSeeThrough } from '../legible.js';
 import { rngFor, seedFromUrl } from '../rng.js';
 import { CELLS, SIDE, newGame, play, readSave, saveOf, isStopped } from './logic.js';
 
 const SLIDE_MS = 100;
 
 // Each value its own colour, as the WPF window has them: warm neutrals, oranges
-// into red, golds up to 2048, then cool colours past it.
+// into red, golds up to 2048, then cool colours past it. The 2 and the 4 are CSS variables
+// (index.html): on a light scheme they turn to quiet tints of it.
 const TILE_LOOKS = {
-  2: ['#4B4840', '#EDE6DA'], 4: ['#5E5644', '#F2E8D5'], 8: ['#C2703F', '#FBF3EA'],
+  2: ['var(--tile-2)', 'var(--tile-2-ink)'], 4: ['var(--tile-4)', 'var(--tile-4-ink)'], 8: ['#C2703F', '#FBF3EA'],
   16: ['#D9783C', '#FBF3EA'], 32: ['#E5643A', '#FBF3EA'], 64: ['#E8472F', '#FBF3EA'],
   128: ['#E3C15A', '#26231C'], 256: ['#E6BE47', '#26231C'], 512: ['#EABA33', '#26231C'],
   1024: ['#EEB521', '#26231C'], 2048: ['#F5C400', '#26231C'], 4096: ['#8E5BD6', '#F4F0FB'],
@@ -67,8 +69,11 @@ function newTile(value, cell, m, effect) {
   face.style.color = look[1];
   const digits = String(value).length;
   face.style.fontSize = `${((FONT_PX[digits] || 13) * m.tile) / 76}px`;
-  // 2048 and past it glow.
-  if (value >= 2048) face.style.boxShadow = `0 0 18px ${look[0]}b3`;
+  // 2048 and past it glow, in their own colour.
+  if (value >= 2048) {
+    face.classList.add('glow');
+    face.style.setProperty('--glow', look[0]);
+  }
   face.textContent = value;
   tile.append(face);
   tilesEl.append(tile);
@@ -229,5 +234,5 @@ async function start() {
   save();
 }
 
-watchAppearance('games');
+watchAppearance('games', (appearance, palette) => markSeeThrough(palette));
 start();

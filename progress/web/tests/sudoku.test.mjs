@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CLUES, MAX_LIVES, SHAPES, STATUS, UNDO_KEPT, Sudoku, countSolutions, generate, isValidSolution,
+  CLUES, LOOKS, MAX_LIVES, SHAPES, STATUS, UNDO_KEPT, Sudoku, boardLook, countSolutions, generate, isValidSolution,
   givensMatch, newPuzzle, readSave, saveOf, solvesBySingles,
 } from '../public/games/sudoku/logic.js';
 import { seeded } from '../public/games/rng.js';
@@ -194,4 +194,27 @@ test('the save: each part checked on its own', () => {
   restored.restore({ ...saved, lives: 99, mode: 'x' });
   assert.equal(restored.lives, MAX_LIVES);
   assert.equal(restored.mode, 'answer');
+});
+
+test('the board keeps its size in a wide window and shrinks to fit a narrow one', () => {
+  // The 9x9 board (9 x 50 px and its 2 px frame) is the column's 454 px.
+  assert.equal(9 * LOOKS[9].cell + 4, 454);
+  for (const n of [4, 6, 9]) {
+    assert.deepEqual(boardLook(n, 980), LOOKS[n], `${n}x${n} at 980`);
+    assert.deepEqual(boardLook(n, 490), LOOKS[n], `${n}x${n} at 490`);
+  }
+  for (const width of [486, 420, 380, 340]) {
+    for (const n of [4, 6, 9]) {
+      const look = boardLook(n, width);
+      // The board and its frame fit inside the window's 16 px gutters, and nothing grows.
+      assert.ok(n * look.cell + 4 <= width - 32, `${n}x${n} fits ${width}`);
+      assert.ok(look.cell <= LOOKS[n].cell && look.value <= LOOKS[n].value && look.note <= LOOKS[n].note);
+      assert.ok(look.note >= 8);
+    }
+  }
+  // 420 px: the 9x9 cells are 42 px, the fonts scaled with them.
+  assert.deepEqual(boardLook(9, 420), { cell: 42, value: 20, note: 10 });
+  // Never under 20 px a cell, whatever it is given.
+  assert.equal(boardLook(9, 100).cell, 20);
+  assert.deepEqual(boardLook(9, NaN), LOOKS[9]);
 });

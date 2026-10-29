@@ -44,10 +44,10 @@ body {
 .head { display: flex; align-items: center; gap: 6px; min-height: 30px; }
 .head .ui-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* The games are mono through and through, chips and buttons too. */
+/* The games are mono through and through, chips and buttons too. A button is 28 px tall, as
+   Chrome.ps1's are; a primary one is bold (theme.css), a secondary one never. */
 .ui-chip { font: 11.5px/1 var(--mono); }
-.ui-btn { font: inherit; }
-.ui-btn.strong { font-weight: 700; }
+.ui-btn { font: inherit; min-height: 28px; }
 
 /* A key of an on-screen pad (Sudoku's digits): a glyph with a hover fill. */
 .key {
@@ -72,3 +72,17 @@ button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
 /* The keys line at a game's foot. */
 .hint { color: var(--dim); }
+
+/* A see-through window (legible.js sets html[data-see-through] while the background is clearer
+   than 80%): the text, buttons included, stands on a halo of the background's own solid colour,
+   so it reads over whatever shows through, light or dark. Things with solid fills of their own
+   (2048's tiles, the chess board, a primary button, Typing's theme swatches) keep crisp edges; the
+   sparkline and Typing's graph get the same halo as a drop shadow. */
+html[data-see-through] body {
+  text-shadow: 0 0 1px var(--bg-solid), 0 0 1px var(--bg-solid), 0 0 2px var(--bg-solid), 0 0 3px var(--bg-solid), 0 0 6px var(--bg-solid);
+}
+html[data-see-through] :is(button, input) { text-shadow: inherit; }
+html[data-see-through] :is(.face, .board-frame, .ui-btn.primary, .swatch:not(.auto), .veil-text) { text-shadow: none; }
+html[data-see-through] :is(.spark, #graph) {
+  filter: drop-shadow(0 0 1px var(--bg-solid)) drop-shadow(0 0 2px var(--bg-solid));
+}

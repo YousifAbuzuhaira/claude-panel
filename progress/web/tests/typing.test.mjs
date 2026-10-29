@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  AUTO_THEME, DEFAULT_THEME, EXTRA_LIMIT, FALLBACK_THEME, TypeTest, WORD_COUNT, WORD_LIST, consistency, count, cssColor,
+  AUTO_THEME, DEFAULT_THEME, EXTRA_LIMIT, FALLBACK_THEME, SAVE_THEME_SET, TypeTest, WORD_COUNT, WORD_LIST, consistency, count, cssColor,
   filterThemes, graphScale, isBest, kogasa, parseThemes, pickWords, raw, readSave, saveOf, schemeAsTheme, schemeName,
   themeTitle, withAlpha, wpm,
 } from '../public/games/typing/logic.js';
@@ -165,13 +165,39 @@ test('themes: 187 from the file; slambook\'s #AARRGGBB is reordered for CSS', ()
   assert.deepEqual(parseThemes('x|#1|#2|#3|#4|#5|#6|#7|#8').map(t => t.name), ['serika_dark']);
 });
 
-test('the save: {pb, theme}, each part checked on its own', () => {
-  assert.deepEqual(saveOf(87.456, 'nord'), { pb: 87.46, theme: 'nord' });
-  assert.deepEqual(readSave({ pb: 87.46, theme: 'nord' }, ['nord']), { pb: 87.46, theme: 'nord' });
-  assert.deepEqual(readSave({ pb: 'fast', theme: 'nord' }, ['nord']), { pb: 0, theme: 'nord' });
-  assert.deepEqual(readSave({ pb: 50, theme: 'gone' }, ['nord']), { pb: 50, theme: 'auto' });
-  assert.deepEqual(readSave(null), { pb: 0, theme: 'auto' });
-  assert.deepEqual(readSave({ pb: 50, theme: 'auto' }, ['auto', 'nord']), { pb: 50, theme: 'auto' });
+test('the save: {pb, theme, themeSet}, each part checked on its own', () => {
+  assert.equal(SAVE_THEME_SET, 2);
+  assert.deepEqual(saveOf(87.456, 'nord'), { pb: 87.46, theme: 'nord', themeSet: 2 });
+  const marked = { pb: 87.46, theme: 'nord', themeSet: 2 };
+  assert.deepEqual(readSave(marked, ['nord']), { pb: 87.46, theme: 'nord', marked: true });
+  assert.deepEqual(readSave({ ...marked, pb: 'fast' }, ['nord']), { pb: 0, theme: 'nord', marked: true });
+  assert.deepEqual(readSave({ ...marked, pb: 50, theme: 'gone' }, ['nord']), { pb: 50, theme: 'auto', marked: true });
+  assert.deepEqual(readSave(null), { pb: 0, theme: 'auto', marked: false });
+  assert.deepEqual(readSave({ pb: 50, theme: 'auto', themeSet: 2 }, ['auto', 'nord']), { pb: 50, theme: 'auto', marked: true });
+  // A save written by the page always reads back as it was written.
+  const names = ['auto', 'nord', 'serika_dark'];
+  for (const theme of names) assert.equal(readSave(saveOf(80, theme), names).theme, theme);
+});
+
+test("a save from before 'auto' follows the colour scheme: its serika_dark was the old default", () => {
+  const names = ['auto', 'nord', 'serika_dark'];
+  // The old page wrote {pb, theme} with every personal best, the theme 'serika_dark' unless picked.
+  assert.deepEqual(readSave({ pb: 82.5, theme: 'serika_dark' }, names), { pb: 82.5, theme: 'auto', marked: false });
+  // Any other theme in an old save was picked on purpose: kept, though the save is unmarked.
+  assert.deepEqual(readSave({ pb: 82.5, theme: 'nord' }, names), { pb: 82.5, theme: 'nord', marked: false });
+  // Once marked (the page saves an unmarked save at once), serika_dark is a choice and stays.
+  assert.deepEqual(readSave({ pb: 82.5, theme: 'serika_dark', themeSet: 2 }, names), { pb: 82.5, theme: 'serika_dark', marked: true });
+  // Only themeSet 2 marks a save.
+  assert.equal(readSave({ pb: 1, theme: 'serika_dark', themeSet: 1 }, names).theme, 'auto');
+  assert.equal(readSave({ pb: 1, theme: 'serika_dark', themeSet: '2' }, names).theme, 'auto');
+  // The migration, then the save the page writes at once: from then on it reads the same.
+  const migrated = readSave({ pb: 82.5, theme: 'serika_dark' }, names);
+  assert.deepEqual(readSave(saveOf(migrated.pb, migrated.theme), names), { pb: 82.5, theme: 'auto', marked: true });
+});
+
+test('the page marks an unmarked save as soon as it has read it', () => {
+  const game = readFileSync(new URL('../public/games/typing/game.js', import.meta.url), 'utf8');
+  assert.match(game, /if \(saved && !prefs\.marked\) save\(\);/);
 });
 
 test("'auto' follows the colour scheme, and is the theme with none saved", () => {

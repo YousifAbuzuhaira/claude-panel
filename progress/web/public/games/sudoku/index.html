@@ -5,29 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sudoku</title>
 <link rel="stylesheet" href="/shared/theme.css">
+<link rel="stylesheet" href="/look.css?group=games">
 <link rel="stylesheet" href="../games.css">
 <script src="/shared/theme.js"></script>
 <style>
   /* The board's lines and marks: tints of the text and the accent, so they follow the scheme
-     (and the blue of a note, the scheme's blue). */
+     (and the blue of a note, the scheme's blue). The lines and a lost heart are solid, the text
+     mixed toward the background without its see-through (--bg-solid, from legible.js), so the
+     grid stays as plain as the digits over whatever shows through a see-through window. */
   :root {
-    --thin: color-mix(in srgb, var(--ink) 15%, transparent);
-    --box: color-mix(in srgb, var(--ink) 45%, transparent);
+    --thin: color-mix(in srgb, var(--ink) 15%, var(--bg-solid, transparent));
+    --box: color-mix(in srgb, var(--ink) 45%, var(--bg-solid, transparent));
+    --lost: color-mix(in srgb, var(--ink) 20%, var(--bg-solid, transparent));
     --pick: color-mix(in srgb, var(--accent) 30%, transparent);
     --pick-note: color-mix(in srgb, var(--blue) 36%, transparent);
     --peer: color-mix(in srgb, var(--ink) 7%, transparent);
     --same: color-mix(in srgb, var(--accent) 15%, transparent);
-    /* As wide as the 9x9 board (9 x 50 px and its 2 px frame), whatever size is on, so the
-       window's layout never jumps when the size changes. */
+    /* As wide and as tall as the 9x9 board (9 x 50 px and its 2 px frame), whatever size is on,
+       so nothing in the window moves when the size changes: the board sits centred in that
+       square, and the status line, the pad and the controls stay where they are. */
     --column: 454px;
   }
+  /* A narrow window: the column is the window's width, and game.js sizes the cells to fit it. */
+  @media (max-width: 490px) { :root { --column: calc(100vw - 32px); } }
   .game { width: var(--column); user-select: none; }
   #hearts { font-size: 17px; letter-spacing: 1px; color: var(--red); cursor: default; }
-  #hearts .lost { color: var(--line); }
+  #hearts .lost { color: var(--lost); }
   hr { border: 0; height: 1px; background: var(--rule); margin: 8px 0 12px; }
 
+  .board-host { height: var(--column); display: grid; place-items: center; }
   .board {
-    display: grid; margin: 0 auto; width: max-content; border: 2px solid var(--box);
+    display: grid; width: max-content; border: 2px solid var(--box);
     touch-action: none;
   }
   .cell {
@@ -68,7 +76,7 @@
   .controls { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; margin-top: 10px; }
   .controls .chips { display: flex; gap: 4px; }
   .controls .sizes { justify-self: end; }
-  .keys { margin-top: 10px; text-align: center; color: var(--faint); }
+  .keys { margin-top: 10px; text-align: center; }
 </style>
 </head>
 <body>
@@ -79,7 +87,7 @@
     <span id="hearts" title="Lives: a wrong answer costs one"></span>
   </header>
   <hr>
-  <div class="board" id="board"></div>
+  <div class="board-host"><div class="board" id="board"></div></div>
   <div id="status"></div>
   <div class="pad" id="pad"></div>
   <div class="controls">
@@ -94,7 +102,7 @@
       <button class="ui-chip" data-size="9" title="Hard">9x9</button>
     </div>
   </div>
-  <div class="keys">N notes &middot; Esc clear &middot; Ctrl+Z undo &middot; &#x232B; erase</div>
+  <div class="keys hint">N notes &middot; Esc clear &middot; Ctrl+Z undo &middot; &#x232B; erase</div>
 </main>
 <script type="module" src="game.js"></script>
 </body>

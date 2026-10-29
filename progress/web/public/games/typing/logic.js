@@ -317,18 +317,27 @@ export function schemeName(appearance, presets) {
   return 'custom';
 }
 
-// --- The save: {pb, theme} -------------------------------------------------------------------
+// --- The save: {pb, theme, themeSet} ---------------------------------------------------------
+
+// Saves from before 'auto' wrote 'serika_dark', the old default, with every personal best: not a
+// choice the person made. A save marked themeSet 2 (every save since) names its theme on purpose.
+// The same rule as widget/TypeTest.ps1 (Get-SavedTheme).
+export const SAVE_THEME_SET = 2;
 
 /**
  * The save file, each part checked on its own. `themes` (names) checks the theme when given.
- * No theme saved, or one that is gone, is 'auto': the colour scheme.
+ * No theme saved, one that is gone, or an unmarked save's 'serika_dark' is 'auto': the colour
+ * scheme. `marked`: the save already carries themeSet 2 (if not, the page saves it at once, so
+ * the old default turns to 'auto' only this once).
  */
 export function readSave(raw, themeNames) {
   const value = raw && typeof raw === 'object' ? raw : {};
   const pb = typeof value.pb === 'number' && Number.isFinite(value.pb) && value.pb > 0 ? value.pb : 0;
+  const marked = value.themeSet === SAVE_THEME_SET;
   let theme = typeof value.theme === 'string' && value.theme ? value.theme : DEFAULT_THEME;
+  if (theme === FALLBACK_THEME && !marked) theme = AUTO_THEME;
   if (themeNames && !themeNames.includes(theme)) theme = DEFAULT_THEME;
-  return { pb, theme };
+  return { pb, theme, marked };
 }
 
-export const saveOf = (pb, theme) => ({ pb: Math.round(pb * 100) / 100, theme });
+export const saveOf = (pb, theme) => ({ pb: Math.round(pb * 100) / 100, theme, themeSet: SAVE_THEME_SET });

@@ -3,6 +3,7 @@
 // theme repaints the whole window in its colours, as widget/TypeTest.ps1 does.
 import { loadSave, writeSave, withToken } from '../../shared/api.js';
 import { isNative, loadPresets, previewAppearance, watchAppearance } from '../../shared/look.js';
+import { markSeeThrough } from '../legible.js';
 import { rngFor, seedFromUrl } from '../rng.js';
 import {
   AUTO_THEME, DEFAULT_THEME, THEME_KEYS, TypeTest, WORD_COUNT,
@@ -50,7 +51,7 @@ function setColors(name) {
   const colors = theme.colors;
   if (name === AUTO_THEME) {
     // The scheme's roles back on the page, and Monkeytype's names for them.
-    previewAppearance(appearance, 'games');
+    markSeeThrough(previewAppearance(appearance, 'games'));
     THEME_KEYS.forEach((key, k) => root.setProperty(`--${key}`, colors[k]));
     // subAlt fills (the key chips, the search box): a tint of the text, so it fades with the window.
     root.setProperty('--subAlt', 'var(--surface)');
@@ -63,6 +64,7 @@ function setColors(name) {
   const look = Theme.derivePalette({ bg: solid(colors[0]), accent: solid(colors[1]), text: solid(colors[5]) }, opacity);
   for (const role of Theme.ROLES) root.setProperty(Theme.cssName(role), Theme.cssColor(look[role]));
   root.setProperty('color-scheme', look.isDark ? 'dark' : 'light');
+  markSeeThrough(look);
   root.setProperty('--dim', colors[3]);
   root.setProperty('--red', colors[6]);
   root.setProperty('--edge', withAlpha(colors[3], 80 / 255));
@@ -211,16 +213,19 @@ function showResult(result) {
   $('time').textContent = `${Math.round(result.seconds)}s`;
   $('time').title = `${fixed(result.seconds)}s`;
   $('crown').hidden = !result.isBest;
-  drawGraph(result.samples);
   caret.hidden = true;
   $('progress').style.visibility = 'hidden';
   $('typing').hidden = true;
   $('result').hidden = false;
+  // Drawn once it shows, at the width it has.
+  shownSamples = result.samples;
+  drawGraph(shownSamples);
 }
 
 const SVG = 'http://www.w3.org/2000/svg';
-const GRAPH_W = 440;
+const GRAPH_W = 440; // the width it is drawn at when it can't be measured
 const GRAPH_H = 170;
+let shownSamples = null; // the graph's, redrawn when the window changes width
 
 function svg(name, attrs, text) {
   const el = document.createElementNS(SVG, name);
@@ -233,16 +238,19 @@ function svg(name, attrs, text) {
 function drawGraph(samples) {
   const graph = $('graph');
   graph.textContent = '';
+  // One unit a pixel: the graph spans its column, and its labels stay 10 px whatever the width.
+  const graphW = Math.max(200, Math.round(graph.getBoundingClientRect().width) || GRAPH_W);
+  graph.setAttribute('viewBox', `0 -6 ${graphW} 196`);
   const n = samples.length;
   if (n === 0) return;
   const { top, step } = graphScale(samples);
   const maxErrors = Math.max(1, ...samples.map(s => s.errors));
   const left = 26;
-  const width = GRAPH_W - left;
+  const width = graphW - left;
   const yOf = v => GRAPH_H - (v / top) * GRAPH_H;
   for (let v = 0; v <= top; v += step) {
     const y = yOf(v);
-    graph.append(svg('line', { x1: left, x2: GRAPH_W, y1: y, y2: y, stroke: 'var(--subAlt)', 'stroke-width': 1 }));
+    graph.append(svg('line', { x1: left, x2: graphW, y1: y, y2: y, stroke: 'var(--subAlt)', 'stroke-width': 1 }));
     graph.append(svg('text', { x: 0, y: y + 3.5 }, v));
   }
   const xOf = k => (n > 1 ? left + (width * k) / (n - 1) : left + width / 2);
@@ -277,7 +285,8 @@ let pickIndex = -1;
 
 /** A swatch's colours: the theme's background, its name in its main colour, dots of text and sub. */
 function paintSwatch(entry, theme) {
-  entry.el.style.background = theme.colors[0];
+  // 'auto' is the window's own look: its see-through surface (index.html), not a solid patch.
+  entry.el.style.background = entry.name === AUTO_THEME ? '' : theme.colors[0];
   entry.title.style.color = theme.colors[1];
   entry.dots[0].style.background = theme.colors[5];
   entry.dots[1].style.background = theme.colors[3];
@@ -452,7 +461,10 @@ addEventListener('focus', () => {
   if (!test.isFinished && !picking) moveCaret(true);
 });
 $('veil').addEventListener('click', () => window.focus());
-addEventListener('resize', () => moveCaret(true));
+addEventListener('resize', () => {
+  moveCaret(true);
+  if (shownSamples && !$('result').hidden) drawGraph(shownSamples);
+});
 
 // --- Snapshots (?view=typing|result|themes&theme=name) ---------------------------------------
 
@@ -491,6 +503,8 @@ async function start() {
   best = prefs.pb;
   setTheme(prefs.theme);
   ready = true;
+  // A save from before 'auto' is marked at once, so its old default turns to 'auto' only once.
+  if (saved && !prefs.marked) save();
   if (demoView) showDemo();
   else moveCaret(true);
 }

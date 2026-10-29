@@ -8,6 +8,27 @@ export const SHAPES = { 4: [2, 2], 6: [2, 3], 9: [3, 3] };
 export const CLUES = { 4: 6, 6: 14, 9: 30 };
 export const BUDGET_MS = 1500;
 export const MAX_LIVES = 3;
+
+// Cell px, value and note font px, by board size.
+export const LOOKS = {
+  4: { cell: 76, value: 31, note: 15 },
+  6: { cell: 62, value: 27, note: 13 },
+  9: { cell: 50, value: 24, note: 12 },
+};
+// What a window's width holds besides the cells: its 16 px gutters and the board's 2 px frame.
+const BOARD_ROOM = 2 * 16 + 2 * 2;
+
+/**
+ * The look of an n x n board in a window `width` px wide: LOOKS's, or with every size scaled
+ * down so the board fits a window too narrow for it (never a cell under 20 px).
+ */
+export function boardLook(n, width) {
+  const look = LOOKS[n] || LOOKS[9];
+  const fit = Math.max(20, Math.floor((Number(width) - BOARD_ROOM) / n));
+  if (!Number.isFinite(fit) || fit >= look.cell) return look;
+  const scale = fit / look.cell;
+  return { cell: fit, value: Math.round(look.value * scale), note: Math.max(8, Math.round(look.note * scale)) };
+}
 export const UNDO_KEPT = 200;
 
 const bits = mask => {

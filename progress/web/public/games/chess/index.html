@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chess</title>
 <link rel="stylesheet" href="/shared/theme.css">
+<link rel="stylesheet" href="/look.css?group=games">
 <link rel="stylesheet" href="../games.css">
 <link rel="stylesheet" href="style.css">
 <script src="/shared/theme.js"></script>
@@ -14,7 +15,7 @@
 <main class="game" id="card">
   <a class="back" id="backLink" href="../" title="All the games, and Learn">&larr; Games</a>
   <header class="head">
-    <h1 class="ui-title">Puzzles</h1>
+    <h1 class="ui-title">Chess</h1>
     <svg class="spark" id="spark" viewBox="0 0 96 26" aria-label="Your rating over the last puzzles"><title>Your rating over the last puzzles</title><polyline id="sparkLine" points=""/></svg>
     <div class="ui-stat rating" id="ratingBox" title="Your puzzle rating (Glicko-2, as on Lichess). A ? means it is still settling.">
       <span class="ui-caption" id="ratingLabel">RATING</span>
@@ -44,7 +45,7 @@
         <div class="bottom">
           <div class="move-strip" id="moveStrip" hidden></div>
           <div class="buttons">
-            <button type="button" class="ui-btn strong" id="hintButton" title="H. First the idea (half credit), then the piece, then the move (no credit).">Hint</button>
+            <button type="button" class="ui-btn" id="hintButton" title="H. First the idea (half credit), then the piece, then the move (no credit).">Hint</button>
             <button type="button" class="ui-btn primary" id="nextButton" title="N or Enter">Next puzzle</button>
           </div>
           <div class="row" id="modeRow"><span class="ui-caption label">Mode</span></div>

@@ -1,15 +1,9 @@
 // The Sudoku page: draws the board, takes keys and clicks, keeps the save.
 import { loadSave, writeSave, withToken } from '../../shared/api.js';
 import { watchAppearance } from '../../shared/look.js';
+import { markSeeThrough } from '../legible.js';
 import { rngFor, seedFromUrl } from '../rng.js';
-import { MAX_LIVES, Sudoku, readSave, saveOf } from './logic.js';
-
-// Cell px, value and note font px, by board size.
-const LOOKS = {
-  4: { cell: 76, value: 31, note: 15 },
-  6: { cell: 62, value: 27, note: 13 },
-  9: { cell: 50, value: 24, note: 12 },
-};
+import { MAX_LIVES, Sudoku, boardLook, readSave, saveOf } from './logic.js';
 
 const $ = id => document.getElementById(id);
 const boardEl = $('board');
@@ -31,12 +25,17 @@ function save() {
   writeSave('sudoku', saveOf(game));
 }
 
-function buildBoard() {
-  const n = game.n;
-  const look = LOOKS[n];
+/** The cell and font sizes for this board in this window (smaller in a narrow one). */
+function sizeBoard() {
+  const look = boardLook(game.n, document.documentElement.clientWidth);
   boardEl.style.setProperty('--cell', `${look.cell}px`);
   boardEl.style.setProperty('--value', `${look.value}px`);
   boardEl.style.setProperty('--note', `${look.note}px`);
+}
+
+function buildBoard() {
+  const n = game.n;
+  sizeBoard();
   boardEl.style.gridTemplateColumns = `repeat(${n}, var(--cell))`;
   boardEl.textContent = '';
   cells = [];
@@ -249,6 +248,7 @@ boardEl.addEventListener('mouseover', event => {
   draw();
 });
 addEventListener('mouseup', () => { dragSelecting = false; });
+addEventListener('resize', () => { if (cells.length) sizeBoard(); });
 // Ctrl-click on a Mac opens the context menu; on the board it selects instead.
 boardEl.addEventListener('contextmenu', event => event.preventDefault());
 
@@ -294,5 +294,5 @@ async function start() {
   draw();
 }
 
-watchAppearance('games');
+watchAppearance('games', (appearance, palette) => markSeeThrough(palette));
 start();

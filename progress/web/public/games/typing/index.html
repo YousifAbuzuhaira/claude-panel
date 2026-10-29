@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Typing</title>
 <link rel="stylesheet" href="/shared/theme.css">
+<link rel="stylesheet" href="/look.css?group=games">
 <link rel="stylesheet" href="../games.css">
 <script src="/shared/theme.js"></script>
 <style>
@@ -12,7 +13,7 @@
      colour scheme every window shares, so before it runs they are the scheme's. A Monkeytype
      theme repaints the shared roles too, so the whole window wears it. */
   :root {
-    --bg: #1c1d20; --main: var(--accent); --caret: var(--accent); --sub: var(--dim); --subAlt: var(--surface);
+    --bg: var(--card-fill); --main: var(--accent); --caret: var(--accent); --sub: var(--dim); --subAlt: var(--surface);
     --text: var(--ink); --error: var(--red); --errorExtra: #884749;
     --type: 'Roboto Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
     --letter: 26px;
@@ -21,8 +22,6 @@
   }
   body { font-family: var(--type); color: var(--text); }
   .game { width: 700px; }
-  .logo { flex: 1; min-width: 0; font: bold 20px/1.2 var(--type); color: var(--text); white-space: nowrap; }
-  .logo .a { color: var(--sub); }
   .settings { font-size: 12px; color: var(--main); white-space: nowrap; }
   .settings .lang { color: var(--sub); margin-left: 1.2em; }
 
@@ -56,8 +55,9 @@
   .unfocused #words { filter: blur(6px); }
   .unfocused #caret { visibility: hidden; }
 
-  /* The result: wpm and acc in a column, the graph beside them taking what is left (it scales
-     with the window: a viewBox, not a fixed size), the details across the foot. */
+  /* The result: wpm and acc in a column, the graph beside them taking what is left (game.js draws
+     it at the width it gets, so it ends where the header does and its labels stay 10 px), the
+     details across the foot. */
   .result { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 24px; align-content: start; }
   .stat .name { color: var(--sub); font-size: 15px; }
   .stat .value { color: var(--main); font-size: 30px; line-height: 1.1; }
@@ -65,7 +65,7 @@
   .big .value { font-size: 58px; line-height: 1; white-space: nowrap; }
   .big .stat + .stat { margin-top: 6px; }
   #crown { font-size: 22px; margin-left: 8px; vertical-align: 0.6em; }
-  #graph { display: block; width: 100%; max-width: 460px; height: auto; margin-top: 8px; overflow: visible; }
+  #graph { display: block; width: 100%; height: 196px; margin-top: 8px; overflow: visible; }
   #graph text { fill: var(--sub); font: 10px var(--type); }
   .details { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0 40px; margin-top: 18px; }
   .details .type .value { font-size: 16px; line-height: 1.3; }
@@ -89,8 +89,10 @@
   .swatch .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .swatch .note { flex: none; margin-right: 6px; }
   .swatch i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-  /* 'auto' spans the first row and names the scheme it follows. */
-  .swatch.auto { grid-column: 1 / -1; }
+  /* 'auto' spans the first row and names the scheme it follows. It is the window's own look, so
+     it wears the window's see-through surface and a hairline, not a solid patch. */
+  .swatch.auto { grid-column: 1 / -1; background: var(--surface); outline: 1px solid var(--line); outline-offset: -1px; }
+  .swatch.auto.on { outline: none; }
   .nothing { color: var(--sub); padding: 10px 2px; }
 
   footer { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin-top: 26px; font-size: 12px; color: var(--sub); }
@@ -111,7 +113,7 @@
 <main class="game">
   <a class="back" href="../" title="All the games, and Learn">&larr; Games</a>
   <header class="head">
-    <div class="logo"><span class="a">type</span>test</div>
+    <h1 class="ui-title">typetest</h1>
     <div class="settings">words 10<span class="lang">english</span></div>
   </header>
   <div class="views">

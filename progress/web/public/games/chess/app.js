@@ -7,6 +7,7 @@
 // &engine=1 to let a 'wrong'/'played' demo wait for Stockfish.
 import { loadSave, token, withToken, writeSave } from '../../shared/api.js';
 import { watchAppearance } from '../../shared/look.js';
+import { markSeeThrough } from '../legible.js';
 import { Board, isCapture, isCastle, isEnPassant, uci } from './board.js';
 import { describe, ideaHint, lineSan, pieceOn, replyNote, summary } from './narrator.js';
 import { update as glickoUpdate } from './glicko.js';
@@ -1206,6 +1207,16 @@ el.swatch.addEventListener('click', () => {
   savePrefs();
 });
 el.search.addEventListener('input', () => { if (isPicking) filterChips(); });
+// The feed fades at an edge only where there is more to scroll to (style.css), so no line is
+// cut in half against the moves below or the status above.
+function markFeedEdges() {
+  const feed = el.feed;
+  feed.classList.toggle('more-above', feed.scrollTop > 1);
+  feed.classList.toggle('more-below', feed.scrollTop + feed.clientHeight < feed.scrollHeight - 1);
+}
+el.feed.addEventListener('scroll', markFeedEdges, { passive: true });
+new MutationObserver(markFeedEdges).observe(el.feed, { childList: true, subtree: true, characterData: true });
+new ResizeObserver(markFeedEdges).observe(el.feed);
 // A click outside the picker closes it without choosing.
 document.addEventListener('pointerdown', event => { if (isPicking && !el.picker.contains(event.target) && !el.themeChip.contains(event.target)) closePicker(false); });
 window.addEventListener('pagehide', () => { completeAnimation(); savePrefs(); if (engine) engine.quit(); });
@@ -1296,5 +1307,5 @@ async function main() {
 }
 
 document.getElementById('backLink').href = withToken('../');
-watchAppearance('games');
+watchAppearance('games', (appearance, palette) => markSeeThrough(palette));
 main().catch(error => { console.error(error); el.loading.hidden = false; el.loading.textContent = `Something broke: ${error.message}`; });

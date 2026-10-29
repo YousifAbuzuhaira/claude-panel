@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>2048</title>
 <link rel="stylesheet" href="/shared/theme.css">
+<link rel="stylesheet" href="/look.css?group=games">
 <link rel="stylesheet" href="../games.css">
 <script src="/shared/theme.js"></script>
 <style>
@@ -23,6 +24,19 @@
     width: 100%; height: 100%; border-radius: 6px; display: flex; align-items: center; justify-content: center;
     font-weight: bold;
   }
+  /* 2048 and past it glow in their own colour (--glow, set per tile); softer on a light card,
+     where a wide glow smudges. */
+  .face.glow { box-shadow: 0 0 18px color-mix(in srgb, var(--glow) 70%, transparent); }
+  html[data-scheme='light'] .face.glow { box-shadow: 0 0 10px color-mix(in srgb, var(--glow) 35%, transparent); }
+  /* The tiles are the game's own colours, but on a light scheme the 2 and the 4 are the quietest
+     tiles, as on the original's light board: a solid step of the text toward the background,
+     past the empty slot's, with the text on them (as widget/Game2048.ps1 has them). */
+  :root { --tile-2: #4B4840; --tile-2-ink: #EDE6DA; --tile-4: #5E5644; --tile-4-ink: #F2E8D5; }
+  html[data-scheme='light'] {
+    --tile-2: color-mix(in srgb, var(--ink) 20%, var(--bg-solid, var(--card-fill)));
+    --tile-4: color-mix(in srgb, var(--ink) 30%, var(--bg-solid, var(--card-fill)));
+    --tile-2-ink: var(--ink); --tile-4-ink: var(--ink);
+  }
   .face.pop { animation: pop 150ms ease-out; }
   .face.grow { animation: grow 150ms ease-out; }
   @keyframes pop { from { transform: scale(1.2); } to { transform: scale(1); } }
@@ -35,8 +49,9 @@
   .overlay.show { display: flex; }
   .overlay h2 { margin: 0; font-size: 30px; }
   .overlay .buttons { display: flex; gap: 10px; margin-top: 14px; }
-  /* "Keep going" wears the 2048 tile's gold, the game's own colour. */
-  .overlay .ui-btn.keep { background: #f5c400; color: #26231c; }
+  /* "Keep going" wears the scheme's gold, as "You win!" above it does, with the background's own
+     colour for its text (the gold is light on a dark scheme and dark on a light one). */
+  .overlay .ui-btn.keep { background: var(--gold); color: var(--bg-solid, var(--on-accent)); }
 
   footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 10px; }
   footer .hint { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -58,7 +73,7 @@
       <h2 id="message"></h2>
       <div class="buttons">
         <button class="ui-btn primary keep" id="keep">Keep going</button>
-        <button class="ui-btn strong" id="again">Try again</button>
+        <button class="ui-btn" id="again">Try again</button>
       </div>
     </div>
   </div>
