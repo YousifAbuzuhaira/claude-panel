@@ -9,6 +9,9 @@
 # answer ever needs a guess: a wrong digit costs a life, three lives lost
 # starts a fresh puzzle.
 #
+# It wears the shared colour scheme and the games' see-through (Theme.ps1, group 'games') and
+# is built from the shared pieces (Chrome.ps1): title, marks, button, grip, the switcher row.
+#
 # PowerShell names ignore case: the board size lives in $script:n and no local
 # may reuse a parameter's name ($size, $count, $seed...). Kept to ASCII:
 # Windows PowerShell reads a .ps1 without a BOM as ANSI, so every non-ASCII
@@ -25,7 +28,9 @@ param(
   [int]$Count = 10,
   [switch]$PlayTest,
   [string]$SnapshotPath = '',
-  [switch]$SnapshotDemo
+  [switch]$SnapshotDemo,
+  # With -SnapshotPath: draw it with the row of other windows open, as the games mark opens it.
+  [switch]$SnapshotSwitcher
 )
 
 $ErrorActionPreference = 'Stop'
@@ -319,11 +324,9 @@ $owner = [IntPtr]$OwnerHwnd
 $hasOwner = $owner -ne [IntPtr]::Zero -and [SudokuWin32]::IsWindow($owner)
 
 $GLYPH_HEART = [string][char]0x2665
-$GLYPH_CLOSE = [string][char]0x2715
 $GLYPH_ERASE = [string][char]0x232B
 $GLYPH_DOT = [string][char]0x00B7
 $GLYPH_DASH = [string][char]0x2014
-$GLYPH_GRIP = [string][char]0x25E2
 $MIN_SCALE = 0.7
 $MAX_SCALE = 2.5
 
@@ -366,27 +369,36 @@ function Save-Prefs {
 
 # --- The window ---------------------------------------------------------------
 
-function Brush([string]$Hex) { return [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex) }
-$ink = Brush '#E8E6E3'
-$dim = Brush '#8B8A88'
-$green = Brush '#5FB98A'
-$red = Brush '#E0696B'
-$accent = Brush '#E08A5F'
-$thinLine = Brush '#26FFFFFF'
-$boxLine = Brush '#73FFFFFF'
-$selectedFill = Brush '#4DE08A5F'
-$noteSelectFill = Brush '#5C5C8FCC'
-$peerFill = Brush '#12FFFFFF'
-$sameFill = Brush '#26E08A5F'
+# The colour scheme and see-through every window shares (appearance.json), and the shared pieces.
+. (Join-Path $PSScriptRoot 'Theme.ps1')
+$T = Initialize-Theme 'games'
+. (Join-Path $PSScriptRoot 'Chrome.ps1')
+$ink = $T.ink
+$dim = $T.dim
+$faint = $T.faint
+$green = $T.green
+$red = $T.red
+$accent = $T.accent
+# The board's own lines and fills: tints of the scheme, so they follow it.
+$thinLine = $T.rule
+$boxLine = New-ThemeTint 'ink' 0.45
+$selectedFill = New-ThemeTint 'accent' 0.30
+$noteSelectFill = New-ThemeTint 'blue' 0.36
+$peerFill = New-ThemeTint 'ink' 0.07
+$sameFill = $T.selected
+$lostLife = $T.rule
 $noFill = [System.Windows.Media.Brushes]::Transparent
-$font = New-Object System.Windows.Media.FontFamily('Cascadia Mono, Consolas')
 
-# Cell px, value and note font size, by board size.
+# Cell px, value and note font size, by board size. The smallest board is the narrowest
+# thing the card holds, so its cells are big enough for the controls row to fit under it.
 $LOOKS = @{
-  4 = @{ cell = 58; value = 24; note = 12 }
+  4 = @{ cell = 64; value = 26; note = 12 }
   6 = @{ cell = 48; value = 21; note = 10 }
   9 = @{ cell = 38; value = 18; note = 9 }
 }
+# The board's outer frame, each side.
+$FRAME_PX = 2
+$PAD_KEY_PX = 30
 
 function New-Text([string]$Text, $Foreground) {
   $block = New-Object System.Windows.Controls.TextBlock
@@ -399,14 +411,57 @@ function New-Gap([double]$Left, [double]$Top, [double]$Right, [double]$Bottom) {
   return New-Object System.Windows.Thickness($Left, $Top, $Right, $Bottom)
 }
 
-# A piece of text that acts as a button: it never takes focus, so the keys keep
-# going to the window.
-function New-Pressable([string]$Text, $Tag) {
-  $block = New-Text $Text $dim
-  $block.Tag = $Tag
-  $block.Cursor = [System.Windows.Input.Cursors]::Hand
-  $block.Padding = New-Gap 4 2 4 2
-  return $block
+# One of a set of choices (the mode, the board size), as text the way a tab is: dim, ink on
+# hover, ink Bold when chosen (mono, so the width never shifts). It never takes focus, so the
+# keys keep going to the window.
+function New-Choice([string]$Text, $Value, [string]$Tip) {
+  $choice = New-Text $Text $dim
+  $choice.Padding = New-Gap 4 2 4 2
+  $choice.Cursor = [System.Windows.Input.Cursors]::Hand
+  $choice.VerticalAlignment = 'Center'
+  if ($Tip) { $choice.ToolTip = $Tip }
+  $choice.Tag = @{ value = $Value; on = $false; hot = $false }
+  $choice.Add_MouseEnter({ param($sender, $e) $sender.Tag.hot = $true; Update-Choice $sender })
+  $choice.Add_MouseLeave({ param($sender, $e) $sender.Tag.hot = $false; Update-Choice $sender })
+  $choice.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
+  return $choice
+}
+
+function Update-Choice($Choice) {
+  $state = $Choice.Tag
+  if ($state.on) { $Choice.Foreground = $ink; $Choice.FontWeight = 'Bold' }
+  elseif ($state.hot) { $Choice.Foreground = $ink; $Choice.FontWeight = 'Normal' }
+  else { $Choice.Foreground = $dim; $Choice.FontWeight = 'Normal' }
+}
+
+function Set-ChoiceOn($Choice, [bool]$On) {
+  $Choice.Tag.on = $On
+  Update-Choice $Choice
+}
+
+# A key on the number pad: every key the same square, the glyph centred in it, a fill on hover
+# and a deeper one while pressed. Add a MouseLeftButtonUp handler; .Tag.value is what it enters.
+function New-PadKey([string]$Text, $Value, [string]$Tip) {
+  $key = New-Object System.Windows.Controls.Border
+  $key.Width = $PAD_KEY_PX
+  $key.Height = $PAD_KEY_PX
+  $key.Margin = New-Gap 2 0 2 0
+  $key.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+  $key.Background = $noFill
+  $key.Cursor = [System.Windows.Input.Cursors]::Hand
+  if ($Tip) { $key.ToolTip = $Tip }
+  $label = New-Text $Text $ink
+  $label.FontSize = 16
+  $label.HorizontalAlignment = 'Center'
+  $label.VerticalAlignment = 'Center'
+  $label.IsHitTestVisible = $false
+  $key.Child = $label
+  $key.Tag = @{ value = $Value; label = $label }
+  $key.Add_MouseEnter({ param($sender, $e) $sender.Background = Get-UiBrush 'hover' })
+  $key.Add_MouseLeave({ param($sender, $e) $sender.Background = [System.Windows.Media.Brushes]::Transparent })
+  $key.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true; $sender.Background = Get-UiBrush 'pressed' })
+  $key.Add_MouseLeftButtonUp({ param($sender, $e) if ($sender.IsMouseOver) { $sender.Background = Get-UiBrush 'hover' } })
+  return $key
 }
 
 $win = New-Object System.Windows.Window
@@ -417,7 +472,7 @@ $win.Background = [System.Windows.Media.Brushes]::Transparent
 $win.ShowInTaskbar = -not $hasOwner
 $win.ResizeMode = 'NoResize'
 $win.SizeToContent = 'WidthAndHeight'
-$win.FontFamily = $font
+$win.FontFamily = $UI_MONO
 $win.FontSize = 12
 if ($hasOwner) {
   $win.Left = -32000
@@ -427,104 +482,157 @@ if ($hasOwner) {
 }
 
 $card = New-Object System.Windows.Controls.Border
-$card.CornerRadius = New-Object System.Windows.CornerRadius(10)
-$card.Background = Brush '#F21C1D20'
-$card.BorderBrush = Brush '#33FFFFFF'
+$card.CornerRadius = New-Object System.Windows.CornerRadius($UI_CARD_RADIUS)
+$card.Background = $T.cardFill
+$card.BorderBrush = $T.edge
 $card.BorderThickness = New-Object System.Windows.Thickness(1)
-$card.Padding = New-Gap 14 10 14 12
 
-# Header: the title, the lives, the close mark. Dragging it moves the window.
+# Header: the name, the lives, the other windows (games mark) and the close mark, all centred on
+# one line. Dragging it moves the window.
 $header = New-Object System.Windows.Controls.DockPanel
 $header.Cursor = [System.Windows.Input.Cursors]::SizeAll
 $header.Background = $noFill
-$titleText = New-Text '' $ink
-$titleText.FontWeight = 'Bold'
+$titleText = New-UiTitle 'Sudoku'
 [System.Windows.Controls.DockPanel]::SetDock($titleText, 'Left')
-$closeText = New-Text $GLYPH_CLOSE $dim
-$closeText.Margin = New-Gap 12 0 0 0
-$closeText.Cursor = [System.Windows.Input.Cursors]::Hand
+$closeText = New-UiMark $UI_GLYPHS.close 'Close'
+$closeText.Margin = New-Gap 4 0 0 0
 [System.Windows.Controls.DockPanel]::SetDock($closeText, 'Right')
-$heartsText = New-Object System.Windows.Controls.TextBlock
-$heartsText.FontSize = 14
+$gamesMark = New-UiMark $UI_GLYPHS.games 'Learn and the other games'
+$gamesMark.Margin = New-Gap 8 0 0 0
+[System.Windows.Controls.DockPanel]::SetDock($gamesMark, 'Right')
+# The lives: one heart each, a hair apart; a background so the gaps take the tooltip too.
+$heartsText = New-Object System.Windows.Controls.StackPanel
+$heartsText.Orientation = 'Horizontal'
 $heartsText.HorizontalAlignment = 'Right'
+$heartsText.VerticalAlignment = 'Center'
+$heartsText.Background = $noFill
 $heartsText.ToolTip = 'Lives: a wrong answer costs one'
+$heartTexts = @()
+for ($k = 0; $k -lt $MAX_LIVES; $k++) {
+  $heart = New-Text $GLYPH_HEART $red
+  $heart.FontSize = 15
+  $heart.FontFamily = $UI_SANS
+  $heart.VerticalAlignment = 'Center'
+  if ($k -gt 0) { $heart.Margin = New-Gap 2 0 0 0 }
+  [void]$heartsText.Children.Add($heart)
+  $heartTexts += $heart
+}
 [void]$header.Children.Add($titleText)
 [void]$header.Children.Add($closeText)
+[void]$header.Children.Add($gamesMark)
 [void]$header.Children.Add($heartsText)
+
+# Under the games mark: Learn and the other games, a click away. Its right edge is the close
+# mark's, so the last chip gives up its trailing gap.
+$switcher = New-UiSwitcherRow 'sudoku' $OwnerHwnd $SessionId
+$switcher.Margin = New-Gap 0 8 0 0
+$switcher.HorizontalAlignment = 'Right'
+$switcher.Visibility = 'Collapsed'
+if ($switcher.Children.Count -gt 0) { $switcher.Children[$switcher.Children.Count - 1].Margin = New-Gap 0 0 0 0 }
 
 $rule = New-Object System.Windows.Controls.Border
 $rule.Height = 1
-$rule.Background = Brush '#26FFFFFF'
-$rule.Margin = New-Gap 0 8 0 10
+$rule.Background = $T.rule
+$rule.Margin = New-Gap 0 8 0 12
 
 # The board sits in a frame that draws its outer edge.
 $boardFrame = New-Object System.Windows.Controls.Border
 $boardFrame.BorderBrush = $boxLine
-$boardFrame.BorderThickness = New-Object System.Windows.Thickness(2)
+$boardFrame.BorderThickness = New-Object System.Windows.Thickness($FRAME_PX)
 $boardFrame.HorizontalAlignment = 'Center'
 
+# The status line is exactly the board's width (Build-Board sets it) and trims, so a longer or
+# shorter message never moves the card's edge.
 $statusText = New-Text '' $dim
 $statusText.Margin = New-Gap 0 8 0 0
 $statusText.HorizontalAlignment = 'Center'
+$statusText.TextAlignment = 'Center'
+$statusText.TextTrimming = 'CharacterEllipsis'
 
 $pad = New-Object System.Windows.Controls.StackPanel
 $pad.Orientation = 'Horizontal'
 $pad.HorizontalAlignment = 'Center'
-$pad.Margin = New-Gap 0 8 0 0
+$pad.Margin = New-Gap 0 6 0 0
 
-# Controls: the mode, a new puzzle, the size.
-$controls = New-Object System.Windows.Controls.DockPanel
-$controls.Margin = New-Gap 0 10 0 0
+# Controls: the mode, a new puzzle, the size. Three columns, the outer two kept the same width,
+# so New sits on the board's centre line. The outer choices reach 4px past the board's edges
+# (their padding), so their text lines up with the board and the title.
+$controls = New-Object System.Windows.Controls.Grid
+$controls.Margin = New-Gap 0 12 0 0
+foreach ($k in 0, 1, 2) {
+  $column = New-Object System.Windows.Controls.ColumnDefinition
+  if ($k -eq 1) {
+    $column.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Star)
+  } else {
+    $column.Width = [System.Windows.GridLength]::Auto
+    $column.SharedSizeGroup = 'SudokuSide'
+  }
+  [void]$controls.ColumnDefinitions.Add($column)
+}
 $modes = New-Object System.Windows.Controls.StackPanel
 $modes.Orientation = 'Horizontal'
-[System.Windows.Controls.DockPanel]::SetDock($modes, 'Left')
-$answerMode = New-Pressable 'Answer' 'answer'
-$answerMode.ToolTip = 'Answer mode (Space switches; hold Shift or Ctrl to note)'
-$notesMode = New-Pressable 'Notes' 'notes'
-$notesMode.ToolTip = 'Notes mode (Space switches; hold Shift or Ctrl to answer)'
+$modes.HorizontalAlignment = 'Left'
+$modes.Margin = New-Gap -4 0 0 0
+$answerMode = New-Choice 'Answer' 'answer' 'Answer mode (Space or N switches; hold Shift or Ctrl to note)'
+$notesMode = New-Choice 'Notes' 'notes' 'Notes mode (Space or N switches; hold Shift or Ctrl to answer)'
 [void]$modes.Children.Add($answerMode)
 [void]$modes.Children.Add($notesMode)
+[System.Windows.Controls.Grid]::SetColumn($modes, 0)
+$newButton = New-UiButton 'New' 'secondary' -Mono -Tip 'A fresh puzzle, the same size'
+$newButton.HorizontalAlignment = 'Center'
+[System.Windows.Controls.Grid]::SetColumn($newButton, 1)
 $sizes = New-Object System.Windows.Controls.StackPanel
 $sizes.Orientation = 'Horizontal'
-[System.Windows.Controls.DockPanel]::SetDock($sizes, 'Right')
+$sizes.HorizontalAlignment = 'Right'
+$sizes.Margin = New-Gap 0 0 -4 0
 $sizeButtons = @{}
 foreach ($side in 4, 6, 9) {
-  $button = New-Pressable "${side}x$side" $side
-  $button.ToolTip = @{ 4 = 'Easy'; 6 = 'Medium'; 9 = 'Hard' }[$side]
+  $sizeTip = @{ 4 = 'Easy'; 6 = 'Medium'; 9 = 'Hard' }[$side] + ": a new ${side}x$side puzzle"
+  $button = New-Choice "${side}x$side" $side $sizeTip
   $sizeButtons[$side] = $button
   [void]$sizes.Children.Add($button)
 }
-$newButton = New-Pressable 'New' 'new'
-$newButton.HorizontalAlignment = 'Center'
-$newButton.ToolTip = 'A fresh puzzle'
+[System.Windows.Controls.Grid]::SetColumn($sizes, 2)
 [void]$controls.Children.Add($modes)
-[void]$controls.Children.Add($sizes)
 [void]$controls.Children.Add($newButton)
+[void]$controls.Children.Add($sizes)
+
+# Footer: the keys worth knowing; the tooltip has the rest.
+$keysText = New-Text "N notes $GLYPH_DOT Esc clear $GLYPH_DOT $GLYPH_ERASE erase" $faint
+$keysText.FontSize = 11
+$keysText.Margin = New-Gap 0 8 0 0
+$keysText.HorizontalAlignment = 'Center'
+$keysText.ToolTip = "Digits answer; Shift or Ctrl + digit notes`nSpace or N: Answer / Notes`nArrows move; Shift or Ctrl + arrows select more`nEsc: clear the selection`nBackspace, Delete or 0: erase`nCtrl+Z: undo"
 
 $stack = New-Object System.Windows.Controls.StackPanel
+$stack.Margin = New-Gap 16 12 16 14
+# The controls row's outer columns share one width (SharedSizeGroup) inside this scope.
+[System.Windows.Controls.Grid]::SetIsSharedSizeScope($stack, $true)
 [void]$stack.Children.Add($header)
+[void]$stack.Children.Add($switcher)
 [void]$stack.Children.Add($rule)
 [void]$stack.Children.Add($boardFrame)
 [void]$stack.Children.Add($statusText)
 [void]$stack.Children.Add($pad)
 [void]$stack.Children.Add($controls)
-$card.Child = $stack
+[void]$stack.Children.Add($keysText)
+
+# The resize grip sits in the card's bottom-right corner, so it scales with the card. The
+# window is pinned by its top-left corner, so pulling the grip out (right or down) grows it.
+$grip = New-UiGrip 'right'
+$grip.Margin = New-Gap 0 0 5 3
+
+$cardBody = New-Object System.Windows.Controls.Grid
+[void]$cardBody.Children.Add($stack)
+[void]$cardBody.Children.Add($grip)
+$card.Child = $cardBody
+
 $cardScale = New-Object System.Windows.Media.ScaleTransform($script:scale, $script:scale)
 $card.LayoutTransform = $cardScale
 
-# The resize grip, bottom-right: the window is pinned by its top-left corner,
-# so pulling the grip out (right or down) grows it.
-$grip = New-Text $GLYPH_GRIP $dim
-$grip.FontSize = 11
-$grip.Margin = New-Gap 0 0 7 5
-$grip.HorizontalAlignment = 'Right'
-$grip.VerticalAlignment = 'Bottom'
-$grip.Cursor = [System.Windows.Input.Cursors]::SizeNWSE
-$grip.ToolTip = 'Drag to resize'
-
 $cardHost = New-Object System.Windows.Controls.Grid
 [void]$cardHost.Children.Add($card)
-[void]$cardHost.Children.Add($grip)
+Add-ThemeResources $win
 $win.Content = $cardHost
 
 # --- The game -----------------------------------------------------------------
@@ -620,7 +728,14 @@ function Build-Board {
     $cell.Cursor = [System.Windows.Input.Cursors]::Hand
     $cell.Tag = $i
 
+    # Under the digits, a hover tint that lies over whatever fill the square has, so pointing
+    # at a square never hides that it is picked, a peer or the same number.
     $inside = New-Object System.Windows.Controls.Grid
+    $hoverLayer = New-Object System.Windows.Controls.Border
+    $hoverLayer.Background = $T.hover
+    $hoverLayer.Visibility = 'Hidden'
+    $hoverLayer.IsHitTestVisible = $false
+    [void]$inside.Children.Add($hoverLayer)
     $noteGrid = New-Object System.Windows.Controls.Primitives.UniformGrid
     $noteGrid.Rows = $script:boxRows
     $noteGrid.Columns = $script:boxCols
@@ -654,11 +769,13 @@ function Build-Board {
     })
     $cell.Add_MouseEnter({
       param($sender, $e)
+      $sender.Child.Children[0].Visibility = 'Visible'
       if (-not $script:dragSelecting) { return }
       if ($e.LeftButton -ne [System.Windows.Input.MouseButtonState]::Pressed) { $script:dragSelecting = $false; return }
       Select-Add ([int]$sender.Tag)
       Update-Board
     })
+    $cell.Add_MouseLeave({ param($sender, $e) $sender.Child.Children[0].Visibility = 'Hidden' })
 
     [System.Windows.Controls.Grid]::SetRow($cell, $r)
     [System.Windows.Controls.Grid]::SetColumn($cell, $c)
@@ -681,22 +798,21 @@ function Build-Board {
   }
   $script:cells = $cells
   $boardFrame.Child = $grid
+  # The status line spans the board exactly, frame included.
+  $statusText.Width = $side * $look.cell + 2 * $FRAME_PX
 
+  # The pad: one key per digit and the erase key, all the same square.
   $pad.Children.Clear()
   $buttons = @()
   for ($d = 1; $d -le $side; $d++) {
-    $button = New-Pressable ([string]$d) $d
-    $button.FontSize = 16
-    $button.Padding = New-Gap 7 2 7 2
-    $button.Foreground = $ink
-    $button.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Enter-Digit ([int]$sender.Tag) -Flip:(Test-NoteKey) })
+    $button = New-PadKey ([string]$d) $d ''
+    $button.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Enter-Digit ([int]$sender.Tag.value) -Flip:(Test-NoteKey) })
     [void]$pad.Children.Add($button)
     $buttons += $button
   }
-  $erase = New-Pressable $GLYPH_ERASE 'erase'
-  $erase.FontSize = 16
-  $erase.Padding = New-Gap 9 2 7 2
-  $erase.ToolTip = 'Erase (Backspace); Ctrl+Z undoes'
+  $erase = New-PadKey $GLYPH_ERASE 'erase' 'Erase (Backspace); Ctrl+Z undoes'
+  $erase.Tag.label.Foreground = $dim
+  $erase.Tag.label.FontFamily = $UI_SANS
   $erase.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Clear-Cell })
   [void]$pad.Children.Add($erase)
   $script:padButtons = $buttons
@@ -748,25 +864,13 @@ function Update-Board {
 
 function Update-Chrome {
   $side = $script:n
-  $titleText.Text = "Sudoku ${side}x$side"
-  $heartsText.Inlines.Clear()
   for ($k = 0; $k -lt $MAX_LIVES; $k++) {
-    # A lost life stays as a grey heart: the outline heart has no glyph in these fonts.
-    $heart = New-Object System.Windows.Documents.Run($GLYPH_HEART)
-    $heart.Foreground = $red
-    if ($k -ge $script:lives) { $heart.Foreground = $thinLine }
-    [void]$heartsText.Inlines.Add($heart)
+    # A lost life stays as a faint heart: the outline heart has no glyph in these fonts.
+    if ($k -ge $script:lives) { $heartTexts[$k].Foreground = $lostLife } else { $heartTexts[$k].Foreground = $red }
   }
 
-  foreach ($button in @($answerMode, $notesMode)) {
-    if ($button.Tag -eq $script:mode) { $button.Foreground = $ink; $button.FontWeight = 'Bold' }
-    else { $button.Foreground = $dim; $button.FontWeight = 'Normal' }
-  }
-  foreach ($key in $sizeButtons.Keys) {
-    $button = $sizeButtons[$key]
-    if ($key -eq $side) { $button.Foreground = $ink; $button.FontWeight = 'Bold' }
-    else { $button.Foreground = $dim; $button.FontWeight = 'Normal' }
-  }
+  foreach ($button in @($answerMode, $notesMode)) { Set-ChoiceOn $button ($button.Tag.value -eq $script:mode) }
+  foreach ($key in $sizeButtons.Keys) { Set-ChoiceOn $sizeButtons[$key] ($key -eq $side) }
 
   # A digit already placed everywhere it goes is dimmed on the pad.
   $placed = @{}
@@ -775,15 +879,17 @@ function Update-Chrome {
     if ($v -ne 0 -and -not $script:wrong[$i]) { $placed[$v] = 1 + [int]$placed[$v] }
   }
   for ($d = 1; $d -le $side; $d++) {
-    if ([int]$placed[$d] -ge $side) { $script:padButtons[$d - 1].Foreground = $dim } else { $script:padButtons[$d - 1].Foreground = $ink }
+    $label = $script:padButtons[$d - 1].Tag.label
+    if ([int]$placed[$d] -ge $side) { $label.Foreground = $faint } else { $label.Foreground = $ink }
   }
 
+  # Short enough for the smallest board; how to switch is in the footer.
   $text = $script:status
   $brush = $script:statusBrush
   if (-not $text) {
     $brush = $dim
-    if ($script:mode -eq 'notes') { $text = "Notes $GLYPH_DOT Shift+digit answers $GLYPH_DOT Space switches" }
-    else { $text = "Answer $GLYPH_DOT Shift+digit notes $GLYPH_DOT Space switches" }
+    if ($script:mode -eq 'notes') { $text = "Notes $GLYPH_DOT Shift+digit answers" }
+    else { $text = "Answer $GLYPH_DOT Shift+digit notes" }
   }
   $statusText.Text = $text
   $statusText.Foreground = $brush
@@ -1033,15 +1139,21 @@ foreach ($control in @($answerMode, $notesMode)) {
   $control.Add_MouseLeftButtonUp({
     param($sender, $e)
     $e.Handled = $true
-    if ($script:mode -ne $sender.Tag) { Switch-Mode }
+    if ($script:mode -ne $sender.Tag.value) { Switch-Mode }
   })
 }
 foreach ($side in $sizeButtons.Keys) {
-  $sizeButtons[$side].Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; New-Game ([int]$sender.Tag) })
+  $sizeButtons[$side].Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; New-Game ([int]$sender.Tag.value) })
 }
 $newButton.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; New-Game $script:n })
-$closeText.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
 $closeText.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $win.Close() })
+$gamesMark.Add_MouseLeftButtonUp({
+  param($sender, $e)
+  $e.Handled = $true
+  $isOpen = $switcher.Visibility -ne 'Visible'
+  $switcher.Visibility = if ($isOpen) { 'Visible' } else { 'Collapsed' }
+  Set-UiMarkOn $gamesMark $isOpen
+})
 
 # --- Placement: over the WezTerm window, where the person last dragged it -------
 
@@ -1162,6 +1274,7 @@ function Show-Demo {
 
 function Save-Snapshot {
   if ($SnapshotDemo) { Show-Demo }
+  if ($SnapshotSwitcher) { $switcher.Visibility = 'Visible'; Set-UiMarkOn $gamesMark $true }
   $win.UpdateLayout()
   $dpi = 96.0
   if ($script:me -ne [IntPtr]::Zero) { $dpi = [double][SudokuWin32]::GetDpiForWindow($script:me) }
@@ -1189,6 +1302,8 @@ $win.Add_ContentRendered({
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(150)
 $timer.Add_Tick({
+  # A colour scheme or see-through change made in another window: the brushes repaint themselves.
+  [void](Update-Theme)
   if (-not $hasOwner) { return }
   if (-not [SudokuWin32]::IsWindow($owner)) { $win.Close(); return }
   if ($script:dragging -or $script:resizing -or [SudokuWin32]::IsIconic($owner)) { return }
@@ -1297,6 +1412,16 @@ function Test-Rules {
   # Solving every cell wins.
   for ($i = 0; $i -lt $side * $side; $i++) { if (-not $script:given[$i]) { Select-Only $i; Enter-Digit $script:solution[$i] } }
   $checks.solved = $script:isSolved -and $script:status -like 'Solved*'
+
+  # The layout holds still: the status line is the board's width and trims, so no message
+  # resizes the card; the pad keys are one size; the controls' outer columns share one width,
+  # so New is on the centre line; the chosen mode and size are the ones marked.
+  $checks.statusSpansBoard = $statusText.Width -eq ($side * $LOOKS[$side].cell + 2 * $FRAME_PX) -and $statusText.TextTrimming -eq [System.Windows.TextTrimming]::CharacterEllipsis
+  $padKeys = @($pad.Children)
+  $checks.padKeysOneSize = $padKeys.Count -eq ($side + 1) -and @($padKeys | Where-Object { $_.Width -ne $PAD_KEY_PX -or $_.Height -ne $PAD_KEY_PX -or $_.Margin -ne $padKeys[0].Margin }).Count -eq 0
+  $sides = $controls.ColumnDefinitions
+  $checks.controlsSidesShared = $sides.Count -eq 3 -and $sides[0].SharedSizeGroup -and $sides[0].SharedSizeGroup -eq $sides[2].SharedSizeGroup -and $sides[1].Width.IsStar -and [System.Windows.Controls.Grid]::GetIsSharedSizeScope($stack)
+  $checks.choicesShowState = $answerMode.Tag.on -and -not $notesMode.Tag.on -and $sizeButtons[$side].Tag.on -and @($sizeButtons.Keys | Where-Object { $_ -ne $side -and $sizeButtons[$_].Tag.on }).Count -eq 0
 
   $ok = $true
   foreach ($key in @($checks.Keys)) { if ($checks[$key] -is [bool] -and -not $checks[$key]) { $ok = $false } }
