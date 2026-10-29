@@ -16,6 +16,11 @@
 param(
   [int64]$OwnerHwnd = 0,
   [string]$SessionId = 'default',
+  # Where to open: -View library|course|learned|ask|settings and -CourseId <id>. A Learn that is
+  # already open gets the same through %LOCALAPPDATA%\ClaudePhases\learn-open.json.
+  # (Named apart from $script:view and $script:courseId: PowerShell names ignore case.)
+  [Alias('View')][string]$StartView = '',
+  [Alias('CourseId')][string]$StartCourse = '',
   # Testing aids: check the drawing and the dispatch and exit; or draw a view to a PNG
   # and exit, from a library and config of the snapshot's own (WSL paths).
   [switch]$SelfTest,
@@ -24,7 +29,12 @@ param(
   [string]$SnapshotLibrary = '',
   [string]$SnapshotConfig = '',
   [string]$SnapshotCourse = '',
-  [int]$SnapshotPage = 1
+  [int]$SnapshotPage = 1,
+  # A snapshot at another size than the default (to check the 900x560 minimum, say).
+  [int]$SnapshotWidth = 0,
+  [int]$SnapshotHeight = 0,
+  # A snapshot with the row of other windows open under the header, as the games mark opens it.
+  [switch]$SnapshotGames
 )
 
 $ErrorActionPreference = 'Stop'
@@ -81,6 +91,11 @@ Import-Core
 [void][LearnCore.LearnWin32]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 
+# The colour scheme and see-through every window shares (appearance.json), and the shared pieces.
+. (Join-Path $PSScriptRoot 'Theme.ps1')
+$T = Initialize-Theme 'learn'
+. (Join-Path $PSScriptRoot 'Chrome.ps1')
+
 # --- Where the helper is: this script sits at \\wsl.localhost\<distro>\...\widget ---------
 
 $scriptRoot = [string]$PSScriptRoot
@@ -109,8 +124,8 @@ $GLYPH_ELLIPSIS = [string][char]0x2026
 $GLYPH_PENDING = [string][char]0x25CC
 $GLYPH_UP = [string][char]0x2191
 $GLYPH_DOWN = [string][char]0x2193
-$MIN_WIDTH = 760
-$MIN_HEIGHT = 480
+$MIN_WIDTH = 900
+$MIN_HEIGHT = 560
 $DEFAULT_WIDTH = 1180
 $DEFAULT_HEIGHT = 780
 $MIN_TEXT = 0.8
@@ -119,6 +134,27 @@ $BASE_TEXT = 14.5
 $TOAST_MS = 5000
 $VIEW_NAMES = @('library', 'course', 'learned', 'ask', 'settings')
 $VIEW_LABELS = @{ library = 'Library'; course = 'Course'; learned = 'Learned'; ask = 'Ask'; settings = 'Settings' }
+$VIEW_TIPS = @{
+  library = 'Your courses, and new ones  (Ctrl+1)'
+  course = 'The course you are reading  (Ctrl+2)'
+  learned = 'Everything you have learned  (Ctrl+3)'
+  ask = 'Ask what to learn next  (Ctrl+4)'
+  settings = 'Settings and colours  (Ctrl+5)'
+}
+# How wide the views can get on a wide window, and the lesson page's reading width.
+$CONTENT_MAX = 980
+$READING_MAX = 740
+$CONTENTS_WIDTH = 250
+$CHAT_WIDTH = 360
+# On a narrow window the page keeps at least this much: the chat gives up to 60 first, then the
+# contents up to 50.
+$PAGE_MIN_WIDTH = 420
+$CHAT_MIN_WIDTH = 300
+$CONTENTS_MIN_WIDTH = 200
+$GLYPH_NBSP = [string][char]0x00A0
+$PAGE_GLYPH_WIDTH = 20
+$LEARN_REQUEST_FILE = Join-Path $env:LOCALAPPDATA 'ClaudePhases\learn-open.json'
+$LEARN_REQUEST_MAX_MS = 15000
 $MODEL_CHOICES = @(@{ key = 'sonnet'; label = 'Sonnet' }, @{ key = 'opus'; label = 'Opus' }, @{ key = 'haiku'; label = 'Haiku' })
 
 # --- One window per machine -------------------------------------------------------------
@@ -131,6 +167,8 @@ try {
   $isOwner = $true
 }
 if (-not $isOwner -and -not $SnapshotPath -and -not $SelfTest) {
+  # The open one picks up where to go from the request file, on its timer.
+  Write-LearnRequest $StartView $StartCourse
   $existing = [LearnCore.LearnWin32]::WindowByText($WINDOW_TITLE)
   if ($existing -ne [IntPtr]::Zero) { [void][LearnCore.LearnWin32]::SetForegroundWindow($existing) }
   exit 0
@@ -162,8 +200,9 @@ if (-not $SnapshotPath -and -not $SelfTest) {
     try {
       $saved = $text | ConvertFrom-Json
       if ($null -ne $saved.dx) { $script:offset = @{ dx = [int]$saved.dx; dy = [int]$saved.dy } }
-      $script:width = Get-Clamped ([double]$saved.width) $MIN_WIDTH 4000 $DEFAULT_WIDTH
-      $script:height = Get-Clamped ([double]$saved.height) $MIN_HEIGHT 3000 $DEFAULT_HEIGHT
+      # A size saved under today's minimum (it was smaller once) grows to it.
+      $script:width = Get-Clamped ([Math]::Max([double]$saved.width, [double]$MIN_WIDTH)) $MIN_WIDTH 4000 $DEFAULT_WIDTH
+      $script:height = Get-Clamped ([Math]::Max([double]$saved.height, [double]$MIN_HEIGHT)) $MIN_HEIGHT 3000 $DEFAULT_HEIGHT
       $script:textScale = Get-Clamped ([double]$saved.textScale) $MIN_TEXT $MAX_TEXT 1.0
       if ($VIEW_NAMES -contains [string]$saved.view) { $script:view = [string]$saved.view }
       if ($saved.courseId) { $script:courseId = [string]$saved.courseId }
@@ -172,6 +211,36 @@ if (-not $SnapshotPath -and -not $SelfTest) {
     } catch {}
   }
 }
+
+# A request from another window to show a view or a course: @{ view; courseId }, or $null when
+# there is none or it is older than 15 s (a window that asked and then never opened). Read once.
+function Read-LearnRequest([string]$Path = $LEARN_REQUEST_FILE) {
+  if (-not [System.IO.File]::Exists($Path)) { return $null }
+  $request = $null
+  try {
+    $data = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json
+    $age = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [int64]$data.at
+    if ($age -gt -5000 -and $age -le $LEARN_REQUEST_MAX_MS) {
+      $request = @{ view = [string]$data.view; courseId = [string]$data.courseId }
+    }
+  } catch {}
+  try { [System.IO.File]::Delete($Path) } catch {}
+  return $request
+}
+
+# Where Learn opens: a fresh request, else -View / -CourseId, else where it was left.
+if (-not $SnapshotPath -and -not $SelfTest) {
+  $startRequest = Read-LearnRequest
+  if (-not $startRequest) { $startRequest = @{ view = $StartView; courseId = $StartCourse } }
+  if ($startRequest.courseId) {
+    $script:courseId = [string]$startRequest.courseId
+    $script:view = 'course'
+  }
+  if ($VIEW_NAMES -contains [string]$startRequest.view) { $script:view = [string]$startRequest.view }
+}
+
+if ($SnapshotPath -and $SnapshotWidth -gt 0) { $script:width = [double][Math]::Max($SnapshotWidth, $MIN_WIDTH) }
+if ($SnapshotPath -and $SnapshotHeight -gt 0) { $script:height = [double][Math]::Max($SnapshotHeight, $MIN_HEIGHT) }
 
 function Save-Prefs {
   if ($SnapshotPath -or $SelfTest) { return }
@@ -194,26 +263,31 @@ function Get-TextSize { return [double]$BASE_TEXT * $script:textScale }
 
 # --- Colours and fonts -----------------------------------------------------------------------
 
-function Brush([string]$Hex) { return [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex) }
-$ink = Brush '#E8E6E3'
-$dim = Brush '#9A9894'
-$faint = Brush '#66645F'
-$accent = Brush '#E08A5F'
-$accentSoft = Brush '#55E08A5F'
-$green = Brush '#5FB98A'
-$greenSoft = Brush '#445FB98A'
-$red = Brush '#E0696B'
-$gold = Brush '#E6BE47'
-$blue = Brush '#7FB2E5'
-$blueSoft = Brush '#337FB2E5'
-$surface = Brush '#2B2C31'
-$surface2 = Brush '#232428'
-$hover = Brush '#18FFFFFF'
-$selected = Brush '#26E08A5F'
-$line = Brush '#30FFFFFF'
-$codeBg = Brush '#141518'
-$codeInline = Brush '#22FFFFFF'
-$codeInk = Brush '#E3D9C6'
+# The scheme's roles under the names the views use. They are the shared brushes themselves, so
+# a scheme change repaints everything, and the by-reference checks (Set-Hover) keep working.
+$ink = $T.ink
+$dim = $T.dim
+$faint = $T.faint
+$accent = $T.accent
+$accentSoft = $T.accentSoft
+$onAccent = $T.onAccent
+$green = $T.green
+$greenSoft = $T.greenSoft
+$red = $T.red
+$redSoft = $T.redSoft
+$gold = $T.gold
+$blue = $T.blue
+$blueSoft = $T.blueSoft
+$surface = $T.surface
+$surface2 = $T.surface2
+$buttonFill = $T.button
+$hover = $T.hover
+$pressed = $T.pressed
+$selected = $T.selected
+$line = $T.line
+$codeBg = $T.codeBg
+$codeInline = $T.codeInline
+$codeInk = $T.codeInk
 $noFill = [System.Windows.Media.Brushes]::Transparent
 $monoFont = New-Object System.Windows.Media.FontFamily('Cascadia Mono, Consolas')
 $readFont = New-Object System.Windows.Media.FontFamily('Segoe UI')
@@ -240,120 +314,150 @@ if ($hasOwner) {
   $win.WindowStartupLocation = 'CenterScreen'
 }
 
-# Thin dark scrollbars everywhere in the window (the default ones are light grey blocks).
-$SCROLLBAR_XAML = @'
+# Themed thin scrollbars and tooltips for everything in the window. They and the templates here
+# (the inputs' borders, the text boxes' menu) find their colours as {DynamicResource Theme.<role>},
+# which Theme.ps1 keeps in step with the scheme.
+Add-ThemeResources $win
+
+# The text boxes' right-click menu in the scheme too (the system's is a light box).
+$MENU_XAML = @'
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <Style x:Key="LearnThumb" TargetType="Thumb">
-    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Thumb"><Border CornerRadius="3" Background="#38FFFFFF"/></ControlTemplate></Setter.Value></Setter>
-  </Style>
-  <Style TargetType="ScrollBar">
-    <Setter Property="Width" Value="9"/>
-    <Setter Property="MinWidth" Value="9"/>
-    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ScrollBar">
-      <Track x:Name="PART_Track" Orientation="Vertical" IsDirectionReversed="True"><Track.Thumb><Thumb Style="{StaticResource LearnThumb}" Margin="2,2,1,2"/></Track.Thumb></Track>
+  <Style TargetType="ContextMenu">
+    <Setter Property="OverridesDefaultStyle" Value="True"/>
+    <Setter Property="SnapsToDevicePixels" Value="True"/>
+    <Setter Property="HasDropShadow" Value="False"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ContextMenu">
+      <Border Background="{DynamicResource Theme.popup}" BorderBrush="{DynamicResource Theme.line}" BorderThickness="1" CornerRadius="6" Padding="4">
+        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+      </Border>
     </ControlTemplate></Setter.Value></Setter>
-    <Style.Triggers>
-      <Trigger Property="Orientation" Value="Horizontal">
-        <Setter Property="Width" Value="Auto"/>
-        <Setter Property="MinWidth" Value="0"/>
-        <Setter Property="Height" Value="9"/>
-        <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ScrollBar">
-          <Track x:Name="PART_Track" Orientation="Horizontal"><Track.Thumb><Thumb Style="{StaticResource LearnThumb}" Margin="2,2,2,1"/></Track.Thumb></Track>
-        </ControlTemplate></Setter.Value></Setter>
-      </Trigger>
-    </Style.Triggers>
+  </Style>
+  <Style TargetType="MenuItem">
+    <Setter Property="OverridesDefaultStyle" Value="True"/>
+    <Setter Property="Foreground" Value="{DynamicResource Theme.ink}"/>
+    <Setter Property="FontFamily" Value="Segoe UI"/>
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem">
+      <Border x:Name="Bd" Background="Transparent" CornerRadius="4" Padding="10,4,10,5" MinWidth="120">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Right" Text="{TemplateBinding InputGestureText}" Foreground="{DynamicResource Theme.faint}" Margin="24,0,0,0"/>
+          <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"/>
+        </DockPanel>
+      </Border>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Bd" Property="Background" Value="{DynamicResource Theme.hover}"/></Trigger>
+        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
   </Style>
 </ResourceDictionary>
 '@
-try { $win.Resources.MergedDictionaries.Add([System.Windows.Markup.XamlReader]::Parse($SCROLLBAR_XAML)) } catch { Write-Failure $_ }
+try { $win.Resources.MergedDictionaries.Add([System.Windows.Markup.XamlReader]::Parse($MENU_XAML)) } catch { Write-Failure $_ }
 
+# The card is the window: its fill carries Learn's see-through; text and lines stay solid.
 $card = New-Object System.Windows.Controls.Border
-$card.CornerRadius = New-Object System.Windows.CornerRadius(10)
-$card.Background = Brush '#F51C1D20'
-$card.BorderBrush = Brush '#33FFFFFF'
+$card.CornerRadius = New-Object System.Windows.CornerRadius($UI_CARD_RADIUS)
+$card.Background = $T.cardFill
+$card.BorderBrush = $T.edge
 $card.BorderThickness = New-Object System.Windows.Thickness(1)
-$card.Padding = New-Gap 16 10 16 6
 
 $frame = New-Object System.Windows.Controls.DockPanel
 $frame.LastChildFill = $true
-$card.Child = $frame
+$frame.Margin = New-Gap 16 12 16 12
 
-# Header: the name, the views, a build line, the close mark. Dragging it moves the window.
+# Header: the name, the views, a build line, then the marks: the games (a row of them under the
+# header) and close. Dragging it moves the window.
 $header = New-Object System.Windows.Controls.DockPanel
 $header.Background = $noFill
 $header.Cursor = [System.Windows.Input.Cursors]::SizeAll
-$header.Margin = New-Gap 0 0 0 8
+$header.MinHeight = 28
+$header.Margin = New-Gap 0 0 0 10
 [System.Windows.Controls.DockPanel]::SetDock($header, 'Top')
-$titleText = New-Text 'Learn' $accent
-$titleText.FontFamily = $monoFont
-$titleText.FontSize = 20
-$titleText.FontWeight = 'Bold'
-$titleText.VerticalAlignment = 'Center'
-$titleText.Margin = New-Gap 0 0 18 0
+$titleText = New-UiTitle 'Learn'
+$titleText.Margin = New-Gap 0 0 14 0
 [System.Windows.Controls.DockPanel]::SetDock($titleText, 'Left')
-$closeText = New-Pressable $GLYPH_CLOSE 'close'
-$closeText.FontSize = 14
-$closeText.VerticalAlignment = 'Center'
-$closeText.Margin = New-Gap 12 0 0 0
-[System.Windows.Controls.DockPanel]::SetDock($closeText, 'Right')
+$closeMark = New-UiMark $UI_GLYPHS.close 'Close  (Learn keeps building)'
+$closeMark.Margin = New-Gap 4 0 0 0
+[System.Windows.Controls.DockPanel]::SetDock($closeMark, 'Right')
+$gamesMark = New-UiMark $UI_GLYPHS.games 'The games'
+$gamesMark.Margin = New-Gap 12 0 0 0
+[System.Windows.Controls.DockPanel]::SetDock($gamesMark, 'Right')
+$tabsPanel = New-Object System.Windows.Controls.StackPanel
+$tabsPanel.Orientation = 'Horizontal'
+$tabsPanel.VerticalAlignment = 'Center'
+# Centred, the 13px tabs would sit 2.5 above the 20px title's baseline.
+$tabsPanel.Margin = New-Gap 0 5 0 0
+[System.Windows.Controls.DockPanel]::SetDock($tabsPanel, 'Left')
+$tabTexts = @{}
+foreach ($name in $VIEW_NAMES) {
+  $tab = New-Text $VIEW_LABELS[$name] $dim
+  $tab.Tag = $name
+  $tab.FontFamily = $monoFont
+  $tab.FontSize = 13
+  $tab.Padding = New-Gap 4 2 4 2
+  $tab.Margin = New-Gap 0 0 8 0
+  $tab.VerticalAlignment = 'Center'
+  $tab.Cursor = [System.Windows.Input.Cursors]::Hand
+  $tab.ToolTip = $VIEW_TIPS[$name]
+  $tab.Add_MouseEnter({ param($sender, $e) if ([string]$sender.Tag -ne $script:view) { $sender.Foreground = $ink } })
+  $tab.Add_MouseLeave({ param($sender, $e) if ([string]$sender.Tag -ne $script:view) { $sender.Foreground = $dim } })
+  $tabTexts[$name] = $tab
+  [void]$tabsPanel.Children.Add($tab)
+}
+# What a build is doing. It gets what the tabs leave, at most 40% of the header, and trims.
 $buildChip = New-Text '' $dim
 $buildChip.FontFamily = $monoFont
 $buildChip.FontSize = 11.5
 $buildChip.VerticalAlignment = 'Center'
+$buildChip.HorizontalAlignment = 'Right'
+$buildChip.TextTrimming = 'CharacterEllipsis'
+$buildChip.Padding = New-Gap 4 2 4 2
+$buildChip.Margin = New-Gap 12 5 0 0
 $buildChip.Cursor = [System.Windows.Input.Cursors]::Hand
-$buildChip.ToolTip = 'A course being built: open the Library to see it'
+$buildChip.Visibility = 'Collapsed'
 [System.Windows.Controls.DockPanel]::SetDock($buildChip, 'Right')
-$tabsPanel = New-Object System.Windows.Controls.StackPanel
-$tabsPanel.Orientation = 'Horizontal'
-$tabsPanel.VerticalAlignment = 'Center'
-[System.Windows.Controls.DockPanel]::SetDock($tabsPanel, 'Left')
-$tabTexts = @{}
-foreach ($name in $VIEW_NAMES) {
-  $tab = New-Pressable $VIEW_LABELS[$name] $name
-  $tab.FontFamily = $monoFont
-  $tab.FontSize = 13
-  $tab.Margin = New-Gap 0 0 10 0
-  $tabTexts[$name] = $tab
-  [void]$tabsPanel.Children.Add($tab)
-}
 [void]$header.Children.Add($titleText)
-[void]$header.Children.Add($closeText)
-[void]$header.Children.Add($buildChip)
+[void]$header.Children.Add($closeMark)
+[void]$header.Children.Add($gamesMark)
 [void]$header.Children.Add($tabsPanel)
+[void]$header.Children.Add($buildChip)
 [void]$header.Children.Add((New-Object System.Windows.Controls.Border))
+$header.Add_SizeChanged({ param($sender, $e) $buildChip.MaxWidth = [Math]::Max(80.0, [double]$sender.ActualWidth * 0.4) })
 
-# Footer: a line for short messages, and the resize grip.
+# Under the games mark: the games, a click away.
+$switcher = New-UiSwitcherRow 'learn' $OwnerHwnd $SessionId
+$switcher.HorizontalAlignment = 'Right'
+$switcher.Margin = New-Gap 0 -2 0 10
+$switcher.Visibility = 'Collapsed'
+[System.Windows.Controls.DockPanel]::SetDock($switcher, 'Top')
+
+# Footer: a line for short messages.
 $footer = New-Object System.Windows.Controls.DockPanel
-$footer.Margin = New-Gap 0 4 0 0
+$footer.Margin = New-Gap 0 6 18 0
 [System.Windows.Controls.DockPanel]::SetDock($footer, 'Bottom')
-$grip = New-Text $GLYPH_GRIP $faint
-$grip.FontSize = 12
-$grip.Cursor = [System.Windows.Input.Cursors]::SizeNWSE
-$grip.ToolTip = 'Drag to resize'
-[System.Windows.Controls.DockPanel]::SetDock($grip, 'Right')
 $toastText = New-Text '' $dim
 $toastText.FontSize = 11.5
 $toastText.TextTrimming = 'CharacterEllipsis'
-[void]$footer.Children.Add($grip)
 [void]$footer.Children.Add($toastText)
 
 $body = New-Object System.Windows.Controls.Grid
 [void]$frame.Children.Add($header)
+[void]$frame.Children.Add($switcher)
 [void]$frame.Children.Add($footer)
 [void]$frame.Children.Add($body)
 
 # A full-width line shown when the helper can't run.
 $banner = New-Object System.Windows.Controls.Border
-$banner.Background = Brush '#33E0696B'
-$banner.CornerRadius = New-Object System.Windows.CornerRadius(5)
+$banner.Background = $redSoft
+$banner.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
 $banner.Padding = New-Gap 10 6 10 6
-$banner.Margin = New-Gap 0 0 0 8
+$banner.Margin = New-Gap 0 0 0 10
 $banner.Visibility = 'Collapsed'
 $bannerText = New-Text '' $ink
 $bannerText.TextWrapping = 'Wrap'
 $banner.Child = $bannerText
 [System.Windows.Controls.DockPanel]::SetDock($banner, 'Top')
-$frame.Children.Insert(1, $banner)
+$frame.Children.Insert(2, $banner)
 
 $script:viewHosts = @{}
 foreach ($name in $VIEW_NAMES) {
@@ -362,6 +466,16 @@ foreach ($name in $VIEW_NAMES) {
   $script:viewHosts[$name] = $viewHost
   [void]$body.Children.Add($viewHost)
 }
+
+# The resize grip, in the card's own bottom-right corner (not inside its padding).
+$grip = New-UiGrip 'right'
+$grip.FontSize = 11
+$grip.Margin = New-Gap 0 0 5 3
+
+$cardBody = New-Object System.Windows.Controls.Grid
+[void]$cardBody.Children.Add($frame)
+[void]$cardBody.Children.Add($grip)
+$card.Child = $cardBody
 
 $win.Content = $card
 
@@ -481,28 +595,53 @@ function Receive-HelperEvent($Message) {
   }
 }
 
+# The header's build line: what the newest build is doing, trimmed to fit, the whole of it in
+# the tooltip. A click opens the Library, where the build is.
 function Update-BuildChip {
   $build = if ($script:status) { $script:status.build } else { $null }
-  if (-not $build) { $buildChip.Text = ''; return }
-  switch ([string]$build.state) {
+  $text = ''
+  $tip = ''
+  $topic = [string]$(if ($build) { $build.topic } else { '' })
+  switch ([string]$(if ($build) { $build.state } else { '' })) {
     'running' {
       $count = if ([int]$build.total -gt 0) { " $([int]$build.done)/$([int]$build.total)" } else { '' }
-      $buildChip.Text = "$GLYPH_HALF $(Get-Short ([string]$build.topic) 28)$count"
+      # The count first, so trimming a long topic never hides it.
+      $text = if ($count) { "$GLYPH_HALF$count  $topic" } else { "$GLYPH_HALF $topic" }
+      $tip = if ([int]$build.total -gt 0) { "Building '$topic': $([int]$build.done) of $([int]$build.total) pages written. It carries on if you close this window." } else { "Building '$topic': researching sources. It carries on if you close this window." }
       $buildChip.Foreground = $accent
     }
-    'waiting-picks' { $buildChip.Text = "$GLYPH_EMPTY Pick sources: $(Get-Short ([string]$build.topic) 24)"; $buildChip.Foreground = $gold }
-    'failed' { $buildChip.Text = "$GLYPH_EMPTY Build stopped: $(Get-Short ([string]$build.topic) 24)"; $buildChip.Foreground = $red }
-    'done' { $buildChip.Text = "$GLYPH_CHECK $(Get-Short ([string]$build.message) 36)"; $buildChip.Foreground = $green }
-    default { $buildChip.Text = '' }
+    'waiting-picks' {
+      $text = "$GLYPH_EMPTY Pick sources: $topic"
+      $tip = "'$topic' is waiting for you to pick its sources: click to open the Library."
+      $buildChip.Foreground = $gold
+    }
+    'paused' {
+      $text = "$GLYPH_EMPTY Paused: $topic"
+      $tip = "'$topic' is paused: click to open the Library and carry on."
+      $buildChip.Foreground = $dim
+    }
+    'failed' {
+      $text = "$GLYPH_EMPTY Build stopped: $topic"
+      $tip = "'$topic' stopped: click to open the Library to see why and carry on."
+      $buildChip.Foreground = $red
+    }
+    'done' {
+      $text = "$GLYPH_CHECK $([string]$build.message)"
+      $tip = "$([string]$build.message) Click to open the Library."
+      $buildChip.Foreground = $green
+    }
   }
+  $buildChip.Text = $text
+  $buildChip.ToolTip = if ($tip) { $tip } else { $null }
+  $buildChip.Visibility = if ($text) { 'Visible' } else { 'Collapsed' }
 }
 
 . (Join-Path $PSScriptRoot 'LearnViews.ps1')
 
 # --- Switching views ---------------------------------------------------------------------------
 
-function Show-View([string]$Name) {
-  if ($Name -eq 'course' -and -not $script:courseId) { $Name = 'library' }
+# Shows one view and marks its tab; the one place that does (Open-Course uses it too).
+function Set-ViewShown([string]$Name) {
   $script:view = $Name
   foreach ($key in $VIEW_NAMES) {
     $script:viewHosts[$key].Visibility = if ($key -eq $Name) { 'Visible' } else { 'Collapsed' }
@@ -511,6 +650,11 @@ function Show-View([string]$Name) {
     $tab.FontWeight = if ($key -eq $Name) { 'Bold' } else { 'Normal' }
   }
   $tabTexts['course'].Visibility = if ($script:courseId) { 'Visible' } else { 'Collapsed' }
+}
+
+function Show-View([string]$Name) {
+  if ($Name -eq 'course' -and -not $script:courseId) { $Name = 'library' }
+  Set-ViewShown $Name
   switch ($Name) {
     'library' { Update-Library }
     'course' { Open-Course $script:courseId $null }
@@ -521,17 +665,42 @@ function Show-View([string]$Name) {
   Save-Prefs
 }
 
+$script:firstViewShown = $false
 function Start-FirstView {
+  $script:firstViewShown = $true
   if ($SnapshotPath) { Start-SnapshotView; return }
   Show-View $script:view
+}
+
+# Another window asked for a view or a course (Open-Sibling, /learn <view>): go there.
+function Open-LearnRequest($Request) {
+  $view = [string]$Request.view
+  if ($Request.courseId -and (-not $view -or $view -eq 'course')) { Open-Course ([string]$Request.courseId) $null; return }
+  if ($VIEW_NAMES -contains $view) { Show-View $view }
 }
 
 foreach ($name in $VIEW_NAMES) {
   $tabTexts[$name].Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
   $tabTexts[$name].Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; try { Show-View ([string]$sender.Tag) } catch { Write-Failure $_ } })
 }
-$closeText.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
-$closeText.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $win.Close() })
+$closeMark.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; $win.Close() })
+# The games mark opens and closes the row of other windows; picking one closes it again.
+function Set-SwitcherShown([bool]$Shown) {
+  $switcher.Visibility = if ($Shown) { 'Visible' } else { 'Collapsed' }
+  Set-UiMarkOn $gamesMark $Shown
+}
+$gamesMark.Add_MouseLeftButtonUp({
+  param($sender, $e)
+  $e.Handled = $true
+  Set-SwitcherShown ($switcher.Visibility -ne 'Visible')
+})
+# The row's last chip ends on the close mark's right edge.
+if ($switcher.Children.Count -gt 0) { $switcher.Children[$switcher.Children.Count - 1].Margin = New-Gap 0 0 0 0 }
+# (The chip's own handler marks the click handled, so this one asks to hear handled ones too.)
+$CLOSE_SWITCHER = [System.Windows.Input.MouseButtonEventHandler]{ param($sender, $e) try { Set-SwitcherShown $false } catch { Write-Failure $_ } }
+foreach ($siblingChip in $switcher.Children) {
+  $siblingChip.AddHandler([System.Windows.UIElement]::MouseLeftButtonUpEvent, $CLOSE_SWITCHER, $true)
+}
 $buildChip.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
 $buildChip.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; try { Show-View 'library' } catch { Write-Failure $_ } })
 
@@ -559,6 +728,7 @@ $win.Add_PreviewKeyDown({
 function Set-TextScale([double]$Scale) {
   $script:textScale = [Math]::Max([double]$MIN_TEXT, [Math]::Min([double]$MAX_TEXT, [Math]::Round($Scale, 2)))
   Show-Toast ("Text size {0}%" -f [int]($script:textScale * 100))
+  if ($script:ui.textSizeValue) { $script:ui.textSizeValue.Text = ("{0}%" -f [int]($script:textScale * 100)) }
   Update-TextSize
   Save-Prefs
 }
@@ -696,6 +866,43 @@ if ($SelfTest) {
   [void](New-Object System.Windows.Documents.BlockUIContainer($docButton))
   $docButton.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Button]::ClickEvent)))
   $checks.docButtonClicks = $script:docClicked -eq 'topic' -and $docButton -is [System.Windows.Controls.Button]
+  # Custom colours: # optional, six hex digits, upper-cased; anything else is not a colour.
+  $checks.colorTextBare = (Get-ColorText '1c1d20') -eq '#1C1D20'
+  $checks.colorTextHash = (Get-ColorText ' #e08a5f ') -eq '#E08A5F'
+  $checks.colorTextBad = ($null -eq (Get-ColorText '#12345')) -and ($null -eq (Get-ColorText '#GGGGGG'))
+  # Deep links: a fresh request is read once and deleted; one older than 15 s is ignored.
+  $requestPath = Join-Path $env:TEMP "learn-open-selftest-$PID.json"
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  [System.IO.File]::WriteAllText($requestPath, ('{{"view":"settings","courseId":"c1","at":{0}}}' -f $now))
+  $fresh = Read-LearnRequest $requestPath
+  $checks.requestFresh = $fresh -and $fresh.view -eq 'settings' -and $fresh.courseId -eq 'c1' -and -not [System.IO.File]::Exists($requestPath)
+  [System.IO.File]::WriteAllText($requestPath, ('{{"view":"ask","at":{0}}}' -f ($now - 60000)))
+  $checks.requestStale = ($null -eq (Read-LearnRequest $requestPath)) -and -not [System.IO.File]::Exists($requestPath)
+  $checks.requestMissing = $null -eq (Read-LearnRequest $requestPath)
+  # Buttons: text on the accent is the scheme's onAccent; a secondary one is the text colour.
+  $checks.primaryOnAccent = (New-Button 'Go' 'primary').Child.Foreground -eq $onAccent
+  $checks.secondaryInk = (New-Button 'Go' 'secondary').Child.Foreground -eq $ink
+  # Mark learned stays short: the names go in the tooltip.
+  $offer = New-OfferButton @('a', 'b')
+  $offerButton = $offer.Child.Children[0]
+  $checks.offerLabel = $offerButton.Content.Text -eq 'Mark 2 learned' -and ([string]$offerButton.ToolTip).Contains('a, b')
+  # An armed remove says "remove?" in red, then goes back to its own words.
+  $armedLink = New-Pressable 'remove' $null $faint
+  [void](Test-Armed 'selftest' $armedLink)
+  $wasArmed = $armedLink.Text -eq 'remove?' -and $armedLink.Foreground -eq $red
+  Reset-Armed
+  $checks.armedReverts = $wasArmed -and $armedLink.Text -eq 'remove' -and $armedLink.Foreground -eq $faint
+  # Course columns: their own widths on a wide window; on a narrow one the chat gives up to 60,
+  # then the contents up to 50, so the page keeps 420 where it can.
+  $wide = Get-CourseColumns 1146 $true
+  $narrow = Get-CourseColumns 866 $true
+  $bare = Get-CourseColumns 866 $false
+  $checks.columnsWide = $wide.contents -eq 250 -and $wide.chat -eq 360
+  $checks.columnsNarrow = $narrow.chat -eq 300 -and $narrow.contents -eq 200
+  $checks.columnsNoContents = $bare.contents -eq 0 -and $bare.chat -eq 360
+  # A chip is a 22-high pill whose label is centred.
+  $chip = New-Chip 'x' $null $false
+  $checks.chipHeight = $chip.Height -eq 22 -and $chip.Child.VerticalAlignment -eq 'Center'
   $failed = @($checks.Keys | Where-Object { -not $checks[$_] })
   $checks.ok = $failed.Count -eq 0
   $checks.failed = $failed
@@ -708,6 +915,7 @@ if ($SelfTest) {
 
 $script:snapshotAt = $null
 function Start-SnapshotView {
+  if ($SnapshotGames) { Set-SwitcherShown $true }
   switch ($SnapshotView) {
     'library' { Show-View 'library' }
     'learned' { Show-View 'learned' }
@@ -715,8 +923,7 @@ function Start-SnapshotView {
     'settings' { Show-View 'settings' }
     default {
       $script:courseId = $SnapshotCourse
-      $script:view = 'course'
-      foreach ($key in $VIEW_NAMES) { $script:viewHosts[$key].Visibility = if ($key -eq 'course') { 'Visible' } else { 'Collapsed' } }
+      Set-ViewShown 'course'
       Open-Course $SnapshotCourse $SnapshotPage
     }
   }
@@ -753,6 +960,9 @@ $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(100)
 $script:ownerTick = 0
 $timer.Add_Tick({
+  # A colour scheme or see-through change made in another window: the brushes repaint themselves;
+  # the Appearance settings move their swatch ring, bars and colour boxes to match.
+  try { if (Update-Theme) { Update-AppearanceSection } } catch { Write-Failure $_ }
   try { Step-Helper } catch { Write-Failure $_ }
   try { Step-Views } catch { Write-Failure $_ }
   if ($toastText.Text -and [DateTime]::UtcNow -gt $script:toastUntil) { $toastText.Text = '' }
@@ -768,6 +978,13 @@ $timer.Add_Tick({
   }
   if ($SnapshotPath) { return }
   $script:ownerTick++
+  # Every half second: has another window asked for a view or a course?
+  if ($script:firstViewShown -and $script:ownerTick % 5 -eq 0) {
+    try {
+      $request = Read-LearnRequest
+      if ($request) { Open-LearnRequest $request }
+    } catch { Write-Failure $_ }
+  }
   if (-not $hasOwner -or $script:ownerTick % 2 -ne 0) { return }
   if (-not [LearnCore.LearnWin32]::IsWindow($owner)) { $win.Close(); return }
   if ($script:moving -or $script:resizing -or [LearnCore.LearnWin32]::IsIconic($owner)) { return }
@@ -794,6 +1011,14 @@ if ($SnapshotPath) {
 $timer.Start()
 $app = New-Object System.Windows.Application
 $app.ShutdownMode = 'OnMainWindowClose'
+# Something that throws while drawing (not in a handler of ours) is logged with its .NET stack
+# before the window goes, so it can be found.
+$app.Add_DispatcherUnhandledException({
+  param($sender, $e)
+  $text = "$([DateTime]::Now.ToString('s')) unhandled: $($e.Exception.ToString())`n"
+  try { Add-Content -Path (Join-Path $env:TEMP 'learn-error.log') -Value $text -Encoding ASCII } catch {}
+  [Console]::Error.WriteLine($text)
+})
 [void]$app.Run($win)
 $timer.Stop()
 try { $mutex.ReleaseMutex() } catch {}

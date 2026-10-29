@@ -1,6 +1,12 @@
 # Learn's drawing helpers, dot-sourced by Learn.ps1: small controls, and the blocks the
 # helper sends (a lesson page, a chat reply) drawn into a WPF FlowDocument. Kept to ASCII:
 # glyphs come from code points. Script state is always $script:, never a bare name.
+#
+# Every colour is a shared brush from Theme.ps1 (Learn.ps1 maps the roles to $ink, $dim and the
+# rest), so a change of colour scheme repaints what is already drawn. The numbers follow the
+# visual system in Chrome.ps1: controls radius 6, chips a pill 22 high, inputs and buttons 30.
+# A control's own state (hover, on, kind) rides in its child's Tag or its Resources, because
+# its Tag carries its click (Set-Click).
 
 function New-Text([string]$Text, $Foreground) {
   $block = New-Object System.Windows.Controls.TextBlock
@@ -13,29 +19,88 @@ function New-Gap([double]$Left, [double]$Top, [double]$Right, [double]$Bottom) {
   return New-Object System.Windows.Thickness($Left, $Top, $Right, $Bottom)
 }
 
-# Text that acts as a button. It never takes focus, so typing stays where it was.
+# Text that acts as a button. It never takes focus, so typing stays where it was. On hover a
+# dim or faint one turns to the text colour; a coloured one (a link, a status) is underlined.
 function New-Pressable([string]$Text, $Tag, $Foreground = $null) {
   $fore = if ($Foreground) { $Foreground } else { $dim }
   $block = New-Text $Text $fore
   $block.Tag = $Tag
   $block.Cursor = [System.Windows.Input.Cursors]::Hand
   $block.Padding = New-Gap 4 2 4 2
-  $block.Add_MouseEnter({ param($sender, $e) if (-not $sender.IsEnabled) { return }; $sender.TextDecorations = [System.Windows.TextDecorations]::Underline })
-  $block.Add_MouseLeave({ param($sender, $e) $sender.TextDecorations = $null })
+  $block.Add_MouseEnter({ param($sender, $e) Set-PressableHot $sender $true })
+  $block.Add_MouseLeave({ param($sender, $e) Set-PressableHot $sender $false })
   return $block
 }
 
-function New-Button([string]$Text, $Background, $Foreground) {
+function Set-PressableHot($Block, [bool]$Hot) {
+  if ($Hot) {
+    if (-not $Block.IsEnabled) { return }
+    $rest = if ($Block.Foreground -eq $dim) { 'dim' } elseif ($Block.Foreground -eq $faint) { 'faint' } else { '' }
+    if ($rest) {
+      $Block.Resources['pressRest'] = $rest
+      $Block.Foreground = $ink
+    } else {
+      $Block.TextDecorations = [System.Windows.TextDecorations]::Underline
+    }
+    return
+  }
+  $Block.TextDecorations = $null
+  $rest = [string]$Block.Resources['pressRest']
+  if (-not $rest) { return }
+  $Block.Resources.Remove('pressRest')
+  # Something that recoloured it meanwhile (an armed "remove?") keeps its colour.
+  if ($Block.Foreground -eq $ink) { $Block.Foreground = if ($rest -eq 'dim') { $dim } else { $faint } }
+}
+
+# A button: 'primary' (the accent), 'good' (green: something becomes learned) or 'secondary'
+# (a quiet fill). 30 high, so it lines up with the inputs beside it.
+function New-Button([string]$Text, [string]$Kind = 'secondary') {
   $button = New-Object System.Windows.Controls.Border
-  $button.Background = $Background
-  $button.CornerRadius = New-Object System.Windows.CornerRadius(5)
-  $button.Padding = New-Gap 12 5 12 6
+  $button.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+  $button.Padding = New-Gap 12 0 12 1
+  $button.MinHeight = 30
   $button.Cursor = [System.Windows.Input.Cursors]::Hand
-  $label = New-Text $Text $Foreground
-  $label.FontWeight = 'Bold'
+  $button.VerticalAlignment = 'Top'
+  $label = New-Text $Text $ink
   $label.HorizontalAlignment = 'Center'
+  $label.VerticalAlignment = 'Center'
+  $label.IsHitTestVisible = $false
+  $label.Tag = @{ kind = $Kind; enabled = $true }
   $button.Child = $label
+  Set-ButtonKind $button $Kind
+  $button.Add_MouseEnter({ param($sender, $e) Set-ButtonLook $sender 'hot' })
+  $button.Add_MouseLeave({ param($sender, $e) Set-ButtonLook $sender 'rest' })
+  $button.Add_MouseLeftButtonDown({ param($sender, $e) Set-ButtonLook $sender 'down' })
+  $button.Add_PreviewMouseLeftButtonUp({ param($sender, $e) Set-ButtonLook $sender 'hot' })
   return $button
+}
+
+function Set-ButtonKind($Button, [string]$Kind) {
+  $state = $Button.Child.Tag
+  $state.kind = $Kind
+  switch ($Kind) {
+    'primary' { $Button.Child.Foreground = $onAccent; $Button.Child.FontWeight = 'Bold' }
+    'good' { $Button.Child.Foreground = $onAccent; $Button.Child.FontWeight = 'Bold' }
+    default { $Button.Child.Foreground = $ink; $Button.Child.FontWeight = 'SemiBold' }
+  }
+  Set-ButtonLook $Button 'rest'
+}
+
+function Set-ButtonLook($Button, [string]$Look) {
+  $state = $Button.Child.Tag
+  if (-not $state.enabled) { $Look = 'rest' }
+  switch ($state.kind) {
+    'primary' { $Button.Background = $accent }
+    'good' { $Button.Background = $green }
+    default { $Button.Background = if ($Look -eq 'hot') { $pressed } elseif ($Look -eq 'down') { $line } else { $buttonFill } }
+  }
+  $Button.Opacity = if (-not $state.enabled) { 0.45 } elseif ($state.kind -eq 'secondary') { 1.0 } elseif ($Look -eq 'hot') { 0.88 } elseif ($Look -eq 'down') { 0.76 } else { 1.0 }
+}
+
+function Set-ButtonEnabled($Button, [bool]$Enabled) {
+  $Button.Child.Tag.enabled = $Enabled
+  $Button.Cursor = if ($Enabled) { [System.Windows.Input.Cursors]::Hand } else { [System.Windows.Input.Cursors]::Arrow }
+  Set-ButtonLook $Button 'rest'
 }
 
 function Set-ButtonText($Button, [string]$Text) { $Button.Child.Text = $Text }
@@ -43,10 +108,14 @@ function Set-ButtonText($Button, [string]$Text) { $Button.Child.Text = $Text }
 # A button inside a chat or a page. It has to be a real Button: the document's text
 # selection takes the mouse on a press, so a plain Border there never hears the release.
 $DOC_BUTTON_XAML = @'
-<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TargetType="Button">
-  <Border Background="{TemplateBinding Background}" CornerRadius="5" Padding="{TemplateBinding Padding}">
+<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="Button">
+  <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
     <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
   </Border>
+  <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.88"/></Trigger>
+    <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.76"/></Trigger>
+  </ControlTemplate.Triggers>
 </ControlTemplate>
 '@
 $script:docButtonTemplate = [System.Windows.Markup.XamlReader]::Parse($DOC_BUTTON_XAML)
@@ -60,9 +129,10 @@ function New-DocButton([string]$Text, $Background, $Foreground, [scriptblock]$Ac
   $button.HorizontalAlignment = 'Left'
   $button.Cursor = [System.Windows.Input.Cursors]::Hand
   $button.Focusable = $false
+  [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($button, $true)
   $label = New-Text $Text $Foreground
-  $label.FontWeight = 'Bold'
-  $label.FontSize = 12
+  $label.FontWeight = 'SemiBold'
+  $label.FontSize = 13
   $label.TextWrapping = 'Wrap'
   $button.Content = $label
   $button.Tag = @{ action = $Action; data = $Data }
@@ -74,6 +144,18 @@ function New-DocButton([string]$Text, $Background, $Foreground, [scriptblock]$Ac
   return $button
 }
 
+# A doc button as a block of its own. It sits in a DockPanel docked left, so it is as wide as
+# its label (wrapping only when the column is narrower), not a bar the width of the column.
+function New-DocBlock($Button, [double]$Top = 2, [double]$Bottom = 4) {
+  $dock = New-Object System.Windows.Controls.DockPanel
+  $dock.LastChildFill = $false
+  [System.Windows.Controls.DockPanel]::SetDock($Button, 'Left')
+  [void]$dock.Children.Add($Button)
+  $holder = New-Object System.Windows.Documents.BlockUIContainer($dock)
+  $holder.Margin = New-Gap 0 $Top 0 $Bottom
+  return $holder
+}
+
 # After a click: a new label and colour, and no second click.
 function Set-DocButtonDone($Button, [string]$Text, $Background) {
   $Button.Content.Text = $Text
@@ -82,60 +164,118 @@ function Set-DocButtonDone($Button, [string]$Text, $Background) {
   $Button.Tag = @{ action = $null; data = $null }
 }
 
-# A chip: a rounded label, filled when on.
+# Done for good: plain green text where the button was, its names still in the tooltip.
+function Set-DocButtonLearned($Button) {
+  Set-DocButtonDone $Button "$GLYPH_CHECK Learned" $noFill
+  $Button.Content.Foreground = $green
+  $Button.Padding = New-Gap 0 5 0 6
+  $Button.IsEnabled = $false
+}
+
+# A chip: a pill 22 high, filled when on. Hovering an off chip lights it.
 function New-Chip([string]$Text, $Tag, [bool]$IsOn, $OnFill = $null) {
   $chip = New-Object System.Windows.Controls.Border
-  $chip.CornerRadius = New-Object System.Windows.CornerRadius(10)
-  $chip.Padding = New-Gap 9 2 9 3
+  $chip.CornerRadius = New-Object System.Windows.CornerRadius(11)
+  $chip.Height = 22
+  $chip.Padding = New-Gap 9 0 9 1
   $chip.Margin = New-Gap 0 0 6 6
+  $chip.VerticalAlignment = 'Center'
   $chip.Cursor = [System.Windows.Input.Cursors]::Hand
   $chip.Tag = $Tag
   $chip.BorderThickness = New-Object System.Windows.Thickness(1)
   $label = New-Text $Text $ink
   $label.FontSize = 11.5
+  $label.VerticalAlignment = 'Center'
+  $label.IsHitTestVisible = $false
+  $label.Tag = @{ on = $IsOn; fill = $OnFill; border = $null; hot = $false }
   $chip.Child = $label
-  Set-ChipOn $chip $IsOn $OnFill
+  $chip.Add_MouseEnter({ param($sender, $e) $sender.Child.Tag.hot = $true; Update-Chip $sender })
+  $chip.Add_MouseLeave({ param($sender, $e) $sender.Child.Tag.hot = $false; Update-Chip $sender })
+  Update-Chip $chip
   return $chip
 }
 
-function Set-ChipOn($Chip, [bool]$IsOn, $OnFill = $null) {
-  if ($IsOn) {
-    $Chip.Background = if ($OnFill) { $OnFill } else { $accentSoft }
+function Update-Chip($Chip) {
+  $state = $Chip.Child.Tag
+  if ($state.on) {
+    $Chip.Background = if ($state.fill) { $state.fill } else { $accentSoft }
     $Chip.BorderBrush = $Chip.Background
     $Chip.Child.Foreground = $ink
+    $Chip.Opacity = if ($state.hot) { 0.85 } else { 1.0 }
   } else {
-    $Chip.Background = $noFill
-    $Chip.BorderBrush = $line
-    $Chip.Child.Foreground = $dim
+    $Chip.Background = if ($state.hot) { $hover } else { $noFill }
+    $Chip.BorderBrush = if ($state.border) { $state.border } else { $line }
+    $Chip.Child.Foreground = if ($state.hot) { $ink } else { $dim }
+    $Chip.Opacity = 1.0
   }
 }
 
-# A text box with a grey hint shown while it is empty. Returns @{ holder; box }.
-function New-InputBox([string]$Hint, [bool]$Multiline = $false) {
+function Set-ChipOn($Chip, [bool]$IsOn, $OnFill = $null) {
+  $Chip.Child.Tag.on = $IsOn
+  $Chip.Child.Tag.fill = $OnFill
+  Update-Chip $Chip
+}
+
+# An off chip's outline in another colour (a concept you have read but not learned).
+function Set-ChipBorder($Chip, $Border) {
+  $Chip.Child.Tag.border = $Border
+  Update-Chip $Chip
+}
+
+# A rounded text box: a quiet fill, a line border that lightens on hover and turns to the
+# accent while you type (instead of the system's blue). The grey hint is in the box's own font,
+# where the typed text starts, trimmed with an ellipsis when the box is narrow.
+$INPUT_XAML = @'
+<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="TextBox">
+  <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" SnapsToDevicePixels="True">
+    <ScrollViewer x:Name="PART_ContentHost" Focusable="False" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+  </Border>
+  <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Theme.faint}"/></Trigger>
+    <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Theme.accent}"/></Trigger>
+  </ControlTemplate.Triggers>
+</ControlTemplate>
+'@
+$script:inputTemplate = [System.Windows.Markup.XamlReader]::Parse($INPUT_XAML)
+$INPUT_HEIGHT = 30
+
+# Returns @{ holder; box }. -Mono for paths and colours.
+function New-InputBox([string]$Hint, [bool]$Multiline = $false, [switch]$Mono) {
+  $font = if ($Mono) { $monoFont } else { $readFont }
   $grid = New-Object System.Windows.Controls.Grid
   $box = New-Object System.Windows.Controls.TextBox
+  $box.Template = $script:inputTemplate
   $box.Background = $surface2
   $box.Foreground = $ink
   $box.CaretBrush = $ink
   $box.SelectionBrush = $accent
   $box.BorderBrush = $line
   $box.BorderThickness = New-Object System.Windows.Thickness(1)
-  $box.Padding = New-Gap 6 5 6 5
-  $box.FontFamily = $readFont
+  $box.Padding = New-Gap 8 5 8 5
+  $box.FontFamily = $font
   $box.FontSize = 13
   $box.VerticalContentAlignment = 'Center'
+  $box.Height = $INPUT_HEIGHT
   if ($Multiline) {
+    $box.Height = [double]::NaN
     $box.AcceptsReturn = $true
     $box.TextWrapping = 'Wrap'
     $box.VerticalContentAlignment = 'Top'
     $box.VerticalScrollBarVisibility = 'Auto'
   }
   $hintText = New-Text $Hint $faint
-  $hintText.FontFamily = $readFont
+  $hintText.FontFamily = $font
   $hintText.FontSize = 13
-  $hintText.Margin = New-Gap 9 6 6 0
+  $hintText.TextTrimming = 'CharacterEllipsis'
   $hintText.IsHitTestVisible = $false
-  $hintText.VerticalAlignment = if ($Multiline) { 'Top' } else { 'Center' }
+  # The border (1), the padding (8) and the text box's own 2 before the caret.
+  if ($Multiline) {
+    $hintText.Margin = New-Gap 11 6 9 0
+    $hintText.VerticalAlignment = 'Top'
+  } else {
+    $hintText.Margin = New-Gap 11 0 9 0
+    $hintText.VerticalAlignment = 'Center'
+  }
   $box.Tag = $hintText
   $box.Add_TextChanged({ param($sender, $e) $sender.Tag.Visibility = if ($sender.Text.Length -eq 0) { 'Visible' } else { 'Collapsed' } })
   [void]$grid.Children.Add($box)
@@ -217,6 +357,7 @@ function Add-Inlines($Target, $Inlines, [double]$Size) {
       $link.TextDecorations = $null
       $link.Cursor = [System.Windows.Input.Cursors]::Hand
       $link.ToolTip = if ($item.time) { 'Watch from here' } else { [string]$item.link }
+      Add-LinkHover $link
       $link.Add_Click({ param($sender, $e) try { if ($sender.NavigateUri) { Open-Link $sender.NavigateUri.AbsoluteUri } } catch { Write-Failure $_ } })
       [void]$Target.Add($link)
     } else {
@@ -224,6 +365,12 @@ function Add-Inlines($Target, $Inlines, [double]$Size) {
       [void]$Target.Add($run)
     }
   }
+}
+
+# A link in a document is underlined while the pointer is on it.
+function Add-LinkHover($Link) {
+  $Link.Add_MouseEnter({ param($sender, $e) $sender.TextDecorations = [System.Windows.TextDecorations]::Underline })
+  $Link.Add_MouseLeave({ param($sender, $e) $sender.TextDecorations = $null })
 }
 
 function New-Paragraph([double]$Size, $Foreground) {
@@ -240,16 +387,24 @@ function New-CodeBlock([string]$Text, [string]$Lang, [double]$Size) {
   $section.Margin = New-Gap 0 2 0 ($Size * 0.9)
   $top = New-Object System.Windows.Documents.Paragraph
   $top.Margin = New-Gap 0 0 0 0
-  $top.Padding = New-Gap 10 4 10 0
+  $top.Padding = New-Gap 12 4 12 0
   $top.Background = $codeBg
   $top.FontSize = $Size * 0.78
   $top.TextAlignment = 'Right'
-  if ($Lang) { [void]$top.Inlines.Add((New-Object System.Windows.Documents.Run("$Lang   "))) }
+  if ($Lang) {
+    [void]$top.Inlines.Add((New-Object System.Windows.Documents.Run($Lang)))
+    # A fixed gap, not spaces, so it stays the same in any font and size.
+    $gap = New-Object System.Windows.Controls.Border
+    $gap.Width = 12
+    [void]$top.Inlines.Add((New-Object System.Windows.Documents.InlineUIContainer($gap)))
+  }
   $top.Foreground = $faint
   $copy = New-Object System.Windows.Documents.Hyperlink((New-Object System.Windows.Documents.Run('copy')))
   $copy.Foreground = $dim
   $copy.TextDecorations = $null
   $copy.Cursor = [System.Windows.Input.Cursors]::Hand
+  $copy.ToolTip = 'Copy the code'
+  Add-LinkHover $copy
   $copy.Tag = $Text
   $copy.Add_Click({
     param($sender, $e)
