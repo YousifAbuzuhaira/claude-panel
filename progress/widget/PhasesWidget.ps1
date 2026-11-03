@@ -807,6 +807,19 @@ function New-LearnLink([string]$Text, [string]$View, [string]$CourseId) {
   return $link
 }
 
+# Learn's link, and beside it the same in the browser (the web version, served from WSL).
+function New-LearnLinks([string]$Text, [string]$View, [string]$CourseId) {
+  $row = New-Object System.Windows.Controls.StackPanel
+  $row.Orientation = 'Horizontal'
+  $row.HorizontalAlignment = 'Left'
+  [void]$row.Children.Add((New-LearnLink $Text $View $CourseId))
+  $web = New-Link ("In the browser " + [string][char]0x2197) 'Open Learn in your web browser instead'
+  $web.Margin = New-Gap 16 0 0 0
+  $web.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Open-InBrowser 'learn' })
+  [void]$row.Children.Add($web)
+  return $row
+}
+
 function Get-BuildColor([string]$State) {
   switch ($State) { 'failed' { return $red } 'waiting-picks' { return $gold } 'done' { return $green } default { return $accent } }
 }
@@ -816,7 +829,7 @@ function Add-LearnRows($Learn) {
   $course = if ($Learn) { $Learn.course } else { $null }
   if (-not $build -and -not $course) {
     Add-EmptyState 'No course yet' 'Courses Claude builds from free videos and docs, to read while it works.'
-    $link = New-LearnLink "Open Learn $GLYPH_ARROW" ''
+    $link = New-LearnLinks "Open Learn $GLYPH_ARROW" ''
     $link.Margin = New-Gap 0 6 0 0
     [void]$body.Children.Add($link)
     return
@@ -860,7 +873,7 @@ function Add-LearnRows($Learn) {
     [void]$body.Children.Add($line)
   }
   # The course this tab names, not whichever Learn had open last.
-  if ($course) { $link = New-LearnLink "Carry on reading $GLYPH_ARROW" 'course' ([string]$course.id) } else { $link = New-LearnLink "Open Learn $GLYPH_ARROW" '' }
+  if ($course) { $link = New-LearnLinks "Carry on reading $GLYPH_ARROW" 'course' ([string]$course.id) } else { $link = New-LearnLinks "Open Learn $GLYPH_ARROW" '' }
   $link.Margin = New-Gap $MARK_W 6 0 0
   [void]$body.Children.Add($link)
 }
