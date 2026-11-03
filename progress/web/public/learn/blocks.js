@@ -2,8 +2,10 @@
 //   { t: 'h', level, inlines } | { t: 'p', inlines } | { t: 'code', lang, text }
 //   | { t: 'ul' | 'ol', start, items: [{ depth, ordered, inlines }] } | { t: 'quote', inlines }
 //   | { t: 'hr' } | { t: 'table', rows: [[inlines]] }   (the first row is the header)
+//   | { t: 'diagram', ... }   (laid out by learn/diagram.mjs, drawn by ./diagram.js)
 // Inlines: { s, b?, i?, code?, link?, time?, added?, sec? }. Unknown block types are skipped.
 import { GLYPH, h, isHttp, toast } from './core.js';
+import { renderDiagram } from './diagram.js';
 
 const ADDED_TIP = 'Claude added this: it is not in the sources';
 
@@ -95,6 +97,7 @@ export function renderBlocks(blocks) {
       case 'ol': out.push(renderList(block)); break;
       case 'quote': out.push(h('blockquote', null, renderInlines(block.inlines))); break;
       case 'hr': out.push(h('hr')); break;
+      case 'diagram': out.push(renderDiagram(block)); break;
       case 'table': {
         const table = renderTable(block);
         if (table) out.push(table);

@@ -1,5 +1,5 @@
 // The pure parts of Learn's helper: Markdown, the catalogue, the overlap, captions and
-// pages, Claude's stream, settings. node --test learn/tests/
+// pages, Claude's stream, settings, diagrams. node --test learn/tests/
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
@@ -8,6 +8,7 @@ import {
 } from '../catalogue.mjs';
 import { claudeArgs, readStreamLine } from '../claude.mjs';
 import { readMarkers } from '../chat.mjs';
+import { cleanLabel, diagramBlock, parseFlow, parseSequence, wrapLabel } from '../diagram.mjs';
 import { markdownToBlocks, parseInline } from '../markdown.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { normalizeSettings, toWslPath } from '../settings.mjs';
@@ -257,5 +258,82 @@ describe('settings', () => {
     assert.equal(settings.models.build, 'sonnet');
     assert.equal(settings.models.chat, 'opus');
     assert.deepEqual(settings.workFolders, ['/a']);
+  });
+});
+
+describe('diagrams', () => {
+  const overlaps = (p, q) => p.x < q.x + q.w && q.x < p.x + p.w && p.y < q.y + q.h && q.y < p.y + p.h;
+
+  test('flowchart: shapes, labels, chains and & groups', () => {
+    const flow = parseFlow('flowchart LR\n  A[Browser] -->|HTTPS| B(API)\n  B --> C{Cached?} -- yes --> D[(Postgres)]\n  B & C -.-> E([Queue]):::hot\n  %% a comment\n  classDef hot fill:#f00');
+    assert.equal(flow.dir, 'LR');
+    assert.deepEqual([...flow.nodes.values()].map(node => [node.id, node.shape, node.label]), [
+      ['A', 'rect', 'Browser'], ['B', 'round', 'API'], ['C', 'decision', 'Cached?'], ['D', 'db', 'Postgres'], ['E', 'stadium', 'Queue'],
+    ]);
+    assert.deepEqual(flow.edges.map(edge => `${edge.from}>${edge.to}:${edge.label}:${edge.dash}`), ['A>B:HTTPS:0', 'B>C::0', 'C>D:yes:0', 'B>E::1', 'C>E::1']);
+  });
+
+  test('flowchart: graph, semicolons, thick and open edges, a node named before it is shaped', () => {
+    const flow = parseFlow('graph TD; a --> b; b ==> c; c --- a; b[Shaped later]');
+    assert.equal(flow.dir, 'TD');
+    assert.equal(flow.nodes.get('b').label, 'Shaped later');
+    assert.deepEqual(flow.edges.map(edge => [edge.thick, edge.head]), [[0, 1], [1, 1], [0, 0]]);
+  });
+
+  test('a laid-out flowchart has no overlapping boxes and sits inside its size, cycles included', () => {
+    const block = diagramBlock('flowchart TD\nA[Start] --> B[Load] --> C{OK?}\nC -- no --> B\nC -- yes --> D[Done]\nA --> D\nB --> E[Log] --> D');
+    assert.equal(block.t, 'diagram');
+    assert.equal(block.kind, 'flow');
+    assert.equal(block.nodes.length, 5);
+    for (let i = 0; i < block.nodes.length; i++) for (let j = i + 1; j < block.nodes.length; j++) assert.ok(!overlaps(block.nodes[i], block.nodes[j]), `${block.nodes[i].lines} / ${block.nodes[j].lines}`);
+    for (const node of block.nodes) assert.ok(node.x >= 0 && node.y >= 0 && node.x + node.w <= block.w && node.y + node.h <= block.h);
+    for (const edge of block.edges) assert.ok(edge.pts.length >= 2);
+    // The back edge (no) still points at B: its last point touches B's box.
+    const b = block.nodes[1];
+    const back = block.edges.find(edge => edge.label && edge.label.lines[0] === 'no');
+    const [x, y] = back.pts.at(-1);
+    assert.ok(x >= b.x - 1 && x <= b.x + b.w + 1 && y >= b.y - 1 && y <= b.y + b.h + 1);
+  });
+
+  test('top-down ranks run downwards, left-right ranks run across, bottom-up is mirrored', () => {
+    const down = diagramBlock('flowchart TD\nA --> B');
+    assert.ok(down.nodes[1].y > down.nodes[0].y);
+    const across = diagramBlock('flowchart LR\nA --> B');
+    assert.ok(across.nodes[1].x > across.nodes[0].x);
+    const up = diagramBlock('flowchart BT\nA --> B');
+    assert.ok(up.nodes[1].y < up.nodes[0].y);
+  });
+
+  test('sequence: participants, replies, self messages, notes and frames', () => {
+    const sequence = parseSequence('sequenceDiagram\nautonumber\nparticipant P as Panel\nP->>W: run\nW-->>P: link\nloop until done\nP->>P: poll\nend\nNote over P,W: on Windows\nalt good\nP-xW: open\nelse bad\nP->>P: log\nend');
+    assert.deepEqual([...sequence.parts.values()].map(part => part.label), ['Panel', 'W']);
+    assert.deepEqual(sequence.events.map(event => event.t), ['msg', 'msg', 'open', 'msg', 'close', 'note', 'open', 'msg', 'split', 'msg', 'close']);
+    assert.equal(sequence.events[0].text, '1. run');
+    assert.equal(sequence.events[1].dash, 1);
+    assert.equal(sequence.events[7].head, 2);
+    const block = diagramBlock('sequenceDiagram\nparticipant P as Panel\nP->>W: run\nloop until it answers\nP->>P: poll the exit\nend');
+    assert.equal(block.kind, 'sequence');
+    assert.equal(block.frames.length, 1);
+    // The frame holds its label and the self message's text.
+    const frame = block.frames[0];
+    const self = block.edges.find(edge => edge.label && edge.label.lines[0] === 'poll the exit');
+    assert.ok(frame.x + frame.w >= self.label.x);
+    assert.equal(block.edges.filter(edge => edge.life).length, 2);
+  });
+
+  test('what it cannot read stays code', () => {
+    assert.equal(diagramBlock('pie title Pets\n "Dogs" : 386'), null);
+    assert.equal(diagramBlock('flowchart TD\nA'), null); // one box is not a diagram
+    const blocks = markdownToBlocks('```mermaid\ngantt\n```\n\n```mermaid\nflowchart LR\nA-->B\n```\n\n```js\nflowchart\n```');
+    assert.deepEqual(blocks.map(block => block.t), ['code', 'diagram', 'code']);
+    assert.equal(blocks[0].lang, 'mermaid');
+    assert.match(blocks[1].source, /A-->B/);
+  });
+
+  test('labels: quotes, <br>, tags and entities out; wrapped to width', () => {
+    assert.equal(cleanLabel('"Load <b>balancer</b><br/>(L7)"'), 'Load balancer\n(L7)');
+    assert.equal(cleanLabel('a #quot;b#quot; &amp; c'), 'a "b" & c');
+    assert.deepEqual(wrapLabel('one two three four five six', 9), ['one two', 'three', 'four five', 'six']);
+    assert.deepEqual(wrapLabel('abcdefghijkl', 5), ['abcde', 'fghij', 'kl']);
   });
 });

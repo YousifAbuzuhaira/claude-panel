@@ -3,6 +3,12 @@
 
 const LEARNER = 'The learner is a working software engineer who studies in the minutes while their coding agent works. They want depth and real practice, not marketing or fluff.';
 
+// Diagrams: Mermaid that learn/diagram.mjs can lay out (anything else shows as code).
+export const DIAGRAM_RULE = [
+  '- Where a picture would help the reader understand (a flow, an architecture, a request between parts, a state machine, a pipeline), add 1-2 diagrams as ```mermaid blocks, each right after the text it explains. Only `flowchart TD`, `flowchart LR` or `sequenceDiagram`. At most 12 boxes, labels of 4 words or fewer, edge labels of 1-3 words; no subgraph, classDef, style or HTML. Skip a diagram that would only repeat a list, and never add one for decoration.',
+].join('\n');
+const CHAT_DIAGRAMS = 'When a picture would make an answer clearer, you may include one small diagram as a ```mermaid block (flowchart TD/LR or sequenceDiagram only, at most 10 boxes, short labels); the app draws it.';
+
 // --- Research -----------------------------------------------------------------------
 
 export const RESEARCH_SCHEMA = {
@@ -179,6 +185,7 @@ export function pagePrompt({ course, page, position, total, prevTitles, nextTitl
     '- Explain what it is, why it exists, how it works underneath, and how it is used in real work. Use concrete examples, real commands and code in fenced blocks with a language (```bash, ```yaml, ```ts...), and common mistakes.',
     '- Cite as you go: after something from a video, put the time it is said as [m:ss] or [h:mm:ss]. When the material has more than one video, put the video\'s id first, as in [s4 1:05]. After something from a web page, put [sec: Exact Heading].',
     '- When you add something that is NOT in the material below (a fact, a command, a caveat), put (added) right after that sentence.',
+    DIAGRAM_RULE,
     '- End with a short "## Recap" of the key points. Do not put the check questions in the Markdown.',
     '- Then write 2-3 check questions that test understanding (why, what would happen if, which would you choose), each tagged with the concept ids it tests, with a model answer.',
     '',
@@ -273,6 +280,7 @@ export function pageChatSystem({ course, page, concepts, sourceLinks }) {
     '[[mark-learned: id1, id2]]',
     'The app turns that line into a button the learner may click. Never say you marked anything yourself; only the learner can.',
     'Give the model answer only after they have tried, or if they ask.',
+    CHAT_DIAGRAMS,
     '',
     'Concepts on this page (id: name: definition):',
     ...concepts.map(concept => `- ${concept.id}: ${concept.name}: ${concept.definition}`),
@@ -296,6 +304,7 @@ export function advisorSystem({ categories, courses, learned, seen, workFolders 
     'Give 3-5 suggestions unless asked otherwise. For each: the topic, why it matters for them (point at what in their work), and what they already know that it builds on. End each suggestion with this line, which the app turns into a "Build this" button:',
     '[[build: <topic to research> | <category name>]]',
     'Use one of their category names when one fits, or a new short one.',
+    CHAT_DIAGRAMS,
     '',
     `Their categories: ${categories.join(', ') || '(none yet)'}`,
     'Their courses (title, category, pages read/total):',

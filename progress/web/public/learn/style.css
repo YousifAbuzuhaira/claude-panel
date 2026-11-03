@@ -315,6 +315,28 @@ textarea.inline-edit[rows="1"] { resize: none; overflow: hidden; height: 30px; w
 .prose .sec { font-style: italic; }
 .added { font-family: var(--sans); font-size: .72em; color: var(--gold); vertical-align: .15em; cursor: help; }
 
+/* Diagrams (learn/diagram.mjs lays them out, ./diagram.js draws them): at the page's text size,
+   never wider than the column; labels in the mono font they were measured in. */
+.prose .diagram { margin: .4em 0 1.2em; --diagram-scale: var(--scale, 1); }
+.diagram-svg { display: block; max-width: 100%; height: auto; margin: 0 auto; overflow: visible; }
+.diagram-svg text { font-family: var(--mono); fill: var(--ink); text-shadow: none; }
+.diagram-svg .d-text { font-size: var(--d-font); }
+.diagram-svg .d-small { font-size: var(--d-small); fill: var(--dim); }
+.diagram-svg .d-small.d-ink { fill: var(--ink); }
+.diagram-svg .d-node { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+.diagram-svg .d-decision { fill: var(--selected); stroke: var(--accent-soft); }
+.diagram-svg .d-rim { fill: none; stroke: var(--line); stroke-width: 1; }
+.diagram-svg .d-note { fill: var(--gold-soft); stroke: none; }
+.diagram-svg .d-edge { fill: none; stroke: var(--dim); stroke-width: 1.3; stroke-linejoin: round; }
+.diagram-svg .d-edge.thick { stroke-width: 2.4; }
+.diagram-svg .d-edge.dash { stroke-dasharray: 5 4; }
+.diagram-svg .d-edge.life { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 3 4; }
+.diagram-svg .d-head { fill: var(--dim); }
+.diagram-svg .d-cross { stroke: var(--dim); stroke-width: 1.6; }
+.diagram-svg .d-patch { fill: var(--card-fill); }
+.diagram-svg .d-frame { fill: none; stroke: var(--faint); stroke-width: 1; }
+.diagram-svg .d-divider { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 4 4; }
+
 /* Overlap: a step of its own in the page column, its title where the page's title goes. */
 .overlap-line { margin: 4px 0 8px; }
 .overlap-name { font-size: 15px; }

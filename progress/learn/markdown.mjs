@@ -2,9 +2,11 @@
 // Blocks: { t: 'h', level, inlines } | { t: 'p', inlines } | { t: 'code', lang, text }
 //   | { t: 'ul' | 'ol', items: [{ depth, inlines }] } | { t: 'quote', inlines } | { t: 'hr' }
 //   | { t: 'table', rows: [[inlines]] }   (the first row is the header)
+//   | { t: 'diagram', ... }   (a ```mermaid block, laid out by diagram.mjs)
 // Inlines: { s, b?, i?, code?, link?, time?, added? }. `[12:34]` becomes a link into the
 // page's video at that second (`[s4 12:34]` into source s4's, when a page has two videos);
 // `[sec: Heading]` a link to that part of the source page.
+import { diagramBlock } from './diagram.mjs';
 import { parseTime, watchUrl } from './sources.mjs';
 
 const INLINE = new RegExp([
@@ -86,7 +88,10 @@ export function markdownToBlocks(markdown, ctx = {}) {
       i++;
       while (i < lines.length && !new RegExp(`^\\s*${fence[1][0] === '`' ? '`' : '~'}{${fence[1].length},}\\s*$`).test(lines[i])) body.push(lines[i++]);
       i++;
-      blocks.push({ t: 'code', lang: fence[2] || '', text: body.join('\n') });
+      const text = body.join('\n');
+      // A Mermaid block becomes a laid-out diagram; one it can't read stays code, so it still shows.
+      const diagram = /^mermaid$/i.test(fence[2] || '') ? diagramBlock(text) : null;
+      blocks.push(diagram || { t: 'code', lang: fence[2] || '', text });
       continue;
     }
     if (!line.trim()) { i++; continue; }

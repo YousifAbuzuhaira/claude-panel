@@ -534,6 +534,270 @@ function New-TableBlock($Rows, [double]$Size) {
   return $table
 }
 
+# --- Diagrams -------------------------------------------------------------------------------------
+# A diagram block (learn/diagram.mjs lays it out) drawn on a Canvas at the helper's coordinates,
+# in the shared live brushes, so a scheme change repaints it. The twin of
+# web/public/learn/diagram.js; keep the two drawing the same.
+
+function New-DiagramPoint([double]$X, [double]$Y) { return New-Object System.Windows.Point($X, $Y) }
+
+# A dash pattern (in units of the line's thickness). The comma keeps PowerShell from unrolling it.
+function New-DiagramDashes([double]$On, [double]$Off) {
+  $dashes = New-Object System.Windows.Media.DoubleCollection
+  $dashes.Add($On)
+  $dashes.Add($Off)
+  return ,$dashes
+}
+
+function Add-DiagramShape($Canvas, $Shape, [double]$X, [double]$Y) {
+  [System.Windows.Controls.Canvas]::SetLeft($Shape, $X)
+  [System.Windows.Controls.Canvas]::SetTop($Shape, $Y)
+  [void]$Canvas.Children.Add($Shape)
+}
+
+# Lines of mono text centred on (Cx, Cy), $Line apart.
+function Add-DiagramText($Canvas, $Lines, [double]$Cx, [double]$Cy, [double]$Font, [double]$Line, $Brush, [switch]$Left) {
+  $text = New-Object System.Windows.Controls.TextBlock
+  $text.Text = (@($Lines) | ForEach-Object { [string]$_ }) -join "`n"
+  $text.FontFamily = $monoFont
+  $text.FontSize = $Font
+  $text.Foreground = $Brush
+  $text.LineHeight = $Line
+  $text.LineStackingStrategy = 'BlockLineHeight'
+  $count = @($Lines).Count
+  $width = 0
+  foreach ($item in @($Lines)) { $width = [Math]::Max($width, ([string]$item).Length) }
+  $width = $width * $Font * 0.62 + 8
+  if ($Left) {
+    $text.TextAlignment = 'Left'
+    Add-DiagramShape $Canvas $text $Cx ($Cy - $count * $Line / 2)
+  } else {
+    $text.TextAlignment = 'Center'
+    $text.Width = $width
+    Add-DiagramShape $Canvas $text ($Cx - $width / 2) ($Cy - $count * $Line / 2)
+  }
+}
+
+function Add-DiagramPatch($Canvas, [double]$X, [double]$Y, [double]$W, [double]$H) {
+  $patch = New-Object System.Windows.Shapes.Rectangle
+  $patch.Width = [Math]::Max(1, $W)
+  $patch.Height = [Math]::Max(1, $H)
+  $patch.RadiusX = 3
+  $patch.RadiusY = 3
+  $patch.Fill = $T.cardFill
+  Add-DiagramShape $Canvas $patch $X $Y
+}
+
+function New-DiagramNode($Node) {
+  $x = [double]$Node.x; $y = [double]$Node.y; $w = [double]$Node.w; $h = [double]$Node.h
+  $shape = $null
+  switch ([string]$Node.shape) {
+    'circle' { $shape = New-Object System.Windows.Shapes.Ellipse }
+    'decision' {
+      $shape = New-Object System.Windows.Shapes.Polygon
+      $k = $h / 2
+      foreach ($p in @(@(($x + $k), $y), @(($x + $w - $k), $y), @(($x + $w), ($y + $h / 2)), @(($x + $w - $k), ($y + $h)), @(($x + $k), ($y + $h)), @($x, ($y + $h / 2)))) {
+        $shape.Points.Add((New-DiagramPoint $p[0] $p[1]))
+      }
+      $shape.Fill = $selected
+      $shape.Stroke = $accentSoft
+      $shape.StrokeThickness = 1
+      return @{ shape = $shape; x = 0; y = 0 }
+    }
+    'db' {
+      # A cylinder: the body, then the front of its top rim.
+      $r = 6
+      $figure = New-Object System.Windows.Media.PathFigure
+      $figure.StartPoint = New-DiagramPoint $x ($y + $r)
+      $figure.IsClosed = $true
+      $radius = New-Object System.Windows.Size(($w / 2), $r)
+      [void]$figure.Segments.Add((New-Object System.Windows.Media.ArcSegment((New-DiagramPoint ($x + $w) ($y + $r)), $radius, 0, $false, [System.Windows.Media.SweepDirection]::Clockwise, $true)))
+      [void]$figure.Segments.Add((New-Object System.Windows.Media.LineSegment((New-DiagramPoint ($x + $w) ($y + $h - $r)), $true)))
+      [void]$figure.Segments.Add((New-Object System.Windows.Media.ArcSegment((New-DiagramPoint $x ($y + $h - $r)), $radius, 0, $false, [System.Windows.Media.SweepDirection]::Clockwise, $true)))
+      $rim = New-Object System.Windows.Media.PathFigure
+      $rim.StartPoint = New-DiagramPoint $x ($y + $r)
+      [void]$rim.Segments.Add((New-Object System.Windows.Media.ArcSegment((New-DiagramPoint ($x + $w) ($y + $r)), $radius, 0, $false, [System.Windows.Media.SweepDirection]::Counterclockwise, $true)))
+      $body = New-Object System.Windows.Shapes.Path
+      $geometry = New-Object System.Windows.Media.PathGeometry
+      [void]$geometry.Figures.Add($figure)
+      $body.Data = $geometry
+      $body.Fill = $surface
+      $body.Stroke = $line
+      $body.StrokeThickness = 1
+      $top = New-Object System.Windows.Shapes.Path
+      $rimGeometry = New-Object System.Windows.Media.PathGeometry
+      [void]$rimGeometry.Figures.Add($rim)
+      $top.Data = $rimGeometry
+      $top.Stroke = $line
+      $top.StrokeThickness = 1
+      return @{ shape = $body; extra = $top; x = 0; y = 0 }
+    }
+    default {
+      $shape = New-Object System.Windows.Shapes.Rectangle
+      $corner = switch ([string]$Node.shape) { 'round' { 10 } 'stadium' { $h / 2 } 'note' { 3 } default { 4 } }
+      $shape.RadiusX = $corner
+      $shape.RadiusY = $corner
+    }
+  }
+  $shape.Width = [Math]::Max(1, $w)
+  $shape.Height = [Math]::Max(1, $h)
+  if ([string]$Node.shape -eq 'note') {
+    $shape.Fill = $T.goldSoft
+  } else {
+    $shape.Fill = $surface
+    $shape.Stroke = $line
+    $shape.StrokeThickness = 1
+  }
+  return @{ shape = $shape; x = $x; y = $y }
+}
+
+# The arrowhead at the end of $Points; returns the shape and where the line should stop.
+function New-DiagramHead($Points, [int]$Kind, [double]$Size) {
+  $end = $Points[$Points.Count - 1]
+  $before = $Points[$Points.Count - 2]
+  $dx = $end.X - $before.X
+  $dy = $end.Y - $before.Y
+  $length = [Math]::Sqrt($dx * $dx + $dy * $dy)
+  if ($length -le 0) { $length = 1 }
+  $ux = $dx / $length
+  $uy = $dy / $length
+  if ($Kind -eq 2) {
+    $s = $Size * 0.55
+    $cross = New-Object System.Windows.Shapes.Path
+    $geometry = New-Object System.Windows.Media.GeometryGroup
+    [void]$geometry.Children.Add((New-Object System.Windows.Media.LineGeometry((New-DiagramPoint ($end.X - $s) ($end.Y - $s)), (New-DiagramPoint ($end.X + $s) ($end.Y + $s)))))
+    [void]$geometry.Children.Add((New-Object System.Windows.Media.LineGeometry((New-DiagramPoint ($end.X - $s) ($end.Y + $s)), (New-DiagramPoint ($end.X + $s) ($end.Y - $s)))))
+    $cross.Data = $geometry
+    $cross.Stroke = $dim
+    $cross.StrokeThickness = 1.6
+    return @{ shape = $cross; stop = $end }
+  }
+  $bx = $end.X - $ux * $Size
+  $by = $end.Y - $uy * $Size
+  $half = $Size * 0.5
+  $head = New-Object System.Windows.Shapes.Polygon
+  $head.Points.Add($end)
+  $head.Points.Add((New-DiagramPoint ($bx - $uy * $half) ($by + $ux * $half)))
+  $head.Points.Add((New-DiagramPoint ($bx + $uy * $half) ($by - $ux * $half)))
+  $head.Fill = $dim
+  return @{ shape = $head; stop = (New-DiagramPoint ($bx + $ux) ($by + $uy)) }
+}
+
+function New-DiagramBlock($Block, [double]$Size) {
+  $font = if ($Block.font) { [double]$Block.font } else { 13 }
+  $lineHeight = if ($Block.line) { [double]$Block.line } else { 17 }
+  $small = if ($Block.small) { [double]$Block.small } else { 11.5 }
+  $smallLine = if ($Block.smallLine) { [double]$Block.smallLine } else { 15 }
+  $canvas = New-Object System.Windows.Controls.Canvas
+  $canvas.Width = [double]$Block.w
+  $canvas.Height = [double]$Block.h
+  $canvas.Background = $noFill
+  $tags = New-Object System.Collections.ArrayList
+  foreach ($frame in @($Block.frames)) {
+    if ($null -eq $frame) { continue }
+    $box = New-Object System.Windows.Shapes.Rectangle
+    $box.Width = [Math]::Max(1, [double]$frame.w)
+    $box.Height = [Math]::Max(1, [double]$frame.h)
+    $box.RadiusX = 4
+    $box.RadiusY = 4
+    $box.Stroke = $faint
+    $box.StrokeThickness = 1
+    Add-DiagramShape $canvas $box ([double]$frame.x) ([double]$frame.y)
+    if ($frame.label) { [void]$tags.Add(@{ text = [string]$frame.label; x = [double]$frame.x; y = [double]$frame.y }) }
+    foreach ($divider in @($frame.dividers)) {
+      if ($null -eq $divider) { continue }
+      $rule = New-Object System.Windows.Shapes.Line
+      $rule.X1 = [double]$frame.x
+      $rule.X2 = [double]$frame.x + [double]$frame.w
+      $rule.Y1 = [double]$divider.y
+      $rule.Y2 = [double]$divider.y
+      $rule.Stroke = $faint
+      $rule.StrokeThickness = 1
+      $rule.StrokeDashArray = New-DiagramDashes 4 4
+      [void]$canvas.Children.Add($rule)
+      if ($divider.label) { [void]$tags.Add(@{ text = [string]$divider.label; x = [double]$frame.x; y = [double]$divider.y }) }
+    }
+  }
+  # A frame's labels sit on a patch of the background, so lifelines pass behind them.
+  foreach ($tag in $tags) {
+    Add-DiagramPatch $canvas ($tag.x + 3) ($tag.y + 1) ($tag.text.Length * $small * 0.61 + 6) $smallLine
+    Add-DiagramText $canvas @($tag.text) ($tag.x + 6) ($tag.y + $smallLine / 2 + 1) $small $smallLine $dim -Left
+  }
+  $labels = New-Object System.Collections.ArrayList
+  foreach ($edge in @($Block.edges)) {
+    if ($null -eq $edge) { continue }
+    $points = New-Object System.Collections.Generic.List[System.Windows.Point]
+    foreach ($p in @($edge.pts)) { $points.Add((New-DiagramPoint ([double]$p[0]) ([double]$p[1]))) }
+    if ($points.Count -lt 2) { continue }
+    $headSize = if ($edge.thick) { 10 } else { 8 }
+    $heads = @()
+    if ($edge.head) {
+      $made = New-DiagramHead $points ([int]$edge.head) $headSize
+      if ([int]$edge.head -eq 1) { $points[$points.Count - 1] = $made.stop }
+      $heads += $made.shape
+    }
+    if ($edge.tail) {
+      $reversed = New-Object System.Collections.Generic.List[System.Windows.Point]
+      for ($k = $points.Count - 1; $k -ge 0; $k--) { $reversed.Add($points[$k]) }
+      $made = New-DiagramHead $reversed 1 $headSize
+      $points[0] = $made.stop
+      $heads += $made.shape
+    }
+    $polyline = New-Object System.Windows.Shapes.Polyline
+    foreach ($p in $points) { $polyline.Points.Add($p) }
+    $polyline.StrokeLineJoin = 'Round'
+    if ($edge.life) {
+      $polyline.Stroke = $faint
+      $polyline.StrokeThickness = 1
+      $polyline.StrokeDashArray = New-DiagramDashes 3 4
+    } else {
+      $polyline.Stroke = $dim
+      $polyline.StrokeThickness = if ($edge.thick) { 2.4 } else { 1.3 }
+      # WPF dashes are in units of the line's thickness.
+      if ($edge.dash) { $polyline.StrokeDashArray = New-DiagramDashes (5.0 / $polyline.StrokeThickness) (4.0 / $polyline.StrokeThickness) }
+    }
+    [void]$canvas.Children.Add($polyline)
+    foreach ($shape in $heads) { [void]$canvas.Children.Add($shape) }
+    if ($edge.label -and $edge.label.lines) { [void]$labels.Add($edge.label) }
+  }
+  # Edge labels last, on a patch of the background, so the lines pass behind them.
+  foreach ($item in $labels) {
+    $lines = @($item.lines | ForEach-Object { [string]$_ })
+    $longest = 0
+    foreach ($text in $lines) { $longest = [Math]::Max($longest, $text.Length) }
+    $lw = $longest * $small * 0.61 + 8
+    $lh = $lines.Count * $smallLine + 2
+    Add-DiagramPatch $canvas ([double]$item.x - $lw / 2) ([double]$item.y - $lh / 2) $lw $lh
+    Add-DiagramText $canvas $lines ([double]$item.x) ([double]$item.y) $small $smallLine $dim
+  }
+  foreach ($node in @($Block.nodes)) {
+    if ($null -eq $node) { continue }
+    $made = New-DiagramNode $node
+    Add-DiagramShape $canvas $made.shape $made.x $made.y
+    if ($made.extra) { Add-DiagramShape $canvas $made.extra 0 0 }
+    $nudge = if ([string]$node.shape -eq 'db') { 3 } else { 0 }
+    $nodeFont = if ($node.small) { $small } else { $font }
+    $nodeLine = if ($node.small) { $smallLine } else { $lineHeight }
+    Add-DiagramText $canvas @($node.lines) ([double]$node.x + [double]$node.w / 2) ([double]$node.y + [double]$node.h / 2 + $nudge) $nodeFont $nodeLine $ink
+  }
+  # At the page's text size (the layout assumes labels at $font against a 14.5 body), and
+  # never wider than the column: the box only ever shrinks it.
+  $scale = $Size / 14.5
+  $canvas.LayoutTransform = New-Object System.Windows.Media.ScaleTransform($scale, $scale)
+  $fit = New-Object System.Windows.Controls.Viewbox
+  $fit.Stretch = 'Uniform'
+  $fit.StretchDirection = 'DownOnly'
+  $fit.HorizontalAlignment = 'Center'
+  $fit.Child = $canvas
+  if ($Block.source) {
+    $fit.ToolTip = [string]$Block.source
+    [System.Windows.Controls.ToolTipService]::SetShowDuration($fit, 60000)
+  }
+  $holder = New-Object System.Windows.Documents.BlockUIContainer($fit)
+  $holder.Margin = New-Gap 0 ($Size * 0.4) 0 ($Size * 1.1)
+  return $holder
+}
+
 # Adds the helper's blocks to a FlowDocument block collection, at text size $Size.
 function Add-Blocks($Target, $Blocks, [double]$Size) {
   foreach ($block in $Blocks) {
@@ -561,6 +825,14 @@ function Add-Blocks($Target, $Blocks, [double]$Size) {
         [void]$Target.Add($paragraph)
       }
       'code' { [void]$Target.Add((New-CodeBlock ([string]$block.text) ([string]$block.lang) $Size)) }
+      'diagram' {
+        try { [void]$Target.Add((New-DiagramBlock $block $Size)) }
+        catch {
+          # A diagram that won't draw shows as its source.
+          Write-Failure $_
+          [void]$Target.Add((New-CodeBlock ([string]$block.source) 'mermaid' $Size))
+        }
+      }
       'table' { [void]$Target.Add((New-TableBlock $block.rows $Size)) }
       'hr' {
         $rule = New-Object System.Windows.Controls.Border
