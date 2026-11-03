@@ -448,6 +448,17 @@ $toastText.FontSize = 11.5
 $toastText.TextTrimming = 'CharacterEllipsis'
 [void]$footer.Children.Add($toastText)
 
+# Before the messages: what Claude is on while you read, from the panel's own state files
+# (the newest chat's plan, and a test run while one is live). Hidden when there is nothing.
+$phaseGlance = New-Object System.Windows.Controls.TextBlock
+$phaseGlance.FontSize = 11.5
+$phaseGlance.TextTrimming = 'CharacterEllipsis'
+$phaseGlance.MaxWidth = 520
+$phaseGlance.Margin = New-Gap 0 0 16 0
+$phaseGlance.Visibility = 'Collapsed'
+[System.Windows.Controls.DockPanel]::SetDock($phaseGlance, 'Left')
+[void]$footer.Children.Insert(0, $phaseGlance)
+
 $body = New-Object System.Windows.Controls.Grid
 
 # Below 85% see-through the parts with text stand on a halo of the card's own colour (Chrome.ps1;
@@ -1048,6 +1059,70 @@ $win.Add_ContentRendered({
   Send-Event @{ event = 'ready' }
 })
 
+# --- What Claude is on: the panel's state files (contract 1), read every two seconds ------------
+
+$STATE_ROOT = if ($DISTRO) { "\\wsl.localhost\$DISTRO\tmp\claude-progress" } else { '' }
+# A snapshot draws the line only from a folder it is given (CLAUDE_PANEL_GLANCE_ROOT, holding
+# <any>\phases.json), so it never shows the person's own chats.
+if ($SnapshotPath) { $STATE_ROOT = [string]$env:CLAUDE_PANEL_GLANCE_ROOT }
+$script:glanceAt = 0
+$script:glanceStamp = ''
+
+function Add-GlanceRun([string]$Text, $Foreground) {
+  $run = New-Object System.Windows.Documents.Run($Text)
+  $run.Foreground = $Foreground
+  [void]$phaseGlance.Inlines.Add($run)
+}
+
+function Update-PhaseGlance {
+  if (-not $STATE_ROOT -or $SelfTest) { return }
+  $now = [Environment]::TickCount
+  if ($script:glanceAt -and [Math]::Abs($now - $script:glanceAt) -lt 2000) { return }
+  $script:glanceAt = $now
+  # The newest chat's file: each chat has a folder, and its file goes when the chat ends.
+  $newest = $null
+  try {
+    foreach ($dir in [System.IO.Directory]::GetDirectories($STATE_ROOT)) {
+      $file = New-Object System.IO.FileInfo((Join-Path $dir 'phases.json'))
+      if ($file.Exists -and (-not $newest -or $file.LastWriteTimeUtc -gt $newest.LastWriteTimeUtc)) { $newest = $file }
+    }
+  } catch {}
+  if (-not $newest) { $phaseGlance.Visibility = 'Collapsed'; $script:glanceStamp = ''; return }
+  $stamp = '{0}|{1}|{2}' -f $newest.FullName, $newest.LastWriteTimeUtc.Ticks, $newest.Length
+  if ($stamp -eq $script:glanceStamp) { return }
+  $script:glanceStamp = $stamp
+  try { $state = [System.IO.File]::ReadAllText($newest.FullName, [System.Text.Encoding]::UTF8) | ConvertFrom-Json } catch { return }
+  $phaseGlance.Inlines.Clear()
+  $tip = New-Object System.Collections.Generic.List[string]
+  $items = @()
+  if ($state.plan) { $items = @($state.plan.items) }
+  if ($items.Count -gt 0) {
+    $nowItem = $items | Where-Object { [string]$_.status -eq 'in_progress' } | Select-Object -First 1
+    $done = [int]$state.plan.done
+    $total = [int]$state.plan.total
+    if ($nowItem) { Add-GlanceRun "$GLYPH_FULL " $accent; Add-GlanceRun ([string]$nowItem.name) $ink }
+    elseif ($done -ge $total) { Add-GlanceRun "$GLYPH_CHECK " $green; Add-GlanceRun 'All phases done' $ink }
+    else { Add-GlanceRun "$GLYPH_EMPTY " $dim; Add-GlanceRun ([string]$state.plan.title) $ink }
+    Add-GlanceRun "  $done/$total" $dim
+    $tip.Add([string]$state.plan.title)
+    foreach ($item in $items) {
+      $mark = switch ([string]$item.status) { 'done' { $GLYPH_CHECK } 'in_progress' { $GLYPH_FULL } default { $GLYPH_EMPTY } }
+      $tip.Add("$mark  $([string]$item.name)")
+    }
+  }
+  $live = @($state.runs) | Where-Object { $_ -and [string]$_.status -eq 'running' } | Select-Object -Last 1
+  if ($live) {
+    if ($phaseGlance.Inlines.Count -gt 0) { Add-GlanceRun "  $GLYPH_DOT  " $dim }
+    Add-GlanceRun 'Tests ' $dim
+    Add-GlanceRun "$GLYPH_FULL " $accent
+    Add-GlanceRun ([string]$live.count) $ink
+    $tip.Add("Tests: $([string]$live.label) $([string]$live.count)")
+  }
+  if ($phaseGlance.Inlines.Count -eq 0) { $phaseGlance.Visibility = 'Collapsed'; return }
+  $phaseGlance.ToolTip = ($tip -join [Environment]::NewLine)
+  $phaseGlance.Visibility = 'Visible'
+}
+
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(100)
 $script:ownerTick = 0
@@ -1058,6 +1133,7 @@ $timer.Add_Tick({
   try { Step-Helper } catch { Write-Failure $_ }
   try { Step-Views } catch { Write-Failure $_ }
   if ($toastText.Text -and [DateTime]::UtcNow -gt $script:toastUntil) { $toastText.Text = '' }
+  try { Update-PhaseGlance } catch { Write-Failure $_ }
   if ($SnapshotPath -and $script:snapshotAt) {
     $settled = $script:pending.Count -eq 0 -and ([DateTime]::UtcNow - $script:snapshotAt).TotalMilliseconds -gt 1500
     $tooLong = ([DateTime]::UtcNow - $script:snapshotAt).TotalSeconds -gt 40

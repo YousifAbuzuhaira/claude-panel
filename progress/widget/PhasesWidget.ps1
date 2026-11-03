@@ -824,6 +824,48 @@ function Get-BuildColor([string]$State) {
   switch ($State) { 'failed' { return $red } 'waiting-picks' { return $gold } 'done' { return $green } default { return $accent } }
 }
 
+# What Claude is on, at the top of the Learn tab, so the plan stays in sight while you read:
+# the phase in progress (or the next, or 'all done'), its count, and a bar. A click opens Phases.
+function Add-PlanGlance($Plan) {
+  $items = @()
+  if ($Plan) { $items = @($Plan.items) }
+  if ($items.Count -eq 0) { return }
+  $done = [int]$Plan.done
+  $total = [int]$Plan.total
+  $now = $items | Where-Object { [string]$_.status -eq 'in_progress' } | Select-Object -First 1
+  $next = $items | Where-Object { [string]$_.status -eq 'todo' } | Select-Object -First 1
+  if ($now) { $glyph = $GLYPH_LIVE; $color = $accent; $name = [string]$now.name }
+  elseif ($done -ge $total) { $glyph = $GLYPH_CHECK; $color = $green; $name = 'All phases done' }
+  elseif ($next) { $glyph = $GLYPH_LIVE; $color = $dim; $name = 'Next: ' + [string]$next.name }
+  else { return }
+  # The count docks right, so a long phase name trims and the count always shows.
+  $text = New-Text $name $ink
+  $text.TextTrimming = 'CharacterEllipsis'
+  $count = New-Text "$done/$total" $dim
+  $count.Margin = New-Gap 8 0 0 0
+  [System.Windows.Controls.DockPanel]::SetDock($count, 'Right')
+  $row = New-Object System.Windows.Controls.DockPanel
+  [void]$row.Children.Add((New-Cell $glyph $color $MARK_W))
+  [void]$row.Children.Add($count)
+  [void]$row.Children.Add($text)
+  $bar = New-Text (Get-Bar ([double]$done / [double][Math]::Max(1, $total))) $color
+  $bar.Margin = New-Gap $MARK_W $ROW_GAP 0 0
+  $glanceBox = New-Object System.Windows.Controls.StackPanel
+  $glanceBox.Background = [System.Windows.Media.Brushes]::Transparent
+  $glanceBox.Cursor = [System.Windows.Input.Cursors]::Hand
+  $glanceBox.ToolTip = ('{0}: open Phases' -f [string]$Plan.title)
+  [void]$glanceBox.Children.Add($row)
+  [void]$glanceBox.Children.Add($bar)
+  $glanceBox.Add_MouseLeftButtonDown({ param($sender, $e) $e.Handled = $true })
+  $glanceBox.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Select-Tab 'phases' })
+  [void]$body.Children.Add($glanceBox)
+  $split = New-Object System.Windows.Controls.Border
+  $split.Height = 1
+  $split.Background = $T.rule
+  $split.Margin = New-Gap 0 $GROUP_GAP 0 $GROUP_GAP
+  [void]$body.Children.Add($split)
+}
+
 function Add-LearnRows($Learn) {
   $build = if ($Learn) { $Learn.build } else { $null }
   $course = if ($Learn) { $Learn.course } else { $null }
@@ -1122,7 +1164,7 @@ function Show-State {
   $grip.Visibility = 'Visible'
   switch ($script:activeTab) {
     'tests' { Add-RunRows $runs }
-    'learn' { Add-LearnRows $learn }
+    'learn' { Add-PlanGlance $plan; Add-LearnRows $learn }
     'releases' { Add-ReleaseRows }
     default { Add-PhaseRows $plan }
   }
