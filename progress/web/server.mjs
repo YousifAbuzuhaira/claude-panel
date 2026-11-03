@@ -790,7 +790,19 @@ async function open(page, terminal = {}, deep = {}) {
       // A one-time link, so the token never sits on the browser's command line.
       const nonce = await launchNonce(record, target);
       const [command, args] = browserArgv(`http://127.0.0.1:${record.port}/launch/${nonce}`);
-      spawn(command, args, { detached: true, stdio: 'ignore' }).unref();
+      const opener = spawn(command, args, { detached: true, stdio: 'ignore' });
+      if (process.env.WSL_DISTRO_NAME) {
+        // From WSL the opener is a Windows cmd.exe that `start`s the browser and returns. Wait for
+        // it: started from a wsl.exe that ends with this process (the Windows panel's link), WSL
+        // would stop the opener with it, before the browser ever started.
+        await new Promise(resolve => {
+          opener.on('exit', resolve);
+          opener.on('error', resolve);
+          setTimeout(resolve, 10_000).unref();
+        });
+      } else {
+        opener.unref();
+      }
     }
   }
   // The URL without its token: the token stays out of logs and transcripts.
