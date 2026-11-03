@@ -582,19 +582,26 @@ function Open-Sibling([string]$Id, [int64]$OwnerHwnd, [string]$SessionId, [strin
 # plugin's web server runs inside WSL, started (or found) by web/web.sh, which opens the page.
 # These windows run from \\wsl.localhost\<distro>\...\widget, which names the distro and the path.
 function Open-InBrowser([string]$Page = 'learn') {
+  try { [System.IO.File]::AppendAllText((Join-Path $env:TEMP 'claude-panel-browser.log'), ('{0} asked for {1} from {2}' -f (Get-Date -Format s), $Page, $PSScriptRoot) + [Environment]::NewLine) } catch {}
   try {
     $match = [regex]::Match([string]$PSScriptRoot, '^\\\\wsl(?:\.localhost|\$)\\([^\\]+)(\\.*)$', 'IgnoreCase')
     if (-not $match.Success) { return }
     $distro = $match.Groups[1].Value
     $webScript = ($match.Groups[2].Value -replace '\\', '/') -replace '/widget$', '/web/web.sh'
+    # Shell-started and hidden, as the windows start each other: wsl.exe gets a console of its own
+    # (a console-less wsl.exe can't run the Windows command that opens the browser).
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = 'wsl.exe'
     $start.Arguments = "-d $distro -e bash `"$webScript`" open $Page"
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
+    $start.UseShellExecute = $true
+    $start.WindowStyle = 'Hidden'
     $start.WorkingDirectory = $env:TEMP
-    [void][System.Diagnostics.Process]::Start($start)
-  } catch {}
+    $child = [System.Diagnostics.Process]::Start($start)
+    # What ran, kept in %TEMP% so a link that seems to do nothing can be looked into.
+    try { [System.IO.File]::AppendAllText((Join-Path $env:TEMP 'claude-panel-browser.log'), ('{0} started wsl.exe {1} (pid {2})' -f (Get-Date -Format s), $start.Arguments, $child.Id) + [Environment]::NewLine) } catch {}
+  } catch {
+    try { [System.IO.File]::AppendAllText((Join-Path $env:TEMP 'claude-panel-browser.log'), ('{0} {1}' -f (Get-Date -Format s), $_) + [Environment]::NewLine) } catch {}
+  }
 }
 
 # The other windows as a row of chips (this one left out); a pick opens it and closes the row.
