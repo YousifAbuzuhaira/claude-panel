@@ -383,9 +383,26 @@ textarea.inline-edit[rows="1"] { resize: none; overflow: hidden; height: 30px; w
 .ui-input.chat-input { flex: 1; resize: none; font-size: calc(14px * var(--scale)); line-height: 1.4; }
 .send { min-width: 68px; }
 
-/* Ask */
-.ask-view { max-width: var(--frame); margin: 0; height: 100%; padding: 0 var(--gutter); }
-.ask-view .chat-panel { max-width: 800px; }
+/* Ask: the chats in a column on the left, the chat in front beside it. */
+.ask-view { max-width: var(--frame); margin: 0; height: 100%; padding: 0 var(--gutter); display: flex; gap: 20px; }
+.ask-view .chat-panel { flex: 1; min-width: 0; max-width: 800px; }
+.ask-chats { flex: none; width: 232px; display: flex; flex-direction: column; min-height: 0; padding: 24px 20px 16px 0; border-right: 1px solid var(--line); }
+.ask-chats-head { display: flex; justify-content: space-between; align-items: center; min-height: 22px; margin-bottom: 6px; }
+.ask-chats-head .action { font-size: 12.5px; }
+.chat-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; }
+.chat-item { display: flex; align-items: flex-start; border-radius: var(--radius); margin-bottom: 2px; }
+.chat-item:hover { background: var(--hover); }
+.chat-item.on { background: var(--selected); }
+.chat-pick { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; padding: 5px 4px 6px 8px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.chat-name { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-when { font-size: 11px; color: var(--faint); }
+.chat-remove { flex: none; border: 0; background: none; color: var(--faint); font-size: 11px; padding: 6px 8px; cursor: pointer; opacity: 0; }
+.chat-item:hover .chat-remove, .chat-item.on .chat-remove, .chat-remove:focus-visible { opacity: 1; }
+.chat-remove:hover { color: var(--ink); }
+@media (max-width: 640px) {
+  .ask-view { flex-direction: column; gap: 0; }
+  .ask-chats { width: auto; max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--line); padding: 16px 0 8px; }
+}
 .ask-view .chat-head { padding: 24px 0 8px; }
 .ask-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; }
 .ask-view .suggestions { padding: 0 0 12px; }

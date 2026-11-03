@@ -107,7 +107,9 @@ export function libraryPaths(root) {
     page: (id, n) => join(course(id), 'pages', pageFile(n)),
     chat: (id, n) => join(course(id), 'chats', pageFile(n)),
     chatSystem: (id, n) => join(course(id), 'chats', pageFile(n).replace('.json', '.system.md')),
-    advisorChat: join(root, 'advisor', 'chat.json'),
+    advisorChat: join(root, 'advisor', 'chat.json'), // the one chat before there were several: moved into advisorChats
+    advisorChats: join(root, 'advisor', 'chats'),
+    advisorChatFile: id => join(root, 'advisor', 'chats', `${safeId(id)}.json`),
     advisorSystem: join(root, 'advisor', 'system.md'),
     jobs: join(root, 'jobs'),
     job: id => join(root, 'jobs', `${safeId(id)}.json`),

@@ -21,6 +21,8 @@ $script:courseData = $null
 $script:pageNumber = 0
 $script:pageData = $null
 $script:chats = @{}
+$script:advisorChatId = $null   # the Ask chat in front
+$script:advisorChats = @()      # advisor.list: { id, title, createdAt, updatedAt, count }
 $script:concepts = $null
 $script:learnedFilter = 'all'
 $script:learnedCategory = ''
@@ -1625,7 +1627,7 @@ function Add-MessageSection($Doc, $Message, [string]$Key) {
     [void]$section.Blocks.Add($text)
   }
   $offers = @($Message.offers)
-  if ($offers.Count -gt 0 -and $Key -ne 'advisor') { [void]$section.Blocks.Add((New-OfferButton $offers)) }
+  if ($offers.Count -gt 0 -and -not (Test-AdvisorKey $Key)) { [void]$section.Blocks.Add((New-OfferButton $offers)) }
   foreach ($build in @($Message.builds)) { if ($build) { [void]$section.Blocks.Add((New-BuildButton $build)) } }
   [void]$Doc.Blocks.Add($section)
   return $section
@@ -1699,7 +1701,7 @@ function Show-Chat([string]$Key, $Messages, $Viewer) {
     if ($state.messages.Count -eq 0) {
       $empty = New-Paragraph ((Get-TextSize) * 0.9) $dim
       $empty.Padding = New-Gap $MESSAGE_INSET 0 $MESSAGE_INSET 0
-      $emptyText = if ($Key -eq 'advisor') { 'Ask what to learn next. Claude looks at what you have learned and read, and at the work folders you set in Settings, to suggest what would help you most.' } else { 'Ask about anything on this page, or answer one of its check questions. Claude knows the page and its sources.' }
+      $emptyText = if (Test-AdvisorKey $Key) { 'Ask what to learn next. Claude looks at what you have learned and read, and at the work folders you set in Settings, to suggest what would help you most.' } else { 'Ask about anything on this page, or answer one of its check questions. Claude knows the page and its sources.' }
       [void]$empty.Inlines.Add((New-Object System.Windows.Documents.Run($emptyText)))
       [void]$state.doc.Blocks.Add($empty)
     }
@@ -1720,8 +1722,8 @@ function Move-ChatToEnd([string]$Key) {
 
 function Update-SendButton([string]$Key) {
   $state = Get-ChatState $Key
-  $button = if ($Key -eq 'advisor') { $script:ui.askSend } else { $script:ui.send }
-  $shownKey = if ($Key -eq 'advisor') { 'advisor' } else { Get-PageKey }
+  $button = if (Test-AdvisorKey $Key) { $script:ui.askSend } else { $script:ui.send }
+  $shownKey = if (Test-AdvisorKey $Key) { Get-AdvisorKey } else { Get-PageKey }
   if ($Key -ne $shownKey) { return }
   if ($state.busy) { Set-ButtonText $button 'Stop'; Set-ButtonKind $button 'secondary' }
   else { Set-ButtonText $button 'Send'; Set-ButtonKind $button 'primary' }
@@ -1800,6 +1802,7 @@ function Complete-Chat([string]$Key, $Message) {
   [void](Add-MessageSection $state.doc $Message $Key)
   Update-SendButton $Key
   Move-ChatToEnd $Key
+  if (Test-AdvisorKey $Key) { Update-AdvisorList }
 }
 
 function Stop-ChatWithError([string]$Key, [string]$Text) {
@@ -2239,17 +2242,10 @@ function Build-AskView {
   [System.Windows.Controls.DockPanel]::SetDock($top, 'Top')
   $head = New-Object System.Windows.Controls.DockPanel
   $head.MinHeight = 22
-  $newChat = New-Pressable 'new conversation' $null $faint
-  $newChat.FontSize = 11.5
-  $newChat.Margin = New-Gap 0 0 -4 0
-  $newChat.VerticalAlignment = 'Center'
-  $newChat.ToolTip = 'Start the Advisor afresh'
-  [System.Windows.Controls.DockPanel]::SetDock($newChat, 'Right')
   $title = New-Text 'What should I learn next?' $ink
   $title.FontSize = 15
   $title.FontWeight = 'SemiBold'
   $title.VerticalAlignment = 'Center'
-  [void]$head.Children.Add($newChat)
   [void]$head.Children.Add($title)
   [void]$top.Children.Add($head)
   $suggest = New-Object System.Windows.Controls.WrapPanel
@@ -2281,12 +2277,51 @@ function Build-AskView {
   [void]$root.Children.Add($top)
   [void]$root.Children.Add($bottom)
   [void]$root.Children.Add($reader)
-  $script:viewHosts['ask'].Child = $root
+  # The chats, the one used last on top, in a column on the left; the chat beside it.
+  $outer = New-Object System.Windows.Controls.DockPanel
+  Set-ViewColumn $outer
+  $root.Margin = New-Gap 0 0 0 0
+  $side = New-Object System.Windows.Controls.DockPanel
+  $side.Width = 232
+  $side.Margin = New-Gap 0 0 20 0
+  [System.Windows.Controls.DockPanel]::SetDock($side, 'Left')
+  $sideHead = New-Object System.Windows.Controls.DockPanel
+  $sideHead.MinHeight = 22
+  $sideHead.Margin = New-Gap 0 0 0 6
+  [System.Windows.Controls.DockPanel]::SetDock($sideHead, 'Top')
+  $newChat = New-Pressable "+ New chat" $null $dim
+  $newChat.FontSize = 12.5
+  $newChat.Margin = New-Gap 0 0 -4 0
+  $newChat.VerticalAlignment = 'Center'
+  $newChat.ToolTip = 'Start a new chat; the others stay in this list'
+  [System.Windows.Controls.DockPanel]::SetDock($newChat, 'Right')
+  $chatsLabel = New-Label 'Chats'
+  $chatsLabel.Margin = New-Gap 0 0 0 0
+  $chatsLabel.VerticalAlignment = 'Center'
+  [void]$sideHead.Children.Add($newChat)
+  [void]$sideHead.Children.Add($chatsLabel)
+  $listScroll = New-Object System.Windows.Controls.ScrollViewer
+  $listScroll.VerticalScrollBarVisibility = 'Auto'
+  $listScroll.HorizontalScrollBarVisibility = 'Disabled'
+  $list = New-Object System.Windows.Controls.StackPanel
+  $listScroll.Content = $list
+  [void]$side.Children.Add($sideHead)
+  [void]$side.Children.Add($listScroll)
+  $rule = New-Object System.Windows.Controls.Border
+  $rule.Width = 1
+  $rule.Background = $line
+  $rule.Margin = New-Gap 0 0 20 0
+  [System.Windows.Controls.DockPanel]::SetDock($rule, 'Left')
+  [void]$outer.Children.Add($side)
+  [void]$outer.Children.Add($rule)
+  [void]$outer.Children.Add($root)
+  $script:viewHosts['ask'].Child = $outer
+  $script:ui.askList = $list
   $script:ui.askInput = $askInput.box
   $script:ui.askReader = $reader
   $script:ui.askSend = $send
   Set-Click $send { param($Data, $Sender) Submit-Advisor }
-  Set-Click $newChat { param($Data, $Sender) Reset-Chat 'advisor' @{ advisor = $true } $script:ui.askReader }
+  Set-Click $newChat { param($Data, $Sender) New-AdvisorChat }
   $askInput.box.Add_PreviewKeyDown({
     param($sender, $e)
     try {
@@ -2296,16 +2331,153 @@ function Build-AskView {
   })
 }
 
+# The Advisor's chats: the helper keeps them (advisor.list); the window makes a new one's id, so
+# its key (advisor:<id>) is the same from the first word streamed to the last.
+function Get-AdvisorKey { return "advisor:$($script:advisorChatId)" }
+function Test-AdvisorKey([string]$Key) { return $Key.StartsWith('advisor:') }
+
+function New-AdvisorChatId {
+  $ms = [long]([DateTime]::UtcNow - [DateTime]::new(1970, 1, 1)).TotalMilliseconds
+  $letters = '0123456789abcdefghijklmnopqrstuvwxyz'
+  $random = -join (1..4 | ForEach-Object { $letters[(Get-Random -Maximum 36)] })
+  return 'a' + [Convert]::ToString($ms, 16) + $random
+}
+
 function Open-Advisor {
-  $state = Get-ChatState 'advisor'
-  if ($state.busy) { Show-Chat 'advisor' $state.messages $script:ui.askReader; return }
-  Invoke-Helper 'chat.get' @{ advisor = $true } {
+  Invoke-Helper 'advisor.list' @{} {
     param($Result, $Context)
-    Show-Chat 'advisor' @($Result.messages) $script:ui.askReader
+    $script:advisorChats = @($Result | Where-Object { $_ })
+    if (-not $script:advisorChatId) {
+      $script:advisorChatId = if ($script:advisorChats.Count -gt 0) { [string]$script:advisorChats[0].id } else { New-AdvisorChatId }
+    }
+    Show-AdvisorList
+    Show-AdvisorChat
   }
 }
 
-function Submit-Advisor { Submit-Chat 'advisor' @{ advisor = $true } $script:ui.askInput $script:ui.askReader }
+function Update-AdvisorList {
+  Invoke-Helper 'advisor.list' @{} {
+    param($Result, $Context)
+    $script:advisorChats = @($Result | Where-Object { $_ })
+    Show-AdvisorList
+  }
+}
+
+function Test-AdvisorSaved([string]$Id) { return @($script:advisorChats | Where-Object { [string]$_.id -eq $Id }).Count -gt 0 }
+
+function Show-AdvisorChat {
+  $key = Get-AdvisorKey
+  $state = Get-ChatState $key
+  if ($state.busy -or -not (Test-AdvisorSaved $script:advisorChatId)) { Show-Chat $key $state.messages $script:ui.askReader; return }
+  Invoke-Helper 'chat.get' @{ advisor = $true; chatId = $script:advisorChatId } {
+    param($Result, $Context)
+    # Another chat was picked while this one loaded.
+    if ($Context.key -ne (Get-AdvisorKey)) { return }
+    Show-Chat $Context.key @($Result.messages) $script:ui.askReader
+  } @{ key = $key }
+}
+
+function Select-AdvisorChat([string]$Id) {
+  if ($Id -eq $script:advisorChatId) { return }
+  $script:advisorChatId = $Id
+  Show-AdvisorList
+  Show-AdvisorChat
+}
+
+function New-AdvisorChat {
+  # The chat in front is new and still empty: it is the new chat.
+  $state = Get-ChatState (Get-AdvisorKey)
+  if (-not (Test-AdvisorSaved $script:advisorChatId) -and -not $state.busy -and @($state.messages).Count -eq 0) { [void]$script:ui.askInput.Focus(); return }
+  $script:advisorChatId = New-AdvisorChatId
+  Show-AdvisorList
+  Show-Chat (Get-AdvisorKey) @() $script:ui.askReader
+  [void]$script:ui.askInput.Focus()
+}
+
+function Remove-AdvisorChat([string]$Id, $Sender) {
+  if (-not (Test-Armed "advisor-remove:$Id" $Sender 'delete?')) { return }
+  Invoke-Helper 'advisor.remove' @{ chatId = $Id } {
+    param($Result, $Context)
+    [void]$script:chats.Remove("advisor:$($Context.id)")
+    $script:advisorChats = @($script:advisorChats | Where-Object { [string]$_.id -ne $Context.id })
+    if ($script:advisorChatId -eq $Context.id) {
+      $script:advisorChatId = if ($script:advisorChats.Count -gt 0) { [string]$script:advisorChats[0].id } else { New-AdvisorChatId }
+      Show-AdvisorChat
+    }
+    Show-AdvisorList
+    Show-Toast 'Chat deleted'
+  } @{ id = $Id }
+}
+
+# When a chat was last used: the time today, else the day.
+function Format-ChatWhen([string]$Iso) {
+  $when = [DateTime]::MinValue
+  if (-not $Iso -or -not [DateTime]::TryParse($Iso, [ref]$when)) { return '' }
+  $local = $when.ToLocalTime()
+  if ($local.Date -eq [DateTime]::Now.Date) { return $local.ToString('HH:mm') }
+  return Format-ShortDate $Iso
+}
+
+function New-AdvisorRow([string]$Id, [string]$Title, [string]$When, [bool]$Current, [bool]$Saved) {
+  $row = New-Object System.Windows.Controls.Border
+  $row.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+  $row.Padding = New-Gap 8 5 2 6
+  $row.Margin = New-Gap 0 0 0 2
+  Set-Hover $row
+  if ($Current) { $row.Background = $selected }
+  $dock = New-Object System.Windows.Controls.DockPanel
+  $dock.LastChildFill = $true
+  if ($Saved) {
+    # Delete: shown while the pointer is on the row (or the row is the open chat); two clicks.
+    $remove = New-Pressable $GLYPH_CLOSE $null $faint
+    $remove.FontSize = 11
+    $remove.VerticalAlignment = 'Top'
+    $remove.ToolTip = 'Delete this chat (click twice)'
+    $remove.Opacity = if ($Current) { 1 } else { 0 }
+    [System.Windows.Controls.DockPanel]::SetDock($remove, 'Right')
+    Set-Click $remove { param($Data, $Sender) Remove-AdvisorChat $Data $Sender } $Id
+    [void]$dock.Children.Add($remove)
+    $row.Resources['remove'] = $remove
+    $row.Add_MouseEnter({ param($sender, $e) $sender.Resources['remove'].Opacity = 1 })
+    if (-not $Current) { $row.Add_MouseLeave({ param($sender, $e) if ($sender.Resources['remove'].Text -eq $GLYPH_CLOSE) { $sender.Resources['remove'].Opacity = 0 } }) }
+  }
+  $stack = New-Object System.Windows.Controls.StackPanel
+  $name = New-Text $Title $ink
+  $name.FontSize = 13
+  $name.TextTrimming = 'CharacterEllipsis'
+  $name.ToolTip = $Title
+  [void]$stack.Children.Add($name)
+  if ($When) {
+    $whenText = New-Text $When $faint
+    $whenText.FontSize = 11
+    $whenText.Margin = New-Gap 0 1 0 0
+    [void]$stack.Children.Add($whenText)
+  }
+  [void]$dock.Children.Add($stack)
+  $row.Child = $dock
+  Set-Click $row { param($Data, $Sender) Select-AdvisorChat $Data } $Id
+  return $row
+}
+
+function Show-AdvisorList {
+  $list = $script:ui.askList
+  if (-not $list) { return }
+  $list.Children.Clear()
+  if (-not (Test-AdvisorSaved $script:advisorChatId)) {
+    [void]$list.Children.Add((New-AdvisorRow $script:advisorChatId 'New chat' '' $true $false))
+  }
+  foreach ($chat in @($script:advisorChats)) {
+    $title = if ($chat.title) { [string]$chat.title } else { 'Untitled chat' }
+    [void]$list.Children.Add((New-AdvisorRow ([string]$chat.id) $title (Format-ChatWhen ([string]$chat.updatedAt)) ([string]$chat.id -eq $script:advisorChatId) $true))
+  }
+}
+
+function Submit-Advisor {
+  $first = -not (Test-AdvisorSaved $script:advisorChatId)
+  Submit-Chat (Get-AdvisorKey) @{ advisor = $true; chatId = $script:advisorChatId } $script:ui.askInput $script:ui.askReader
+  # The question is saved before the answer comes: a new chat joins the list now.
+  if ($first) { Update-AdvisorList }
+}
 
 # ===================================================================================================
 # Settings
@@ -2615,6 +2787,8 @@ function Save-Setting($Change) {
       $script:pageData = $null
       $script:concepts = $null
       $script:chats = @{}
+      $script:advisorChatId = $null
+      $script:advisorChats = @()
       $tabTexts['course'].Visibility = 'Collapsed'
     }
     $script:settings = $Result

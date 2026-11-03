@@ -9,7 +9,7 @@ import {
   removeCategory, removeConcept, renameCategory, renameConcept, setDefinition, setLearned, setParent, stateOf,
 } from './catalogue.mjs';
 import { askStructured, describeTool } from './claude.mjs';
-import { chatKey, clearChat, readChat, sendChat } from './chat.mjs';
+import { chatKey, clearChat, listAdvisorChats, readChat, removeAdvisorChat, sendChat } from './chat.mjs';
 import { cancelJob, createJob, createPageJob, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon } from './build.mjs';
 import { ensureYtDlp, installedYtDlp } from './deps.mjs';
 import {
@@ -20,6 +20,7 @@ import { markdownToBlocks } from './markdown.mjs';
 import { overlapReport } from './overlap.mjs';
 import { MATCH_SCHEMA, TIDY_SCHEMA, matchPrompt, tidyPrompt } from './prompts.mjs';
 import { STATUS_FILE, readSettings, writeSettings } from './settings.mjs';
+import { safeId } from './store.mjs';
 
 export const encodeLine = value => JSON.stringify(value).replace(/[\u007f-￿]/g, ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`) + '\n';
 
@@ -51,7 +52,7 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
   const chats = new Map();
   let lib = openLibrary();
 
-  const target = request => (request.advisor ? { advisor: true } : { courseId: String(request.courseId), n: Number(request.n) });
+  const target = request => (request.advisor ? { advisor: true, chatId: safeId(request.chatId) } : { courseId: String(request.courseId), n: Number(request.n) });
 
   const handlers = {
     // A snapshot's copy of a library (LEARN_LIBRARY) never restarts its builds.
@@ -227,6 +228,11 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
     'chat.stop': ({ key }) => {
       chats.get(key)?.stop();
       return true;
+    },
+    'advisor.list': () => listAdvisorChats(lib),
+    'advisor.remove': ({ chatId }) => {
+      chats.get(chatKey({ advisor: true, chatId }))?.stop();
+      return removeAdvisorChat(lib, chatId);
     },
 
     'build.start': ({ topic, category, mode, link }) => {

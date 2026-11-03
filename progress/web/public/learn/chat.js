@@ -1,4 +1,5 @@
-// The chats: one conversation per key ("<courseId>:<n>" for a page, "advisor" for Ask).
+// The chats: one conversation per key ("<courseId>:<n>" for a page, "advisor:<id>" for each
+// of Ask's).
 // Each key keeps its own DOM, so a reply keeps streaming while you look elsewhere.
 import { renderBlocks } from './blocks.js';
 import { GLYPH, S, act, call, h, nav, toast } from './core.js';
@@ -6,6 +7,9 @@ import { startBuild } from './library.js';
 
 const chats = new Map(); // key -> { el, messages, busy, live, tool, liveSection }
 const panels = new Set();
+/** Called with the key when a reply finishes (Ask refreshes its list of chats). */
+export const doneListeners = new Set();
+export const isAdvisorKey = key => String(key || '').startsWith('advisor:');
 
 export const pageKey = (courseId, n) => `${courseId}:${n}`;
 
@@ -17,6 +21,9 @@ function stateOf(key) {
 export function forgetChats(keep = () => false) {
   for (const [key, state] of chats) if (!state.busy && !keep(key)) chats.delete(key);
 }
+
+export const chatBusy = key => Boolean(chats.get(key)?.busy);
+export const chatEmpty = key => !(chats.get(key)?.messages.length);
 
 export const forgetChat = key => { if (!chats.get(key)?.busy) chats.delete(key); };
 
@@ -87,7 +94,7 @@ function messageSection(message) {
 }
 
 function emptyNote(key) {
-  return h('p.chat-empty', null, key === 'advisor'
+  return h('p.chat-empty', null, isAdvisorKey(key)
     ? 'Ask what to learn next. Claude looks at what you have learned and read, and at the work folders you set in Settings, to suggest what would help you most.'
     : 'Ask about anything on this page, or answer one of its check questions. Claude knows the page and its sources.');
 }
@@ -101,16 +108,17 @@ function redraw(key) {
 
 /**
  * `fields()` gives the target ({ courseId, n } or { advisor: true }), or null when nothing
- * can be sent (no written page). `newLabel` names the clear link.
+ * can be sent (no written page). `newLabel` names the clear link (none without it); `onSent`
+ * runs once a message is in (the question is saved before the answer comes).
  */
-export function chatPanel({ title, placeholder, newLabel, fields }) {
+export function chatPanel({ title, placeholder, newLabel, fields, onSent = null }) {
   const log = h('div.chat-scroll');
   const input = h('textarea.ui-input.chat-input', { placeholder, rows: 3, 'aria-label': 'Message' });
   const send = h('button.ui-btn.primary.send', { type: 'button' }, 'Send');
-  const clear = h('button.action.dim', { type: 'button' }, newLabel);
+  const clear = newLabel ? h('button.action.dim', { type: 'button' }, newLabel) : null;
   const head = h('div.chat-head', null, title ? h('h3.chat-title', null, title) : null, clear);
   const root = h('div.chat-panel', null, head, log, h('div.chat-compose', null, input, send));
-  const panel = { root, input, send, log, key: null, fields, head };
+  const panel = { root, input, send, log, key: null, fields, head, onSent };
   panels.add(panel);
 
   send.addEventListener('click', () => submit(panel));
@@ -120,7 +128,7 @@ export function chatPanel({ title, placeholder, newLabel, fields }) {
       submit(panel);
     }
   });
-  clear.addEventListener('click', async () => {
+  clear?.addEventListener('click', async () => {
     if (!panel.key) return;
     const state = stateOf(panel.key);
     if (state.busy) {
@@ -149,15 +157,17 @@ export function showChat(panel, key, messages) {
   toEnd(panel);
 }
 
-/** Opening a chat that isn't part of a page: chat.get. */
-export async function openChat(panel, key, target) {
+/** Opening a chat that isn't part of a page: chat.get (none for a chat not saved yet). */
+export async function openChat(panel, key, target, { saved = true } = {}) {
   const state = stateOf(key);
-  if (state.busy) {
+  if (state.busy || !saved) {
     showChat(panel, key, state.messages);
     return;
   }
   try {
     const chat = await call('chat.get', target);
+    // Another chat was picked while this one loaded.
+    if (panel.wanted && panel.wanted !== key) return;
     showChat(panel, key, chat.messages);
   } catch (error) {
     showChat(panel, key, []);
@@ -224,6 +234,7 @@ export async function submit(panel) {
   toEnd(panel);
   try {
     await call('chat.send', { ...target, text });
+    panel.onSent?.(key);
   } catch (error) {
     failed(key, String(error.message || error));
   }
@@ -253,6 +264,7 @@ export function chatEvent(event) {
       }
       updatePanelsFor(event.key);
       toEndFor(event.key);
+      for (const listener of doneListeners) listener(event.key);
       break;
     }
     case 'chat.error':

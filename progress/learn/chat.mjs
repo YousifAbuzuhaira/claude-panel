@@ -1,28 +1,95 @@
 // The chats: one thread per page (resumed with `claude -p --resume`, so the page stays in
-// Claude's context), and the Advisor (a fresh run each time with the learner's current
-// state, since a resumed session keeps the system prompt it started with).
+// Claude's context), and the Advisor's (Ask's) chats, as many as the learner keeps, each a
+// fresh run every time with the learner's current state, since a resumed session keeps the
+// system prompt it started with. An Advisor chat's id is made by the window when it starts
+// one, so its streaming key never changes mid-reply.
 import { stateOf } from './catalogue.mjs';
 import { runClaude } from './claude.mjs';
 import { courseSummary, listCourses, readCatalogue, readCourse, readPage } from './library.mjs';
 import { advisorSystem, pageChatSystem } from './prompts.mjs';
-import { readJson, withLock, writeJson, writeText } from './store.mjs';
+import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { readJson, safeId, withLock, writeJson, writeText } from './store.mjs';
 
 const PAGE_TOOLS = ['WebSearch', 'WebFetch', 'Read'];
 const ADVISOR_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
 const ADVISOR_HISTORY = 12;
 
-export const chatKey = target => (target.advisor ? 'advisor' : `${target.courseId}:${target.n}`);
+export const chatKey = target => (target.advisor ? `advisor:${target.chatId}` : `${target.courseId}:${target.n}`);
 
-const chatFile = (lib, target) => (target.advisor ? lib.paths.advisorChat : lib.paths.chat(target.courseId, target.n));
+const chatFile = (lib, target) => (target.advisor ? lib.paths.advisorChatFile(target.chatId) : lib.paths.chat(target.courseId, target.n));
 
-export const readChat = (lib, target) => readJson(chatFile(lib, target)) || { v: 1, sessionId: null, messages: [] };
+const emptyChat = target => (target.advisor ? { v: 1, id: target.chatId, title: '', createdAt: null, updatedAt: null, messages: [] } : { v: 1, sessionId: null, messages: [] });
+
+/** A new Advisor chat's id, for a window that has none to hand (the CLI, a test). */
+export const newChatId = () => `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+/** The one Advisor chat of before (advisor/chat.json) becomes the first of the list. */
+export function migrateAdvisorChat(lib) {
+  const old = lib.paths.advisorChat;
+  if (!existsSync(old)) return null;
+  return withLock(lib.root, () => {
+    if (!existsSync(old)) return null;
+    const chat = readJson(old);
+    let id = null;
+    if (chat && Array.isArray(chat.messages) && chat.messages.length) {
+      const first = chat.messages[0].at || new Date().toISOString();
+      id = `a${Date.parse(first).toString(36) || Date.now().toString(36)}old`;
+      writeJson(lib.paths.advisorChatFile(id), {
+        v: 1,
+        id,
+        title: titleOf(chat.messages),
+        createdAt: first,
+        updatedAt: chat.messages.at(-1).at || first,
+        messages: chat.messages,
+      });
+    }
+    renameSync(old, `${old}.moved`);
+    return id;
+  });
+}
+
+const titleOf = messages => {
+  const first = messages.find(message => message.role === 'user');
+  const text = first ? first.text.replace(/\s+/g, ' ').trim() : '';
+  return text.length > 60 ? `${text.slice(0, 59).trimEnd()}\u2026` : text;
+};
+
+export function readChat(lib, target) {
+  if (target.advisor) migrateAdvisorChat(lib);
+  return readJson(chatFile(lib, target)) || emptyChat(target);
+}
 
 function saveChat(lib, target, chat) {
+  if (target.advisor) {
+    const stamp = new Date().toISOString();
+    Object.assign(chat, { v: 1, id: target.chatId, title: titleOf(chat.messages), createdAt: chat.createdAt || stamp, updatedAt: stamp });
+  }
   withLock(lib.root, () => writeJson(chatFile(lib, target), chat));
 }
 
 export function clearChat(lib, target) {
-  saveChat(lib, target, { v: 1, sessionId: null, messages: [] });
+  saveChat(lib, target, emptyChat(target));
+}
+
+/** The Advisor's chats, the one used last first: `{ id, title, createdAt, updatedAt, count }`. */
+export function listAdvisorChats(lib) {
+  migrateAdvisorChat(lib);
+  const dir = lib.paths.advisorChats;
+  if (!existsSync(dir)) return [];
+  const chats = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue;
+    const chat = readJson(`${dir}/${name}`);
+    if (!chat || !Array.isArray(chat.messages) || !chat.messages.length) continue;
+    chats.push({ id: chat.id || name.slice(0, -5), title: chat.title || titleOf(chat.messages), createdAt: chat.createdAt, updatedAt: chat.updatedAt, count: chat.messages.length });
+  }
+  return chats.sort((p, q) => String(q.updatedAt).localeCompare(String(p.updatedAt)));
+}
+
+export function removeAdvisorChat(lib, chatId) {
+  const file = lib.paths.advisorChatFile(safeId(chatId));
+  withLock(lib.root, () => rmSync(file, { force: true }));
+  return true;
 }
 
 const MARK = /\[\[\s*mark-learned\s*:\s*([^\]]*)\]\]/gi;

@@ -276,3 +276,61 @@ describe('serve', () => {
     assert.equal(JSON.parse(lines[0]).result.name, 'Café → ops');
   });
 });
+
+describe("Ask's chats", () => {
+  const ask = async (server, lines, request) => {
+    const before = lines.length;
+    await server.handle(JSON.stringify(request));
+    return JSON.parse(lines.slice(before).find(line => JSON.parse(line).rid === request.rid));
+  };
+
+  test('the one chat of before becomes the first of the list, once', async () => {
+    const lib = openLibrary();
+    writeJson(lib.paths.advisorChat, { v: 1, sessionId: null, messages: [
+      { role: 'user', text: 'What should I learn next about Postgres replication and failover in production?', at: '2026-11-01T10:00:00.000Z' },
+      { role: 'assistant', text: 'Start with WAL.', at: '2026-11-01T10:01:00.000Z' },
+    ] });
+    const lines = [];
+    const server = createServer({ write: text => lines.push(text.trim()) });
+    const list = (await ask(server, lines, { rid: 1, cmd: 'advisor.list' })).result;
+    assert.equal(list.length, 1);
+    assert.equal(list[0].count, 2);
+    assert.ok(list[0].title.length <= 60);
+    assert.match(list[0].title, /^What should I learn next about Postgres/);
+    assert.ok(!existsSync(lib.paths.advisorChat));
+    assert.ok(existsSync(`${lib.paths.advisorChat}.moved`));
+    const again = (await ask(server, lines, { rid: 2, cmd: 'advisor.list' })).result;
+    assert.equal(again.length, 1);
+    const chat = (await ask(server, lines, { rid: 3, cmd: 'chat.get', advisor: true, chatId: list[0].id })).result;
+    assert.equal(chat.messages.length, 2);
+    assert.ok(chat.messages[1].blocks, 'replies come with their blocks');
+  });
+
+  test('chats are listed by when they were last used; a new id reads empty; remove takes one away', async () => {
+    const lib = openLibrary();
+    writeJson(lib.paths.advisorChatFile('aold'), { v: 1, id: 'aold', title: 'Old', createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z', messages: [{ role: 'user', text: 'Old', at: '2026-10-01T00:00:00.000Z' }] });
+    writeJson(lib.paths.advisorChatFile('anew'), { v: 1, id: 'anew', title: 'New', createdAt: '2026-11-02T00:00:00.000Z', updatedAt: '2026-11-02T00:00:00.000Z', messages: [{ role: 'user', text: 'New', at: '2026-11-02T00:00:00.000Z' }] });
+    writeJson(lib.paths.advisorChatFile('aempty'), { v: 1, id: 'aempty', title: '', createdAt: null, updatedAt: null, messages: [] });
+    const lines = [];
+    const server = createServer({ write: text => lines.push(text.trim()) });
+    const ids = (await ask(server, lines, { rid: 1, cmd: 'advisor.list' })).result.map(chat => chat.id);
+    assert.deepEqual(ids.slice(0, 2), ['anew', 'aold']);
+    assert.ok(!ids.includes('aempty'), 'an empty chat is not listed');
+    const fresh = (await ask(server, lines, { rid: 2, cmd: 'chat.get', advisor: true, chatId: 'abrandnew' })).result;
+    assert.deepEqual(fresh.messages, []);
+    assert.equal((await ask(server, lines, { rid: 3, cmd: 'advisor.remove', chatId: 'aold' })).ok, true);
+    const after = (await ask(server, lines, { rid: 4, cmd: 'advisor.list' })).result.map(chat => chat.id);
+    assert.ok(!after.includes('aold'));
+    assert.ok(!existsSync(lib.paths.advisorChatFile('aold')));
+  });
+
+  test('a chat id must be a safe name', async () => {
+    const lines = [];
+    const server = createServer({ write: text => lines.push(text.trim()) });
+    const bad = await ask(server, lines, { rid: 1, cmd: 'chat.get', advisor: true, chatId: '../../etc' });
+    assert.equal(bad.ok, false);
+    assert.match(bad.error, /bad id/);
+    const none = await ask(server, lines, { rid: 2, cmd: 'advisor.remove', chatId: '' });
+    assert.equal(none.ok, false);
+  });
+});
