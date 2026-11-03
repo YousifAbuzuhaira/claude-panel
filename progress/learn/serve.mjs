@@ -10,7 +10,7 @@ import {
 } from './catalogue.mjs';
 import { askStructured, describeTool } from './claude.mjs';
 import { chatKey, clearChat, listAdvisorChats, readChat, removeAdvisorChat, sendChat } from './chat.mjs';
-import { cancelJob, createJob, createPageJob, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon } from './build.mjs';
+import { cancelJob, createJob, createPageJob, dropJobFiles, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon } from './build.mjs';
 import { ensureYtDlp, installedYtDlp } from './deps.mjs';
 import {
   courseSummary, listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCourse, readPage, readStatus, recordUsage,
@@ -21,6 +21,7 @@ import { overlapReport } from './overlap.mjs';
 import { MATCH_SCHEMA, TIDY_SCHEMA, matchPrompt, tidyPrompt } from './prompts.mjs';
 import { STATUS_FILE, readSettings, writeSettings } from './settings.mjs';
 import { safeId } from './store.mjs';
+import { listClaudeChats } from './chats.mjs';
 
 export const encodeLine = value => JSON.stringify(value).replace(/[\u007f-￿]/g, ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`) + '\n';
 
@@ -235,8 +236,8 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       return removeAdvisorChat(lib, chatId);
     },
 
-    'build.start': ({ topic, category, mode, link }) => {
-      const job = createJob(lib, { topic, category, mode, link });
+    'build.start': ({ topic, category, mode, link, file, name, chat, focus }) => {
+      const job = createJob(lib, { topic, category, mode, link, file, name, chat, focus });
       startDaemon(lib, job.id);
       return job;
     },
@@ -245,11 +246,16 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
     'build.cancel': ({ jobId }) => cancelJob(lib, jobId),
     'build.dismiss': ({ jobId }) => {
       const job = readJob(lib, jobId);
-      if (job) saveJob(lib, { ...job, dismissed: true });
+      if (job) {
+        saveJob(lib, { ...job, dismissed: true });
+        if (job.state !== 'running') dropJobFiles(lib, job);
+      }
       if (readStatus().build?.id === jobId) writeStatus({ build: null });
       return true;
     },
     'jobs.list': () => listJobs(lib).slice(0, 20),
+    // The learner's Claude Code chats, to build a course from one (Learn's own runs left out).
+    'claudeChats.list': () => listClaudeChats({ exclude: [lib.root] }),
 
     'deps.check': () => installedYtDlp(),
     'deps.install': async () => {

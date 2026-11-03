@@ -350,6 +350,9 @@ function showPageHeader() {
 
 function sourceLinks(page) {
   const source = page.source || {};
+  // A document or a chat brief: named, with nothing to open from a browser.
+  if (source.kind === 'doc') return [h('span.source.local', { title: source.fileName || '' }, `${GLYPH.doc} ${short(source.title || source.fileName || 'Document', 70)}`)];
+  if (source.kind === 'chat') return [h('span.source.local', null, `${GLYPH.chat} From your chat: ${short(source.title || '', 60)}`)];
   const items = [{ url: source.url, title: source.title, kind: source.kind, from: source.fromSec, to: source.toSec }];
   for (const item of page.support || []) {
     if (item.url) items.push({ url: item.url, title: item.title, kind: /youtu\.?be/.test(item.url) ? 'youtube' : 'web', from: item.fromSec, to: item.toSec });

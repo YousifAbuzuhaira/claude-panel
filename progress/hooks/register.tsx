@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PhasePlan, TestRun } from '../types'
-import { isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus } from './learn'
+import { courseArgv, isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus } from './learn'
 import type { LearnStatus } from './learn'
 import { GAMES, isGame, openingText, windowScript } from './pages'
 import {
@@ -514,6 +514,12 @@ export const register: Register = on => {
       immediate: true,
     })
     await $.command.register({
+      name: 'course',
+      description: 'Build a Learn course about something you did in this chat: /course how we fixed the browser link',
+      argumentHint: '<what the course should cover>',
+      immediate: true,
+    })
+    await $.command.register({
       name: 'games',
       description: 'Open a game while Claude works: sudoku, 2048, typing or chess',
       argumentHint: '[sudoku|2048|typing|chess]',
@@ -658,6 +664,15 @@ export const register: Register = on => {
       return { text: await openPage($, 'learn', { view, courseId: course.id, courseTitle: course.title || undefined }) }
     }
     return { text: await openPage($, 'learn', { view: view || undefined }) }
+  })
+
+  on('command.run', { command: 'course' }, async ($, e) => {
+    const focus = e.args.trim()
+    if (!focus) return { text: 'Say what the course should cover, as in: /course how we fixed the browser link' }
+    const sessionId = await $.session.id()
+    const ran = await $.process.run(courseArgv({ pluginRoot: $.plugin.root, sessionId, focus }))
+    if (ran.exitCode !== 0) return { text: `Learn couldn't start the build: ${(ran.stderr.trim() || ran.stdout.trim()).split('\n').at(-1) || 'no answer'}` }
+    return { text: `Building a Learn course about "${focus}" from this chat. Learn reads the chat's saved record (it asks this chat nothing). Its progress shows on the panel's Learn tab; /learn opens it.` }
   })
 
   on('command.run', { command: 'games' }, async ($, e) => {

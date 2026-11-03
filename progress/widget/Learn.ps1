@@ -34,7 +34,9 @@ param(
   [int]$SnapshotWidth = 0,
   [int]$SnapshotHeight = 0,
   # A snapshot with the row of other windows open under the header, as the games mark opens it.
-  [switch]$SnapshotGames
+  [switch]$SnapshotGames,
+  # A Library snapshot with New course set to build from a document or a chat.
+  [ValidateSet('', 'topic', 'document', 'chat')][string]$SnapshotSource = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -160,6 +162,8 @@ $PAGE_MIN_WIDTH = 420
 $CHAT_MIN_WIDTH = 300
 $CONTENTS_MIN_WIDTH = 200
 $GLYPH_NBSP = [string][char]0x00A0
+$GLYPH_DOC = [string][char]0x25A4   # a page of lines: a document
+$GLYPH_CHAT = [string][char]0x275D  # a quote mark: from a chat
 $PAGE_GLYPH_WIDTH = 20
 $LEARN_REQUEST_FILE = Join-Path $env:LOCALAPPDATA 'ClaudePhases\learn-open.json'
 $LEARN_REQUEST_MAX_MS = 15000
@@ -1020,7 +1024,10 @@ $script:snapshotAt = $null
 function Start-SnapshotView {
   if ($SnapshotGames) { Set-SwitcherShown $true }
   switch ($SnapshotView) {
-    'library' { Show-View 'library' }
+    'library' {
+      Show-View 'library'
+      if ($SnapshotSource) { Set-NewSource $SnapshotSource }
+    }
     'learned' { Show-View 'learned' }
     'ask' { Show-View 'ask' }
     'settings' { Show-View 'settings' }

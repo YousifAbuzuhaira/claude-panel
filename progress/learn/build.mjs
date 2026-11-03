@@ -4,7 +4,8 @@
 // sleep or a reboot carries on from where it got to. Builds run as their own detached
 // process (`learn.mjs build run <id>`), so closing the window doesn't stop them.
 import { spawn } from 'node:child_process';
-import { mkdirSync, openSync, readdirSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, extname, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { applyProposals, compactCatalogue, ensureCategory, findCategory, stateOf } from './catalogue.mjs';
@@ -12,12 +13,15 @@ import { askStructured, describeTool, stopAll } from './claude.mjs';
 import { activeJobFor, buildStatus, newCourseId, readCatalogue, readCourse, readStatus, recordUsage, updateCatalogue, updateCourse, writeStatus } from './library.mjs';
 import { markdownToBlocks } from './markdown.mjs';
 import { overlapReport } from './overlap.mjs';
-import { OUTLINE_SCHEMA, PAGE_PLAN_SCHEMA, PAGE_SCHEMA, RESEARCH_SCHEMA, outlinePrompt, pagePlanPrompt, pagePrompt, researchPrompt } from './prompts.mjs';
+import { BRIEF_SCHEMA, OUTLINE_SCHEMA, PAGE_PLAN_SCHEMA, PAGE_SCHEMA, RESEARCH_SCHEMA, chatBriefPrompt, outlinePrompt, pagePlanPrompt, pagePrompt, researchPrompt } from './prompts.mjs';
+import { SESSION_ID, readClaudeChat } from './chats.mjs';
 import {
   condenseTranscript, fetchPage, formatTime, isExtractorError, isPlaylist, isYouTube, sectionsOutline, sectionsText,
   transcriptText, watchUrl, youTubeId, ytCaptions, ytInfo, ytPlaylist, ytSearch,
 } from './sources.mjs';
 import { ensureYtDlp } from './deps.mjs';
+import { MAX_DOCUMENT_BYTES, documentType, readDocument, uniqueHeadings } from './documents.mjs';
+import { CONFIG_DIR, toWslPath } from './settings.mjs';
 import { readJson, withLock, writeJson } from './store.mjs';
 
 const LEARN_MJS = fileURLToPath(new URL('./learn.mjs', import.meta.url));
@@ -77,25 +81,50 @@ export function createPageJob(lib, { courseId, kind, n = null, note = null, topi
   throw new Error(`unknown page job ${kind}`);
 }
 
-export function createJob(lib, { topic, category, mode = 'pick', link = null }) {
+/** A document given to a build: its path here (a Windows path is turned into WSL's), and its name. */
+function checkDocument(file, name) {
+  const path = resolve(toWslPath(String(file).trim()));
+  const fileName = String(name || basename(path)).trim().slice(0, 200);
+  if (!documentType(fileName)) throw new Error(`Learn reads PDF, Word (.docx), Markdown, text and HTML files, not ${extname(fileName) || 'this file'}`);
+  let size;
+  try {
+    size = statSync(path).size;
+  } catch {
+    throw new Error(`can't open ${fileName}`);
+  }
+  if (!size) throw new Error(`${fileName} is empty`);
+  if (size > MAX_DOCUMENT_BYTES) throw new Error(`${fileName} is ${Math.round(size / 1048576)} MB; Learn reads documents up to ${MAX_DOCUMENT_BYTES / 1048576} MB`);
+  return { path, fileName };
+}
+
+export function createJob(lib, { topic, category, mode = 'pick', link = null, file = null, name = null, chat = null, focus = null }) {
   const cleanTopic = String(topic || '').trim().slice(0, 200);
   const cleanLink = link ? String(link).trim() : null;
-  if (!cleanTopic && !cleanLink) throw new Error('type a topic or paste a link');
+  const document = file ? checkDocument(file, name) : null;
+  const chatId = chat ? String(chat).trim() : null;
+  const cleanFocus = String(focus || topic || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (chatId && !SESSION_ID.test(chatId)) throw new Error('that is not a chat id');
+  if (chatId && !cleanFocus) throw new Error('say what the course should cover');
+  if (!cleanTopic && !cleanLink && !document && !chatId) throw new Error('type a topic or paste a link');
   if (cleanLink && !/^https?:\/\//.test(cleanLink)) throw new Error('the link must start with http:// or https://');
   const stamp = now().replace(/[-:T]/g, '').slice(0, 12);
   const job = {
     v: 1,
     id: `j${stamp}${randomBytes(2).toString('hex')}`,
-    topic: cleanTopic || cleanLink,
+    topic: chatId ? cleanFocus : cleanTopic || cleanLink || (document ? basename(document.fileName, extname(document.fileName)) : ''),
     link: cleanLink,
+    file: null,
+    fileName: document ? document.fileName : null,
+    chat: chatId,
+    focus: chatId ? cleanFocus : null,
     category: String(category || '').trim().slice(0, 60) || 'General',
-    mode: cleanLink ? 'link' : mode === 'auto' ? 'auto' : 'pick',
+    mode: chatId ? 'chat' : document ? 'document' : cleanLink ? 'link' : mode === 'auto' ? 'auto' : 'pick',
     courseId: null,
     courseTitle: null,
     summary: null,
     step: 'research',
     state: 'running',
-    message: cleanLink ? 'Reading the link' : `Researching ${cleanTopic}`,
+    message: chatId ? 'Reading your chat' : document ? `Reading ${document.fileName}` : cleanLink ? 'Reading the link' : `Researching ${cleanTopic}`,
     done: 0,
     total: 0,
     candidates: null,
@@ -104,7 +133,34 @@ export function createJob(lib, { topic, category, mode = 'pick', link = null }) 
     error: null,
     startedAt: now(),
   };
+  if (document) {
+    // The build keeps its own copy, so the course still works when the original moves. An
+    // upload from the web page (in our config folder) is moved rather than copied.
+    const stored = lib.paths.jobDocument(job.id, extname(document.fileName));
+    mkdirSync(lib.paths.jobs, { recursive: true });
+    const upload = document.path.startsWith(`${resolve(CONFIG_DIR, 'uploads')}/`);
+    if (upload) {
+      try {
+        renameSync(document.path, stored);
+      } catch {
+        copyFileSync(document.path, stored);
+        rmSync(document.path, { force: true });
+      }
+    } else {
+      copyFileSync(document.path, stored);
+    }
+    job.file = stored;
+  }
   return saveJob(lib, job);
+}
+
+/** A job's leftovers once nothing needs them: its copy of a document, what was read from it. */
+export function dropJobFiles(lib, job) {
+  if (job.file && job.file.startsWith(`${lib.paths.jobs}/`)) rmSync(job.file, { force: true });
+  if (job.id) {
+    rmSync(lib.paths.jobSections(job.id), { force: true });
+    rmSync(lib.paths.jobChat(job.id), { recursive: true, force: true });
+  }
 }
 
 const isAlive = pid => {
@@ -175,7 +231,7 @@ export function cancelJob(lib, id) {
 // --- Running a job ------------------------------------------------------------------------
 
 /** `io` is what the steps reach out to; the tests swap it. */
-export const defaultIo = { askStructured, ytSearch, ytInfo, ytCaptions, ytPlaylist, fetchPage, ensureYtDlp };
+export const defaultIo = { askStructured, ytSearch, ytInfo, ytCaptions, ytPlaylist, fetchPage, ensureYtDlp, readDocument, readClaudeChat };
 
 export async function runJob(lib, id, io = defaultIo) {
   let job = readJob(lib, id);
@@ -257,7 +313,65 @@ export function tidyCandidates(candidates) {
   return out;
 }
 
+/**
+ * A course from one of the learner's chats: the chat shrunk to a text file (secrets masked),
+ * then one Claude run with Read and Grep only (and the project, read only) writes a brief of
+ * the part the course is about. The brief is the course's one source, like a document.
+ */
+async function researchChat(lib, job, save, io) {
+  save({ message: 'Reading your chat' });
+  const chat = await io.readClaudeChat(job.chat);
+  if (!chat.turns) throw new Error('that chat has nothing said in it');
+  const work = lib.paths.jobChat(job.id);
+  mkdirSync(work, { recursive: true, mode: 0o700 });
+  writeFileSync(`${work}/chat.txt`, chat.text, { mode: 0o600 });
+  const categories = readCatalogue(lib).categories.map(category => category.name);
+  save({ message: `Finding "${job.focus}" in ${chat.title}` });
+  let brief;
+  try {
+    brief = await io.askStructured({
+      prompt: chatBriefPrompt({ focus: job.focus, title: chat.title, project: chat.cwd ? basename(chat.cwd) : '', cwd: chat.cwd && existsSync(chat.cwd) ? chat.cwd : null, categories }),
+      schema: BRIEF_SCHEMA,
+      tools: ['Read', 'Grep', 'Glob'],
+      addDirs: chat.cwd && existsSync(chat.cwd) ? [chat.cwd] : [],
+      model: lib.settings.models.build,
+      cwd: work,
+      onRateLimit: recordUsage,
+      onTool: tool => save({ message: describeTool(tool) }),
+    });
+  } finally {
+    // The chat's text is only for that run.
+    rmSync(work, { recursive: true, force: true });
+  }
+  const sections = uniqueHeadings((brief.sections || []).filter(section => section && section.heading && String(section.text || '').trim()).map(section => ({ heading: String(section.heading).slice(0, 140), level: 1, text: String(section.text).slice(0, 40_000) })));
+  if (brief.found === false || sections.length < 2) throw new Error(`the chat has nothing about "${job.focus}"${brief.summary ? `: ${String(brief.summary).slice(0, 200)}` : ''}`);
+  const title = String(brief.courseTitle || job.focus).slice(0, 200);
+  withLock(lib.root, () => writeJson(lib.paths.jobSections(job.id), { type: 'chat', title, chatTitle: chat.title, project: chat.cwd ? basename(chat.cwd) : '', sections }));
+  const candidate = { id: 's1', kind: 'chat', url: null, title, channel: chat.title, lengthMin: null, level: null, why: 'Your chat', recommended: true };
+  const category = job.category === 'General' && brief.category ? String(brief.category).trim().slice(0, 60) || job.category : job.category;
+  save({ candidates: [candidate], picks: ['s1'], courseTitle: title, summary: String(brief.summary || '').slice(0, 400), category, step: 'fetch' });
+}
+
 async function research(lib, job, save, io) {
+  if (job.chat) {
+    await researchChat(lib, job, save, io);
+    return;
+  }
+  if (job.file) {
+    // A document is its own one source: read it now, so the course starts with its real title.
+    const read = await io.readDocument(job.file, {
+      name: job.fileName,
+      model: lib.settings.models.build,
+      onProgress: message => save({ message }),
+      onRateLimit: recordUsage,
+    });
+    withLock(lib.root, () => writeJson(lib.paths.jobSections(job.id), read));
+    const detail = [read.type, read.pages ? `${read.pages} pages` : null, read.byClaude ? `${read.byClaude} read by Claude` : null].filter(Boolean).join(', ');
+    const candidate = { id: 's1', kind: 'doc', url: null, title: read.title.slice(0, 200), channel: detail, lengthMin: null, level: null, why: 'The document you gave', recommended: true };
+    const topic = job.topic && job.topic !== basename(job.fileName, extname(job.fileName)) ? job.topic : read.title;
+    save({ candidates: [candidate], picks: ['s1'], courseTitle: read.title.slice(0, 200), topic: topic.slice(0, 200), step: 'fetch' });
+    return;
+  }
   if (job.link) {
     let candidates;
     let title;
@@ -344,7 +458,10 @@ async function fetchSources(lib, job, save, io) {
     save({ message: `Reading ${source.kind === 'youtube' ? 'video' : 'page'} ${index}/${total}: ${source.title}` });
     let record;
     try {
-      record = source.kind === 'youtube' ? await fetchVideo(lib, courseId, source, io) : await fetchWeb(source, io);
+      record = source.kind === 'youtube' ? await fetchVideo(lib, courseId, source, io)
+        : source.kind === 'doc' ? await fetchDocument(lib, job, courseId, source, io)
+          : source.kind === 'chat' ? fetchChatBrief(lib, job, source)
+            : await fetchWeb(source, io);
     } catch (error) {
       record = { usable: false, reason: String(error.message || error).slice(0, 200) };
     }
@@ -383,6 +500,38 @@ async function fetchWeb(source, io) {
   const meta = { title: page.title || source.title };
   if (size < 500) return { usable: false, reason: 'the page has almost no text (it may need a browser)', meta };
   return { usable: true, meta, data: { v: 1, id: source.id, kind: 'web', url: source.url, title: page.title || source.title, sections: page.sections } };
+}
+
+/** The document the job read: moved into the course, with the sections read from it. */
+async function fetchDocument(lib, job, courseId, source, io) {
+  const read = readJson(lib.paths.jobSections(job.id)) || (await io.readDocument(job.file, { name: job.fileName, model: lib.settings.models.build, onRateLimit: recordUsage }));
+  const kept = lib.paths.courseDocument(courseId, source.id, extname(job.fileName));
+  mkdirSync(resolve(kept, '..'), { recursive: true });
+  if (existsSync(job.file)) {
+    try {
+      renameSync(job.file, kept);
+    } catch {
+      copyFileSync(job.file, kept);
+    }
+  }
+  dropJobFiles(lib, job);
+  return {
+    usable: true,
+    meta: { title: read.title },
+    data: { v: 1, id: source.id, kind: 'doc', url: null, title: read.title, docType: read.type, pages: read.pages || null, file: existsSync(kept) ? kept : null, fileName: job.fileName, sections: read.sections },
+  };
+}
+
+/** The brief written from the chat, as the course's source. */
+function fetchChatBrief(lib, job, source) {
+  const brief = readJson(lib.paths.jobSections(job.id));
+  if (!brief) throw new Error('the brief from the chat is missing: start the build again');
+  dropJobFiles(lib, job);
+  return {
+    usable: true,
+    meta: { title: brief.title },
+    data: { v: 1, id: source.id, kind: 'chat', url: null, title: brief.title, chatId: job.chat, chatTitle: brief.chatTitle, project: brief.project, sections: brief.sections },
+  };
 }
 
 const readSource = (lib, courseId, id) => readJson(lib.paths.source(courseId, id));
@@ -476,7 +625,7 @@ export function cleanOutline(pages, sources) {
     return { fromSec: Math.floor(start), toSec: Math.floor(stop) };
   };
   const pickSections = (source, names) => {
-    if (source.kind !== 'web') return [];
+    if (source.kind === 'youtube') return [];
     const known = headings(source);
     return (names || []).map(name => known.get(String(name).toLowerCase().trim())).filter(Boolean);
   };
@@ -502,7 +651,8 @@ function material(source, from, to, sections, budget) {
   if (source.kind === 'youtube') {
     return `### Video ${source.id}: "${source.title}" by ${source.channel} (${source.url}), ${formatTime(from || 0)} to ${formatTime(to || source.durationSec)}\n${transcriptText(source.chunks, from || 0, to || Infinity).slice(0, budget)}`;
   }
-  return `### Web page ${source.id}: "${source.title}" (${source.url})\n${sectionsText(source.sections, sections && sections.length ? sections : null, budget)}`;
+  const name = source.kind === 'doc' ? `Document ${source.id}: "${source.title}" (${source.docType || 'document'})` : source.kind === 'chat' ? `Chat brief ${source.id}: "${source.title}"` : `Web page ${source.id}: "${source.title}" (${source.url})`;
+  return `### ${name}\n${sectionsText(source.sections, sections && sections.length ? sections : null, budget)}`;
 }
 
 async function writePages(lib, job, save, io, isStopping) {
@@ -569,7 +719,7 @@ async function writePages(lib, job, save, io, isStopping) {
         n: page.n,
         title: page.title,
         concepts: page.concepts,
-        source: { id: main.id, kind: main.kind, url: main.url, title: main.title, videoId: videoSource?.videoId || null, fromSec: page.fromSec, toSec: page.toSec },
+        source: { id: main.id, kind: main.kind, url: main.url, title: main.title, videoId: videoSource?.videoId || null, fromSec: page.fromSec, toSec: page.toSec, ...(main.kind === 'doc' ? { file: main.file || null, fileName: main.fileName || null, docType: main.docType || null } : {}) },
         support: (page.support || []).map(item => ({ ...item, url: sources.get(item.sourceId)?.url, title: sources.get(item.sourceId)?.title })),
         markdown,
         blocks: markdownToBlocks(markdown, { videoId: videoSource?.videoId || null, videos, sectionLinks }),

@@ -1,7 +1,10 @@
 // Learn's helper, run in WSL (through learn.sh, which finds Node and claude).
 //
 //   learn.sh serve                                   the window's JSON-lines channel
-//   learn.sh build start --topic "DevOps" --category DevOps [--mode pick|auto] | --link <url>
+//   learn.sh build start --topic "DevOps" --category DevOps [--mode pick|auto] | --link <url> | --file <path>
+//                        | --chat <session id> --focus "what the course covers"   (a course from a Claude chat)
+//   learn.sh chats                                   your recent Claude chats
+//   learn.sh extract <file>                          what Learn reads from a document (no build)
 //   learn.sh build run|pick|resume|cancel <job> [s1,s3]
 //   learn.sh build list
 //   learn.sh settings get | set key=value ...        (library=, build=, chat=, work=a:b)
@@ -12,7 +15,9 @@ import { runClaude } from './claude.mjs';
 import { ensureYtDlp } from './deps.mjs';
 import { courseSummary, listCourses, openLibrary, readCatalogue, readStatus } from './library.mjs';
 import { serve } from './serve.mjs';
-import { readSettings, writeSettings } from './settings.mjs';
+import { listClaudeChats } from './chats.mjs';
+import { readDocument } from './documents.mjs';
+import { readSettings, toWslPath, writeSettings } from './settings.mjs';
 import { transcriptText, youTubeId, ytCaptions } from './sources.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,7 +40,7 @@ try {
   } else if (command === 'build') {
     const lib = openLibrary();
     if (sub === 'start') {
-      const job = createJob(lib, { topic: flags.topic, category: flags.category, mode: flags.mode, link: flags.link });
+      const job = createJob(lib, { topic: flags.topic, category: flags.category, mode: flags.mode, link: flags.link, file: flags.file, name: flags.name, chat: flags.chat, focus: flags.focus });
       startDaemon(lib, job.id);
       print(job.id);
     } else if (sub === 'run') {
@@ -50,6 +55,13 @@ try {
     } else if (sub === 'list') {
       for (const job of listJobs(lib)) print(`${job.id}  ${job.state.padEnd(13)} ${job.step.padEnd(9)} ${job.done}/${job.total}  ${job.topic}  ${job.message || ''}`);
     } else fail('build start|run|pick|resume|cancel|list');
+  } else if (command === 'chats') {
+    const lib = openLibrary();
+    for (const chat of listClaudeChats({ exclude: [lib.root] })) print(`${chat.id}  ${chat.at.slice(0, 16)}  ${chat.project.padEnd(20)} ${chat.title}`);
+  } else if (command === 'extract') {
+    if (!sub) fail('extract <file>');
+    const read = await readDocument(toWslPath(sub), { name: flags.name, model: readSettings().models.build, onProgress: message => console.error(message) });
+    print({ type: read.type, title: read.title, pages: read.pages, byClaude: read.byClaude, chars: read.chars, sections: read.sections.map(section => `${section.heading}  (${section.text.length} chars)`) });
   } else if (command === 'settings') {
     if (sub === 'set') {
       const change = {};
@@ -81,7 +93,7 @@ try {
     const result = await runClaude({ prompt: 'Reply with the single word: pong', model: readSettings().models.chat, tools: [] }).done;
     print({ text: result.text, sessionId: result.sessionId });
   } else {
-    fail('serve | build | settings | deps | library | status | transcript | ping');
+    fail('serve | build | chats | extract | settings | deps | library | status | transcript | ping');
   }
 } catch (error) {
   fail(error.message || String(error));

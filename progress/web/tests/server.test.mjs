@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { WINDOW_TITLES, cleanAppearance, cleanPrefs, cleanTerminal, infoPlist, lookCss, pagePath, pluginVersion, windowId } from '../server.mjs';
+import { WINDOW_TITLES, cleanAppearance, cleanPrefs, cleanTerminal, infoPlist, lookCss, pagePath, pluginVersion, uploadName, windowId } from '../server.mjs';
 
 // server.mjs loads shared/theme.js, so the pages' own arithmetic is here to compare with.
 const T = globalThis.ClaudeTheme;
@@ -156,4 +156,14 @@ test('a terminal a window follows is a plain name and session, or nothing', () =
   assert.deepEqual(cleanTerminal({ program: 'Apple_Terminal' }), { program: 'Apple_Terminal', itermSession: '' });
   assert.deepEqual(cleanTerminal({ program: 'WezTerm', itermSession: '$(id)' }), { program: 'WezTerm', itermSession: '' });
   for (const bad of [{}, null, { program: '' }, { program: 'a;b' }, { program: 'x'.repeat(65) }]) assert.deepEqual(cleanTerminal(bad), {}, JSON.stringify(bad));
+});
+
+test("an upload's name is made safe for a file, keeping its extension", () => {
+  assert.equal(uploadName(encodeURIComponent('Runbook v2.docx')), 'Runbook v2.docx');
+  assert.equal(uploadName(encodeURIComponent('../../etc/passwd.md')), 'passwd.md', 'no folders');
+  assert.equal(uploadName(encodeURIComponent('C:\\Users\\me\\notes.md')), 'notes.md');
+  assert.equal(uploadName(encodeURIComponent('.hidden.pdf')), 'hidden.pdf', 'no leading dots');
+  assert.equal(uploadName(encodeURIComponent('café ☕ notes.txt')), 'caf_ _ notes.txt');
+  assert.equal(uploadName('%E0%A4%A'), '_E0_A4_A', 'a name that is not valid encoding is still made safe');
+  assert.equal(uploadName(undefined), '');
 });

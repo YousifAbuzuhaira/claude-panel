@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { isLearnBusy, learnStatusPath, readLearnStatus } from '../hooks/learn'
+import { courseArgv, isLearnBusy, learnStatusPath, readLearnStatus } from '../hooks/learn'
 import { panelState } from '../hooks/widget'
 import { answerHost, PLAN, STATE } from './host'
 
@@ -82,5 +82,18 @@ describe('Learn in a session', () => {
     const composed = await $.prompt.compose({ ...ask, tools: ['mcp__progress__phases_write'] })
     expect(composed.sections.some(section => section.id === 'progress:phases')).toBe(false)
     expect(host.spawned).toEqual([])
+  })
+})
+
+describe('/course', () => {
+  test('starts a build from this chat about the focus, through the helper', () => {
+    expect(courseArgv({ pluginRoot: '/p', sessionId: 'abc-123', focus: '  how we fixed\nthe browser link ' })).toEqual([
+      'bash', '/p/learn/learn.sh', 'build', 'start', '--chat', 'abc-123', '--focus', 'how we fixed the browser link',
+    ])
+  })
+
+  test('a focus that starts with dashes is not read as a flag; a long one is cut', () => {
+    expect(courseArgv({ pluginRoot: '/p', sessionId: 's', focus: '--mode auto' }).at(-1)).toBe('mode auto')
+    expect(courseArgv({ pluginRoot: '/p', sessionId: 's', focus: 'x'.repeat(500) }).at(-1)).toHaveLength(300)
   })
 })

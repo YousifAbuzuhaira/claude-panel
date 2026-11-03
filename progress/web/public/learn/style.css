@@ -183,6 +183,26 @@ textarea.inline-edit[rows="1"] { resize: none; overflow: hidden; height: 30px; w
 .new-row .grow { min-width: 240px; }
 .new-row .category { flex: 0 1 180px; min-width: 120px; }
 .modes { display: flex; gap: 6px; flex: none; }
+/* What a new course is built from, beside its title. */
+.new-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 8px; }
+.new-head .card-title { margin: 0; }
+.from-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.from-label { font-size: 11.5px; color: var(--faint); margin-right: 2px; }
+.new-row [hidden], .modes[hidden] { display: none !important; }
+/* A document in place of the topic: looks like the box it replaces. */
+.doc-box { display: flex; align-items: center; gap: 8px; flex: 1; height: 30px; box-sizing: border-box; padding: 0 8px 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface2); cursor: pointer; }
+.doc-box:hover { border-color: var(--edge); }
+.doc-box:focus-visible { outline: none; border-color: var(--accent); }
+.doc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 13px; }
+.doc-box.chosen .doc-name { color: var(--ink); }
+.doc-choose { color: var(--blue); font-size: 13px; flex: none; }
+.doc-clear { border: 0; background: none; color: var(--faint); font-size: 11px; cursor: pointer; padding: 2px 4px; }
+.doc-clear:hover { color: var(--ink); }
+/* A Claude chat in place of the topic: the chat, then what to cover. */
+.chat-source { display: flex; gap: 8px; flex: 1; min-width: 240px; }
+.chat-select { flex: 0 1 300px; min-width: 160px; height: 30px; color: var(--ink); }
+.chat-select option { background: var(--popup); color: var(--ink); }
+.library-view.dropping .new-course { outline: 1px dashed var(--accent); outline-offset: 6px; border-radius: var(--card-radius); }
 .category-chips { margin-top: 8px; }
 .category-chips:empty { display: none; }
 .search { width: 100%; margin: 16px 0 0; }
@@ -273,6 +293,7 @@ textarea.inline-edit[rows="1"] { resize: none; overflow: hidden; height: 30px; w
 .page, .overlap { max-width: 720px; margin: 0 auto; }
 .page-title { font-family: var(--read); font-size: calc(30px * var(--scale)); line-height: 1.2; margin: 0 0 12px; font-weight: 600; overflow-wrap: break-word; }
 .source-line { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 12px; }
+.source.local { color: var(--dim); font-size: 13px; }
 .concept-chips { margin-bottom: 16px; }
 .ui-chip.concept.learned { background: var(--green-soft); border-color: transparent; color: var(--ink); }
 .ui-chip.concept.seen { border-color: var(--blue); color: var(--ink); }

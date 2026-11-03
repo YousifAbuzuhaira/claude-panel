@@ -1,8 +1,11 @@
 // Library: a new course, the builds, and the courses by category.
+import { upload } from '../shared/api.js';
 import { GLYPH, S, act, action, armed, categoryName, chip, formatDate, h, inlineEdit, isHttp, nav, onEnter, short, toast } from './core.js';
 
 const L = {
   mode: 'pick',
+  source: 'topic', // what a new course is built from: topic, document or chat
+  document: null, // the File picked for one
   pickingJob: null,
   picks: new Set(),
   renamingCourse: null,
@@ -16,6 +19,15 @@ const L = {
 const ASKED_PICK = new URLSearchParams(location.search).has('pick');
 
 let ui = null;
+
+const DOCUMENT_TYPES = ['.pdf', '.docx', '.md', '.markdown', '.txt', '.text', '.html', '.htm'];
+const DOCUMENT_HINT = 'Choose a PDF, Word, Markdown, text or HTML file, or drop one here';
+const SOURCES = [
+  { key: 'topic', text: 'A topic or link', tip: 'Claude researches the topic (or reads the video, playlist or page you paste) and finds the sources' },
+  { key: 'document', text: 'A document', tip: 'A PDF, Word, Markdown, text or HTML file on this computer: the course is built from it' },
+  { key: 'chat', text: 'A Claude chat', tip: 'Something you did in one of your Claude Code chats: Learn reads that chat and teaches it' },
+];
+const sizeText = bytes => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
 export function buildLibraryView(host) {
   const topic = h('input.ui-input.grow', { type: 'text', placeholder: 'A topic to learn, or a YouTube video, playlist or docs link', 'aria-label': 'Topic or link' });
@@ -32,15 +44,146 @@ export function buildLibraryView(host) {
   onEnter(topic, submitNewCourse);
   search.addEventListener('input', showCourses);
 
-  host.append(h('div.library-view', null,
+  // A document in place of the topic: a box that picks one; a file dropped on the Library too.
+  const fileInput = h('input', { type: 'file', accept: DOCUMENT_TYPES.join(','), hidden: true, 'aria-hidden': 'true' });
+  const docName = h('span.doc-name', null, DOCUMENT_HINT);
+  const docClear = h('button.doc-clear', { type: 'button', title: 'Choose another', hidden: true }, GLYPH.close);
+  const docBox = h('div.doc-box.grow', { role: 'button', tabindex: '0', title: 'A PDF, Word (.docx), Markdown, text or HTML file, up to 64 MB', hidden: true },
+    docName, docClear, h('span.doc-choose', null, 'Choose\u2026'));
+  docBox.addEventListener('click', event => { if (event.target !== docClear) fileInput.click(); });
+  docBox.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); fileInput.click(); } });
+  docClear.addEventListener('click', event => { event.stopPropagation(); setDocument(null); });
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) setDocument(fileInput.files[0]); fileInput.value = ''; });
+
+  // A Claude chat in place of the topic: which chat, and what to cover.
+  const chatSelect = h('select.ui-input.chat-select', { 'aria-label': 'The chat' }, h('option', { value: '' }, 'Pick a chat\u2026'));
+  const chatFocus = h('input.ui-input.grow', { type: 'text', placeholder: 'What should the course cover? (e.g. how we fixed the browser link)', 'aria-label': 'What the course covers' });
+  const chatBox = h('div.chat-source.grow', { hidden: true }, chatSelect, chatFocus);
+  onEnter(chatFocus, submitNewCourse);
+  chatSelect.addEventListener('change', () => { if (chatSelect.value) chatFocus.focus(); });
+
+  const modes = h('div.modes', null, pickChip, autoChip);
+  const sourceChips = {};
+  const fromRow = h('div.from-row', null, h('span.from-label', null, 'From'));
+  for (const item of SOURCES) {
+    const c = chip(item.text, item.key === L.source, () => setSource(item.key));
+    c.title = item.tip;
+    sourceChips[item.key] = c;
+    fromRow.append(c);
+  }
+  const view = h('div.library-view', null,
     h('section.card.new-course', null,
-      h('h2.card-title', null, 'New course'),
-      h('div.new-row', null, topic, category, h('div.modes', null, pickChip, autoChip), build),
+      h('div.new-head', null, h('h2.card-title', null, 'New course'), fromRow),
+      h('div.new-row', null, topic, docBox, chatBox, category, modes, build, fileInput),
       categoryChips),
     search,
     jobs,
-    courses));
-  ui = { topic, category, pickChip, autoChip, categoryChips, search, jobs, courses };
+    courses);
+  view.addEventListener('dragover', event => {
+    if ([...(event.dataTransfer?.types || [])].includes('Files')) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      view.classList.add('dropping');
+    }
+  });
+  view.addEventListener('dragleave', event => { if (!view.contains(event.relatedTarget)) view.classList.remove('dropping'); });
+  view.addEventListener('drop', event => {
+    view.classList.remove('dropping');
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+    event.preventDefault();
+    setDocument(file);
+  });
+  host.append(view);
+  ui = { topic, category, pickChip, autoChip, categoryChips, search, jobs, courses, docBox, docName, docClear, modes, sourceChips, chatBox, chatSelect, chatFocus };
+}
+
+function setSource(source) {
+  L.source = source;
+  for (const [key, el] of Object.entries(ui.sourceChips)) el.classList.toggle('on', key === source);
+  ui.topic.hidden = source !== 'topic';
+  ui.docBox.hidden = source !== 'document';
+  ui.chatBox.hidden = source !== 'chat';
+  // Picking sources is for a researched topic; a document or a chat is its own source.
+  ui.modes.hidden = source !== 'topic';
+  if (source === 'topic') ui.topic.focus();
+  if (source === 'chat') loadChats();
+}
+
+let chatsLoaded = false;
+async function loadChats() {
+  if (chatsLoaded) return;
+  chatsLoaded = true;
+  const chats = await act('claudeChats.list');
+  if (!chats) {
+    chatsLoaded = false;
+    return;
+  }
+  ui.chatSelect.replaceChildren(
+    h('option', { value: '' }, chats.length ? 'Pick a chat\u2026' : 'No Claude Code chats found'),
+    ...chats.map(chat => h('option', { value: chat.id, title: chat.cwd || '' }, [chat.title, chat.project, formatDate(chat.at)].filter(Boolean).join('  \u00b7  '))));
+  ui.chatSelect.focus();
+}
+
+async function submitChat(category) {
+  const chat = ui.chatSelect.value;
+  if (!chat) {
+    toast('Pick the chat the course is about');
+    ui.chatSelect.focus();
+    return;
+  }
+  const focus = ui.chatFocus.value.trim();
+  if (!focus) {
+    toast('Say what the course should cover');
+    ui.chatFocus.focus();
+    return;
+  }
+  const title = ui.chatSelect.selectedOptions[0]?.textContent.split('  \u00b7  ')[0] || 'your chat';
+  const job = await act('build.start', { chat, focus, category });
+  if (!job) return;
+  ui.chatFocus.value = '';
+  toast(`Reading ${title} for ${focus}. It carries on if you close this page.`);
+  refreshLibrary();
+}
+
+function setDocument(file) {
+  if (file) {
+    const ext = (/\.[^.]+$/.exec(file.name) || [''])[0].toLowerCase();
+    if (!DOCUMENT_TYPES.includes(ext)) {
+      toast('Learn reads PDF, Word (.docx), Markdown, text and HTML files', 'error');
+      return;
+    }
+    if (file.size > 64 * 1024 * 1024) {
+      toast('That file is over 64 MB', 'error');
+      return;
+    }
+  }
+  L.document = file;
+  ui.docName.textContent = file ? `${file.name} \u00b7 ${sizeText(file.size)}` : DOCUMENT_HINT;
+  ui.docBox.classList.toggle('chosen', Boolean(file));
+  ui.docClear.hidden = !file;
+  if (file) setSource('document');
+}
+
+async function submitDocument(category) {
+  const file = L.document;
+  if (!file) {
+    ui.docBox.click();
+    return;
+  }
+  setDocument(null);
+  toast(`Sending ${file.name}\u2026`);
+  let sent;
+  try {
+    sent = await upload(file);
+  } catch (error) {
+    toast(String(error.message || error), 'error');
+    return;
+  }
+  const job = await act('build.start', { category, file: sent.path, name: sent.name });
+  if (!job) return;
+  toast(`Reading ${sent.name}. The course builds from it, and carries on if you close this page.`);
+  refreshLibrary();
 }
 
 function setMode(mode) {
@@ -50,12 +193,20 @@ function setMode(mode) {
 }
 
 function submitNewCourse() {
+  const category = ui.category.value.trim() || 'General';
+  if (L.source === 'document') {
+    submitDocument(category);
+    return;
+  }
+  if (L.source === 'chat') {
+    submitChat(category);
+    return;
+  }
   const topic = ui.topic.value.trim();
   if (!topic) {
     toast('Type a topic, or paste a link');
     return;
   }
-  const category = ui.category.value.trim() || 'General';
   startBuild(topic, category, L.mode);
   ui.topic.value = '';
 }

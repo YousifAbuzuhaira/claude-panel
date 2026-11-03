@@ -2,7 +2,7 @@
 // with stand-ins for yt-dlp, the web and Claude; resuming; the serve protocol; the lock.
 // node --test learn/tests/
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -17,11 +17,12 @@ const { listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCo
 const { addConcept, ensureCategory } = await import('../catalogue.mjs');
 const { createServer } = await import('../serve.mjs');
 const { withLock, writeJson, readJson } = await import('../store.mjs');
+const { readDocument } = await import('../documents.mjs');
 
 const CHUNKS = Array.from({ length: 60 }, (_, i) => ({ t: i * 30, text: `part ${i} about volumes` }));
 
 /** Stand-ins for everything a build reaches out to. `answers` maps a schema to Claude's answer. */
-function fakeIo({ pageFails = 0 } = {}) {
+function fakeIo({ pageFails = 0, brief = 'some' } = {}) {
   const calls = { pages: 0, prompts: [] };
   let failuresLeft = pageFails;
   return {
@@ -33,8 +34,28 @@ function fakeIo({ pageFails = 0 } = {}) {
       ytPlaylist: async () => ({ title: 'List', videos: [] }),
       fetchPage: async () => ({ title: 'Volumes docs', sections: [{ heading: 'Volumes', anchor: 'volumes', level: 1, text: 'x'.repeat(800) }, { heading: 'Syntax', anchor: 'syntax', level: 2, text: 'docker run -v' }] }),
       ensureYtDlp: async () => '/bin/true',
-      askStructured: async ({ prompt, schema }) => {
+      readDocument: (file, options) => readDocument(file, options),
+      readClaudeChat: async id => {
+        calls.chats = [...(calls.chats || []), id];
+        return { text: 'CHAT: Fixing the panel\n[#1] LEARNER: the browser link does nothing\nCLAUDE: the opener dies with wsl.exe', cwd: '', title: 'Fixing the panel', turns: 2 };
+      },
+      askStructured: async ({ prompt, schema, tools }) => {
         calls.prompts.push(prompt);
+        calls.tools = [...(calls.tools || []), tools];
+        if (schema.properties.found) {
+          if (brief === 'nothing') return { found: false, courseTitle: 'x', summary: 'The chat is about something else.', category: 'x', sections: [] };
+          return {
+            found: true,
+            courseTitle: 'Opening a browser from WSL',
+            summary: 'Why a link opened from WSL can die, and the one-time link that fixes it.',
+            category: 'Windows',
+            sections: [
+              { heading: 'The problem', text: 'Clicking did nothing. '.repeat(20) },
+              { heading: 'Why the opener died', text: 'WSL stops the processes of a wsl.exe that ends. '.repeat(20) },
+              { heading: 'The fix', text: 'Return a one-time link and open it from Windows. '.repeat(20) },
+            ],
+          };
+        }
         if (schema.properties.candidates) {
           return {
             courseTitle: 'Volumes in practice',
@@ -332,5 +353,97 @@ describe("Ask's chats", () => {
     assert.match(bad.error, /bad id/);
     const none = await ask(server, lines, { rid: 2, cmd: 'advisor.remove', chatId: '' });
     assert.equal(none.ok, false);
+  });
+});
+
+describe('a course from a document', () => {
+  const notes = join(root, 'notes.md');
+  writeFileSync(notes, `# Postgres failover\n\nWhy replicas matter. ${'More words about replicas and the WAL. '.repeat(30)}\n\n## Promotion\n\n${'Promote the standby with pg_promote and fence the old primary. '.repeat(30)}\n`);
+
+  test('the document is copied in, read into sections, and becomes the course\'s one source', async () => {
+    const lib = openLibrary();
+    const job = createJob(lib, { file: notes, category: 'Databases' });
+    assert.equal(job.mode, 'document');
+    assert.equal(job.fileName, 'notes.md');
+    assert.ok(job.file.startsWith(lib.paths.jobs) && existsSync(job.file), 'the build keeps its own copy');
+    assert.ok(existsSync(notes), 'the original stays where it was');
+    const { io, calls } = fakeIo();
+    await runJob(lib, job.id, io);
+    const done = readJob(lib, job.id);
+    assert.equal(done.state, 'done', done.error || '');
+    const course = readCourse(lib, done.courseId);
+    assert.equal(course.title, 'Postgres failover');
+    assert.equal(course.sources.length, 1);
+    assert.equal(course.sources[0].kind, 'doc');
+    const source = readJson(lib.paths.source(course.id, 's1'));
+    assert.deepEqual(source.sections.map(section => section.heading), ['Postgres failover', 'Promotion']);
+    assert.ok(source.file && existsSync(source.file) && source.file.startsWith(join(lib.root, 'courses', course.id)), 'the copy lives with the course');
+    assert.ok(!existsSync(job.file), 'and no longer with the job');
+    assert.ok(!existsSync(lib.paths.jobSections(job.id)));
+    assert.ok(calls.prompts.some(prompt => prompt.includes('document "Postgres failover" (Markdown)')), 'the outline is told it is a document');
+    assert.ok(calls.prompts.at(-1).includes('### Document s1'), 'the page writer gets its sections');
+    assert.equal(readPage(lib, course.id, 1).source.kind, 'doc');
+  });
+
+  test('an upload from the web page is moved in, not copied', () => {
+    const lib = openLibrary();
+    const uploads = join(process.env.LEARN_CONFIG_DIR, 'uploads');
+    mkdirSync(uploads, { recursive: true });
+    const sent = join(uploads, 'abc123-notes.md');
+    writeFileSync(sent, readFileSync(notes));
+    const job = createJob(lib, { file: sent, name: 'notes.md', category: 'Databases' });
+    assert.ok(!existsSync(sent));
+    assert.ok(existsSync(job.file));
+  });
+
+  test('what it cannot read is refused before a build starts', () => {
+    const lib = openLibrary();
+    const exe = join(root, 'tool.exe');
+    writeFileSync(exe, 'MZ');
+    assert.throws(() => createJob(lib, { file: exe }), /reads PDF, Word/);
+    assert.throws(() => createJob(lib, { file: join(root, 'missing.pdf') }), /can't open/);
+    const empty = join(root, 'empty.md');
+    writeFileSync(empty, '');
+    assert.throws(() => createJob(lib, { file: empty }), /is empty/);
+  });
+});
+
+describe('a course from a Claude chat', () => {
+  const chatId = '11111111-2222-4333-8444-555555555555';
+
+  test('the chat is read, a brief written from it with read-only tools, and the brief is the source', async () => {
+    const lib = openLibrary();
+    const job = createJob(lib, { chat: chatId, focus: 'the browser link fix' });
+    assert.equal(job.mode, 'chat');
+    assert.equal(job.topic, 'the browser link fix');
+    const { io, calls } = fakeIo();
+    await runJob(lib, job.id, io);
+    const done = readJob(lib, job.id);
+    assert.equal(done.state, 'done', done.error || '');
+    assert.deepEqual(calls.chats, [chatId]);
+    assert.deepEqual(calls.tools[0], ['Read', 'Grep', 'Glob'], 'the brief has read-only tools');
+    assert.ok(calls.prompts[0].includes('the browser link fix'));
+    assert.ok(!existsSync(lib.paths.jobChat(job.id)), "the chat's text is gone after the brief");
+    const course = readCourse(lib, done.courseId);
+    assert.equal(course.title, 'Opening a browser from WSL');
+    assert.equal(course.sources[0].kind, 'chat');
+    const category = readCatalogue(lib).categories.find(item => item.id === course.category);
+    assert.equal(category.name, 'Windows', "with no category given, the brief's is used");
+    assert.ok(calls.prompts.at(-1).includes('### Chat brief s1'));
+  });
+
+  test('a chat with nothing about the focus fails the build, saying so', async () => {
+    const lib = openLibrary();
+    const job = createJob(lib, { chat: chatId, focus: 'quantum computing' });
+    await runJob(lib, job.id, fakeIo({ brief: 'nothing' }).io);
+    const failed = readJob(lib, job.id);
+    assert.equal(failed.state, 'failed');
+    assert.match(failed.error, /nothing about "quantum computing"/);
+  });
+
+  test('a bad id or no focus is refused', () => {
+    const lib = openLibrary();
+    assert.throws(() => createJob(lib, { chat: '../etc', focus: 'x' }), /not a chat id/);
+    assert.throws(() => createJob(lib, { chat: chatId, focus: '  ' }), /what the course should cover/);
   });
 });

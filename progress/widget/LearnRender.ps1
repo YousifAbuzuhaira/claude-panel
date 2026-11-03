@@ -432,6 +432,12 @@ function Add-Inlines($Target, $Inlines, [double]$Size) {
       [void]$Target.Add($link)
     } else {
       if ($item.added) { $run.ToolTip = 'Claude added this: it is not in the sources' }
+      # A part of a source with no link (a document's, a chat brief's): named in italics, as the web does.
+      if ($item.sec) {
+        $run.FontStyle = 'Italic'
+        $run.Foreground = $dim
+        $run.ToolTip = 'A part of the source'
+      }
       [void]$Target.Add($run)
     }
   }

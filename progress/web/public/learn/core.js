@@ -9,7 +9,7 @@ export const MAX_SCALE = 1.6;
 export const GLYPH = {
   check: '✓', half: '◐', empty: '○', full: '●', pending: '◌', skip: '⊘',
   play: '▶︎', link: '↗', dot: '·', up: '↑', down: '↓', left: '←', right: '→',
-  close: '✕', box: '☐', ticked: '☑',
+  close: '✕', box: '☐', ticked: '☑', doc: '▤', chat: '❝',
 };
 
 /** Everything on screen comes from here; nothing is kept on disk by the page. */

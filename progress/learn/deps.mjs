@@ -14,10 +14,10 @@ const DIR = join(CACHE_DIR, 'yt-dlp');
 const INSTALLED = join(DIR, 'installed.json');
 const MAX_AGE_DAYS = 14;
 
-/** The small zipapp needs Python 3.9+; the standalone build needs nothing. */
-function hasPython() {
+/** Python 3.9+ that really runs (not a stub that offers to install it): the yt-dlp zipapp and pypdf need it. */
+export function hasPython() {
   try {
-    execFileSync('python3', ['-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'], { stdio: 'ignore' });
+    execFileSync('python3', ['-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'], { stdio: 'ignore', timeout: 10_000 });
     return true;
   } catch {
     return false;
@@ -70,5 +70,54 @@ export async function ensureYtDlp({ force = false, onProgress = () => {} } = {})
   writeFileSync(path, bytes);
   chmodSync(path, 0o755);
   writeJson(INSTALLED, { version, path, asset: name, sha256: actual, checkedAt: new Date().toISOString() });
+  return path;
+}
+
+// --- pypdf ---------------------------------------------------------------------------------
+// A PDF's text and bookmarks come from pypdf (pure Python, run with the system's python3),
+// fetched from PyPI the first time a PDF is read and checked against PyPI's own sha256. Python
+// imports it straight from the wheel. Refreshed after 30 days; offline, the copy we have is kept.
+
+const PYPDF = 'https://pypi.org/pypi/pypdf/json';
+const PYPDF_DIR = join(CACHE_DIR, 'pypdf');
+const PYPDF_INSTALLED = join(PYPDF_DIR, 'installed.json');
+const PYPDF_MAX_AGE_DAYS = 30;
+
+export function installedPypdf() {
+  const info = readJson(PYPDF_INSTALLED);
+  return info && existsSync(info.path) ? info : null;
+}
+
+/** The pypdf wheel's path, fetched when missing or old; throws when python3 can't run it. */
+export async function ensurePypdf({ onProgress = () => {} } = {}) {
+  if (!hasPython()) throw new Error('reading a PDF needs Python 3.9 or newer (python3)');
+  const current = installedPypdf();
+  const ageDays = current ? (Date.now() - Date.parse(current.checkedAt)) / 86_400_000 : Infinity;
+  if (current && ageDays < PYPDF_MAX_AGE_DAYS) return current.path;
+  let meta;
+  try {
+    const response = await fetch(PYPDF, { headers: { 'User-Agent': 'claude-learn', Accept: 'application/json' }, signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(`PyPI said ${response.status}`);
+    meta = await response.json();
+  } catch (error) {
+    if (current) return current.path;
+    throw new Error(`can't reach PyPI to get pypdf: ${error.message}`);
+  }
+  const version = meta.info?.version;
+  const wheel = (meta.urls || []).find(item => item.packagetype === 'bdist_wheel' && /py3-none-any\.whl$/.test(item.filename));
+  if (!version || !wheel) throw new Error('PyPI has no pypdf wheel');
+  if (current && current.version === version) {
+    writeJson(PYPDF_INSTALLED, { ...current, checkedAt: new Date().toISOString() });
+    return current.path;
+  }
+  onProgress(`Downloading pypdf ${version}`);
+  const bytes = await download(wheel.url);
+  const actual = createHash('sha256').update(bytes).digest('hex');
+  if (actual !== wheel.digests?.sha256) throw new Error(`pypdf ${version} failed its checksum`);
+  const folder = join(PYPDF_DIR, version);
+  mkdirSync(folder, { recursive: true });
+  const path = join(folder, wheel.filename);
+  writeFileSync(path, bytes);
+  writeJson(PYPDF_INSTALLED, { version, path, sha256: actual, checkedAt: new Date().toISOString() });
   return path;
 }

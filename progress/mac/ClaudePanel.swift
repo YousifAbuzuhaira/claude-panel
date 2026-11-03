@@ -480,6 +480,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         completionHandler(alert.runModal() == .alertFirstButtonReturn)
     }
 
+    // Learn's "A document" box is an <input type=file>: WKWebView shows no picker unless asked.
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.message = "A document to build a course from"
+        if let window = webView.window {
+            panel.beginSheetModal(for: window) { response in
+                completionHandler(response == .OK ? panel.urls : nil)
+            }
+        } else {
+            completionHandler(panel.runModal() == .OK ? panel.urls : nil)
+        }
+    }
+
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
         let alert = NSAlert()
         alert.messageText = message

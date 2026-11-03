@@ -114,7 +114,19 @@ export function libraryPaths(root) {
     jobs: join(root, 'jobs'),
     job: id => join(root, 'jobs', `${safeId(id)}.json`),
     jobLog: id => join(root, 'jobs', `${safeId(id)}.log`),
+    // A document a build reads, kept with its job until the course takes it, and what was read from it.
+    jobDocument: (id, ext) => join(root, 'jobs', `${safeId(id)}.document${safeExt(ext)}`),
+    jobSections: id => join(root, 'jobs', `${safeId(id)}.sections.json`),
+    jobChat: id => join(root, 'jobs', `${safeId(id)}.chat`), // a folder: the chat's text, for the brief's one run
+    courseDocument: (id, sourceId, ext) => join(course(id), 'sources', `${safeId(sourceId)}.document${safeExt(ext)}`),
   };
+}
+
+/** A file extension kept to letters and digits: `.pdf`, `.docx`. */
+export function safeExt(ext) {
+  const text = String(ext || '').toLowerCase();
+  if (!/^\.[a-z0-9]{1,8}$/.test(text)) throw new Error(`bad file extension: ${text}`);
+  return text;
 }
 
 /** Ids name folders and files: keep them to a safe alphabet. */

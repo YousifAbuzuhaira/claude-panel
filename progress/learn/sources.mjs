@@ -248,16 +248,23 @@ export async function fetchPage(url) {
   const type = response.headers.get('content-type') || '';
   const text = (await response.text()).slice(0, 3_000_000);
   if (/html/.test(type) || /^\s*</.test(text)) return htmlToSections(text);
-  // Markdown or plain text: split on headings.
+  return textToSections(text, url);
+}
+
+/** Markdown or plain text split on its `#` headings (not ones inside code fences). */
+export function textToSections(text, fallbackTitle = '', maxChars = 40_000) {
   const sections = [{ heading: 'Introduction', anchor: '', level: 1, lines: [] }];
-  for (const line of text.split('\n')) {
-    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (heading) sections.push({ heading: heading[2].trim(), anchor: slug(heading[2]), level: heading[1].length, lines: [] });
+  let fence = null;
+  for (const line of String(text).replace(/\r/g, '').split('\n')) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (marker && (!fence || marker[1][0] === fence[0])) fence = fence ? null : marker[1];
+    const heading = !fence && !marker && /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+    if (heading && heading[2]) sections.push({ heading: heading[2].trim(), anchor: slug(heading[2]), level: heading[1].length, lines: [] });
     else sections.at(-1).lines.push(line);
   }
   return {
-    title: sections[1]?.heading || url,
-    sections: sections.map(section => ({ heading: section.heading, anchor: section.anchor, level: section.level, text: section.lines.join('\n').trim().slice(0, 40_000) })).filter(section => section.text),
+    title: sections[1]?.heading || fallbackTitle,
+    sections: sections.map(section => ({ heading: section.heading, anchor: section.anchor, level: section.level, text: section.lines.join('\n').trim().slice(0, maxChars) })).filter(section => section.text),
   };
 }
 

@@ -22,6 +22,17 @@ $script:pageNumber = 0
 $script:pageData = $null
 $script:chats = @{}
 $script:advisorChatId = $null   # the Ask chat in front
+$script:newSource = 'topic'     # what a new course is built from: topic, document or chat
+$script:newDocument = $null     # @{ path; name } of the document picked for it
+$DOCUMENT_EXTENSIONS = @('.pdf', '.docx', '.md', '.markdown', '.txt', '.text', '.html', '.htm')
+$DOCUMENT_HINT = 'Choose a PDF, Word, Markdown, text or HTML file, or drop one here'
+$NEW_SOURCES = @(
+  @{ key = 'topic'; text = 'A topic or link'; tip = 'Claude researches the topic (or reads the video, playlist or page you paste) and finds the sources' },
+  @{ key = 'document'; text = 'A document'; tip = 'A PDF, Word, Markdown, text or HTML file on this computer: the course is built from it' },
+  @{ key = 'chat'; text = 'A Claude chat'; tip = 'Something you did in one of your Claude Code chats: Learn reads that chat and teaches it' }
+)
+$script:newChat = $null         # @{ id; title } of the Claude chat picked for a new course
+$script:claudeChats = $null     # claudeChats.list, loaded when the picker first opens
 $script:advisorChats = @()      # advisor.list: { id, title, createdAt, updatedAt, count }
 $script:concepts = $null
 $script:learnedFilter = 'all'
@@ -255,8 +266,28 @@ function Build-LibraryView {
   $heading = New-Text 'New course' $ink
   $heading.FontSize = 15
   $heading.FontWeight = 'SemiBold'
-  $heading.Margin = New-Gap 0 0 0 8
-  [void]$newStack.Children.Add($heading)
+  $heading.VerticalAlignment = 'Center'
+  $heading.Margin = New-Gap 0 0 16 0
+  # What it is built from: a topic or link (researched), a document, or a Claude chat.
+  $headRow = New-Object System.Windows.Controls.StackPanel
+  $headRow.Orientation = 'Horizontal'
+  $headRow.Margin = New-Gap 0 0 0 8
+  [void]$headRow.Children.Add($heading)
+  $fromLabel = New-Text 'From' $faint
+  $fromLabel.FontSize = 11.5
+  $fromLabel.VerticalAlignment = 'Center'
+  $fromLabel.Margin = New-Gap 0 0 8 0
+  [void]$headRow.Children.Add($fromLabel)
+  $script:ui.sourceChips = [ordered]@{}
+  foreach ($item in $NEW_SOURCES) {
+    $chip = New-Chip $item.text $item.key ($item.key -eq $script:newSource)
+    $chip.Margin = New-Gap 0 0 6 0
+    $chip.ToolTip = $item.tip
+    Set-Click $chip { param($Data, $Sender) Set-NewSource $Data } $item.key
+    [void]$headRow.Children.Add($chip)
+    $script:ui.sourceChips[$item.key] = $chip
+  }
+  [void]$newStack.Children.Add($headRow)
 
   $row = New-Object System.Windows.Controls.Grid
   $row.ColumnDefinitions.Add((New-Column '*'))
@@ -265,6 +296,37 @@ function Build-LibraryView {
   $row.ColumnDefinitions.Add((New-Column 'auto'))
   $topic = New-InputBox 'A topic to learn, or a YouTube video, playlist or docs link'
   $topic.holder.VerticalAlignment = 'Top'
+  # The document in place of the topic: shown like a box; a click (or a file dropped on the
+  # library) picks it.
+  $docBox = New-Object System.Windows.Controls.Border
+  $docBox.Height = $INPUT_HEIGHT
+  $docBox.VerticalAlignment = 'Top'
+  $docBox.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+  $docBox.Background = $surface2
+  $docBox.BorderBrush = $line
+  $docBox.BorderThickness = New-Object System.Windows.Thickness(1)
+  $docBox.Visibility = 'Collapsed'
+  $docBox.ToolTip = 'A PDF, Word (.docx), Markdown, text or HTML file, up to 64 MB'
+  $docDock = New-Object System.Windows.Controls.DockPanel
+  $docChoose = New-Pressable "Choose$GLYPH_ELLIPSIS" $null $blue
+  $docChoose.VerticalAlignment = 'Center'
+  $docChoose.Margin = New-Gap 0 0 6 0
+  [System.Windows.Controls.DockPanel]::SetDock($docChoose, 'Right')
+  $docClear = New-Pressable $GLYPH_CLOSE $null $faint
+  $docClear.VerticalAlignment = 'Center'
+  $docClear.FontSize = 11
+  $docClear.Visibility = 'Collapsed'
+  $docClear.ToolTip = 'Choose another'
+  [System.Windows.Controls.DockPanel]::SetDock($docClear, 'Right')
+  $docText = New-Text $DOCUMENT_HINT $faint
+  $docText.FontSize = 13
+  $docText.VerticalAlignment = 'Center'
+  $docText.Margin = New-Gap 10 0 8 0
+  $docText.TextTrimming = 'CharacterEllipsis'
+  [void]$docDock.Children.Add($docChoose)
+  [void]$docDock.Children.Add($docClear)
+  [void]$docDock.Children.Add($docText)
+  $docBox.Child = $docDock
   $categoryColumn = New-Object System.Windows.Controls.StackPanel
   $categoryColumn.Margin = New-Gap 8 0 0 0
   [System.Windows.Controls.Grid]::SetColumn($categoryColumn, 1)
@@ -291,7 +353,59 @@ function Build-LibraryView {
   $buildButton.Margin = New-Gap 8 0 0 0
   $buildButton.ToolTip = 'Start building the course (Enter)'
   [System.Windows.Controls.Grid]::SetColumn($buildButton, 3)
+  # A Claude chat in place of the topic: the chat (a list opens under it) and what to cover.
+  $chatBox = New-Object System.Windows.Controls.DockPanel
+  $chatBox.VerticalAlignment = 'Top'
+  $chatBox.Visibility = 'Collapsed'
+  $chatPick = New-Object System.Windows.Controls.Border
+  $chatPick.Width = 280
+  $chatPick.Height = $INPUT_HEIGHT
+  $chatPick.Margin = New-Gap 0 0 8 0
+  $chatPick.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+  $chatPick.Background = $surface2
+  $chatPick.BorderBrush = $line
+  $chatPick.BorderThickness = New-Object System.Windows.Thickness(1)
+  $chatPick.ToolTip = 'The chat the course is about'
+  [System.Windows.Controls.DockPanel]::SetDock($chatPick, 'Left')
+  $chatPickDock = New-Object System.Windows.Controls.DockPanel
+  $chatCaret = New-Text ([string][char]0x25BE) $dim
+  $chatCaret.VerticalAlignment = 'Center'
+  $chatCaret.Margin = New-Gap 0 0 8 0
+  [System.Windows.Controls.DockPanel]::SetDock($chatCaret, 'Right')
+  $chatPickText = New-Text "Pick a chat$GLYPH_ELLIPSIS" $faint
+  $chatPickText.FontSize = 13
+  $chatPickText.VerticalAlignment = 'Center'
+  $chatPickText.Margin = New-Gap 10 0 6 0
+  $chatPickText.TextTrimming = 'CharacterEllipsis'
+  [void]$chatPickDock.Children.Add($chatCaret)
+  [void]$chatPickDock.Children.Add($chatPickText)
+  $chatPick.Child = $chatPickDock
+  $chatFocus = New-InputBox 'What should the course cover? (e.g. how we fixed the browser link)'
+  [void]$chatBox.Children.Add($chatPick)
+  [void]$chatBox.Children.Add($chatFocus.holder)
+  $chatPopup = New-Object System.Windows.Controls.Primitives.Popup
+  $chatPopup.PlacementTarget = $chatPick
+  $chatPopup.Placement = 'Bottom'
+  $chatPopup.VerticalOffset = 4
+  $chatPopup.StaysOpen = $false
+  $chatPopup.AllowsTransparency = $true
+  $chatFrame = New-Object System.Windows.Controls.Border
+  $chatFrame.Width = 460
+  $chatFrame.Background = $T.popup
+  $chatFrame.BorderBrush = $T.edge
+  $chatFrame.BorderThickness = New-Object System.Windows.Thickness(1)
+  $chatFrame.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+  $chatFrame.Padding = New-Gap 4 4 4 4
+  $chatScroll = New-Object System.Windows.Controls.ScrollViewer
+  $chatScroll.MaxHeight = 360
+  $chatScroll.VerticalScrollBarVisibility = 'Auto'
+  $chatList = New-Object System.Windows.Controls.StackPanel
+  $chatScroll.Content = $chatList
+  $chatFrame.Child = $chatScroll
+  $chatPopup.Child = $chatFrame
   [void]$row.Children.Add($topic.holder)
+  [void]$row.Children.Add($docBox)
+  [void]$row.Children.Add($chatBox)
   [void]$row.Children.Add($categoryColumn)
   [void]$row.Children.Add($modes)
   [void]$row.Children.Add($buildButton)
@@ -314,6 +428,16 @@ function Build-LibraryView {
   $script:viewHosts['library'].Child = $root
 
   $script:ui.topic = $topic.box
+  $script:ui.topicHolder = $topic.holder
+  $script:ui.docBox = $docBox
+  $script:ui.chatBox = $chatBox
+  $script:ui.chatPickText = $chatPickText
+  $script:ui.chatFocus = $chatFocus.box
+  $script:ui.chatPopup = $chatPopup
+  $script:ui.chatList = $chatList
+  $script:ui.docText = $docText
+  $script:ui.docClear = $docClear
+  $script:ui.modes = $modes
   $script:ui.category = $category.box
   $script:ui.pickChip = $pickChip
   $script:ui.autoChip = $autoChip
@@ -325,8 +449,155 @@ function Build-LibraryView {
   Set-Click $pickChip { param($Data, $Sender) Set-BuildMode 'pick' }
   Set-Click $autoChip { param($Data, $Sender) Set-BuildMode 'auto' }
   Set-Click $buildButton { param($Data, $Sender) Submit-NewCourse }
+  Set-Click $docBox { param($Data, $Sender) Select-Document }
+  Set-Click $docChoose { param($Data, $Sender) Select-Document }
+  Set-Click $docClear { param($Data, $Sender) Clear-NewDocument }
+  Set-Click $chatPick { param($Data, $Sender) Open-ChatPicker -Show }
+  $chatFocus.box.Add_KeyDown({ param($sender, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; try { Submit-NewCourse } catch { Write-Failure $_ } } })
+  # A file dropped anywhere on the Library is the document to build from.
+  $root.AllowDrop = $true
+  $root.Add_PreviewDragOver({
+    param($sender, $e)
+    try {
+      if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+        $e.Effects = [System.Windows.DragDropEffects]::Copy
+        $e.Handled = $true
+      }
+    } catch { Write-Failure $_ }
+  })
+  $root.Add_PreviewDrop({
+    param($sender, $e)
+    try {
+      if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+        $files = @($e.Data.GetData([System.Windows.DataFormats]::FileDrop))
+        if ($files.Count -gt 0) { Set-NewDocument ([string]$files[0]) }
+        $e.Handled = $true
+      }
+    } catch { Write-Failure $_ }
+  })
   $topic.box.Add_KeyDown({ param($sender, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; try { Submit-NewCourse } catch { Write-Failure $_ } } })
   $search.box.Add_TextChanged({ param($sender, $e) try { if ($script:library) { Show-Courses } } catch { Write-Failure $_ } })
+}
+
+# What a new course is built from, and the document picked for one.
+function Set-NewSource([string]$Source) {
+  $script:newSource = $Source
+  foreach ($key in @($script:ui.sourceChips.Keys)) { Set-ChipOn $script:ui.sourceChips[$key] ($key -eq $Source) }
+  $script:ui.topicHolder.Visibility = if ($Source -eq 'topic') { 'Visible' } else { 'Collapsed' }
+  $script:ui.docBox.Visibility = if ($Source -eq 'document') { 'Visible' } else { 'Collapsed' }
+  if ($script:ui.chatBox) { $script:ui.chatBox.Visibility = if ($Source -eq 'chat') { 'Visible' } else { 'Collapsed' } }
+  # Picking sources is for a researched topic; a document or a chat is its own source.
+  $script:ui.modes.Visibility = if ($Source -eq 'topic') { 'Visible' } else { 'Collapsed' }
+  if ($Source -eq 'topic') { [void]$script:ui.topic.Focus() }
+  if ($Source -eq 'chat') { if ($script:newChat) { [void]$script:ui.chatFocus.Focus() } else { Open-ChatPicker -Show } }
+}
+
+function Select-Document {
+  $dialog = New-Object Microsoft.Win32.OpenFileDialog
+  $dialog.Title = 'A document to build a course from'
+  $dialog.Filter = 'Documents (PDF, Word, Markdown, text, HTML)|*.pdf;*.docx;*.md;*.markdown;*.txt;*.text;*.html;*.htm|All files|*.*'
+  $dialog.CheckFileExists = $true
+  if ($dialog.ShowDialog($win)) { Set-NewDocument $dialog.FileName }
+}
+
+function Format-FileSize([double]$Bytes) {
+  if ($Bytes -ge 1048576) { return ('{0:0.#} MB' -f ($Bytes / 1048576)) }
+  return ('{0:0} KB' -f [Math]::Max(1, $Bytes / 1024))
+}
+
+function Set-NewDocument([string]$Path) {
+  $extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
+  if ($DOCUMENT_EXTENSIONS -notcontains $extension) { Show-Toast 'Learn reads PDF, Word (.docx), Markdown, text and HTML files'; return }
+  $size = 0
+  try { $size = (Get-Item -LiteralPath $Path).Length } catch {}
+  if ($size -gt 64MB) { Show-Toast 'That file is over 64 MB'; return }
+  $name = [System.IO.Path]::GetFileName($Path)
+  $script:newDocument = @{ path = $Path; name = $name }
+  $script:ui.docText.Text = "$name  $GLYPH_DOT  $(Format-FileSize $size)"
+  $script:ui.docText.Foreground = $ink
+  $script:ui.docText.ToolTip = $Path
+  $script:ui.docClear.Visibility = 'Visible'
+  Set-NewSource 'document'
+}
+
+function Clear-NewDocument {
+  $script:newDocument = $null
+  $script:ui.docText.Text = $DOCUMENT_HINT
+  $script:ui.docText.Foreground = $faint
+  $script:ui.docText.ToolTip = $null
+  $script:ui.docClear.Visibility = 'Collapsed'
+}
+
+# --- A course from a Claude chat: the picker -----------------------------------------------------
+
+function Open-ChatPicker([switch]$Show) {
+  if ($null -ne $script:claudeChats) {
+    Show-ChatPicker
+    if ($Show) { $script:ui.chatPopup.IsOpen = $true }
+    return
+  }
+  $script:ui.chatList.Children.Clear()
+  $wait = New-Text "Finding your chats$GLYPH_ELLIPSIS" $dim
+  $wait.Margin = New-Gap 8 6 8 6
+  [void]$script:ui.chatList.Children.Add($wait)
+  if ($Show) { $script:ui.chatPopup.IsOpen = $true }
+  Invoke-Helper 'claudeChats.list' @{} {
+    param($Result, $Context)
+    $script:claudeChats = @($Result | Where-Object { $_ })
+    Show-ChatPicker
+  }
+}
+
+function Show-ChatPicker {
+  $list = $script:ui.chatList
+  $list.Children.Clear()
+  if (@($script:claudeChats).Count -eq 0) {
+    $none = New-Text 'No Claude Code chats found on this computer.' $dim
+    $none.Margin = New-Gap 8 6 8 6
+    [void]$list.Children.Add($none)
+    return
+  }
+  foreach ($chat in @($script:claudeChats)) {
+    $row = New-Object System.Windows.Controls.Border
+    $row.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+    $row.Padding = New-Gap 8 5 8 6
+    Set-Hover $row
+    if ($script:newChat -and $script:newChat.id -eq [string]$chat.id) { $row.Background = $selected }
+    $stack = New-Object System.Windows.Controls.StackPanel
+    $name = New-Text ([string]$chat.title) $ink
+    $name.FontSize = 13
+    $name.TextTrimming = 'CharacterEllipsis'
+    $where = @([string]$chat.project, (Format-ChatWhen ([string]$chat.at))) | Where-Object { $_ }
+    $detail = New-Text ($where -join "  $GLYPH_DOT  ") $faint
+    $detail.FontSize = 11
+    [void]$stack.Children.Add($name)
+    [void]$stack.Children.Add($detail)
+    $row.Child = $stack
+    $row.ToolTip = [string]$chat.cwd
+    Set-Click $row { param($Data, $Sender) Select-NewChat $Data } @{ id = [string]$chat.id; title = [string]$chat.title }
+    [void]$list.Children.Add($row)
+  }
+}
+
+function Select-NewChat($Chat) {
+  $script:newChat = $Chat
+  $script:ui.chatPickText.Text = $Chat.title
+  $script:ui.chatPickText.Foreground = $ink
+  $script:ui.chatPopup.IsOpen = $false
+  [void]$script:ui.chatFocus.Focus()
+}
+
+function Submit-ChatCourse([string]$Category) {
+  if (-not $script:newChat) { Open-ChatPicker -Show; return }
+  $focus = $script:ui.chatFocus.Text.Trim()
+  if (-not $focus) { Show-Toast 'Say what the course should cover'; [void]$script:ui.chatFocus.Focus(); return }
+  $chat = $script:newChat
+  Invoke-Helper 'build.start' @{ chat = $chat.id; focus = $focus; category = $Category } {
+    param($Result, $Context)
+    Show-Toast "Reading $($Context.title) for $($Context.focus). It carries on if you close this window."
+    Update-Library
+  } @{ title = $chat.title; focus = $focus }
+  $script:ui.chatFocus.Text = ''
 }
 
 function Set-BuildMode([string]$Mode) {
@@ -336,10 +607,22 @@ function Set-BuildMode([string]$Mode) {
 }
 
 function Submit-NewCourse {
-  $topic = $script:ui.topic.Text.Trim()
-  if (-not $topic) { Show-Toast 'Type a topic, or paste a link'; return }
   $category = $script:ui.category.Text.Trim()
   if (-not $category) { $category = 'General' }
+  if ($script:newSource -eq 'document') {
+    if (-not $script:newDocument) { Select-Document; return }
+    $document = $script:newDocument
+    Invoke-Helper 'build.start' @{ category = $category; file = $document.path; name = $document.name } {
+      param($Result, $Context)
+      Show-Toast "Reading $($Context.name). The course builds from it, and carries on if you close this window."
+      Update-Library
+    } @{ name = $document.name }
+    Clear-NewDocument
+    return
+  }
+  if ($script:newSource -eq 'chat') { Submit-ChatCourse $category; return }
+  $topic = $script:ui.topic.Text.Trim()
+  if (-not $topic) { Show-Toast 'Type a topic, or paste a link'; return }
   Start-Build $topic $category $script:buildMode
   $script:ui.topic.Text = ''
 }
@@ -1271,6 +1554,25 @@ function Show-Page {
   $source = $page.source
   $sources = @(@{ url = [string]$source.url; title = [string]$source.title; kind = [string]$source.kind; from = $source.fromSec; to = $source.toSec; videoId = [string]$source.videoId })
   foreach ($item in @($page.support)) { if ($item.url) { $sources += @{ url = [string]$item.url; title = [string]$item.title; kind = $(if ([string]$item.url -match 'youtu') { 'youtube' } else { 'web' }); from = $item.fromSec; to = $item.toSec; videoId = '' } } }
+  # A document: its stored copy opens in this computer's own app for it; a chat brief has nothing to open.
+  if ([string]$source.kind -eq 'doc' -or [string]$source.kind -eq 'chat') {
+    $sources = @()
+    $isDoc = [string]$source.kind -eq 'doc'
+    $label = if ($isDoc) { "$GLYPH_DOC $(Get-Short ([string]$source.title) 70)" } else { "$GLYPH_CHAT From your chat: $(Get-Short ([string]$source.title) 60)" }
+    $press = if ($isDoc -and $source.file) { New-Pressable $label $null $blue } else { New-Text $label $dim }
+    $press.FontSize = 12
+    $press.Margin = New-Gap 0 0 10 0
+    $press.TextTrimming = 'CharacterEllipsis'
+    if ($isDoc -and $source.file) {
+      $local = "\\wsl.localhost\$DISTRO" + ([string]$source.file).Replace('/', '\')
+      $press.ToolTip = "Open $([string]$source.fileName)"
+      Set-Click $press {
+        param($Data, $Sender)
+        if (Test-Path -LiteralPath $Data) { [void][System.Diagnostics.Process]::Start($Data) } else { Show-Toast 'The document is no longer in the library' }
+      } $local
+    }
+    [void]$script:ui.sourceLine.Children.Add($press)
+  }
   foreach ($item in $sources) {
     $isVideo = $item.kind -eq 'youtube'
     $label = if ($isVideo -and $null -ne $item.from) { "$GLYPH_PLAY Watch {0}-{1}" -f (Format-Clock $item.from), (Format-Clock $item.to) } elseif ($isVideo) { "$GLYPH_PLAY Watch" } else { "$GLYPH_LINK Read" }

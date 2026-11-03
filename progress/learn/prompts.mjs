@@ -9,6 +9,13 @@ export const DIAGRAM_RULE = [
 ].join('\n');
 const CHAT_DIAGRAMS = 'When a picture would make an answer clearer, you may include one small diagram as a ```mermaid block (flowchart TD/LR or sequenceDiagram only, at most 10 boxes, short labels); the app draws it.';
 
+/** How a source that has sections is named to Claude: a web page, a document, a chat brief. */
+const describeSource = source => (source.kind === 'doc'
+  ? `document "${source.title}" (${[source.docType, source.pages ? `${source.pages} pages` : null].filter(Boolean).join(', ')})`
+  : source.kind === 'chat'
+    ? `brief "${source.title}", written from the learner's own chat with their coding agent`
+    : `web page "${source.title}" (${source.url})`);
+
 // --- Research -----------------------------------------------------------------------
 
 export const RESEARCH_SCHEMA = {
@@ -124,7 +131,7 @@ export function outlinePrompt({ topic, title, category, sources, catalogue }) {
     '',
     'Rules:',
     '- One page per topic or subtopic, 6-16 pages, in the order that is best for learning (not necessarily source order).',
-    '- Each page teaches from one main source: a time window of a video (fromSec/toSec, using the chapters and timestamps) or named headings of a web page (sections, copied exactly). Add support sources where they help, especially written docs that have the real commands for a video page.',
+    '- Each page teaches from one main source: a time window of a video (fromSec/toSec, using the chapters and timestamps) or named headings of a web page, document or brief (sections, copied exactly). Add support sources where they help, especially written docs that have the real commands for a video page.',
     '- Skip intros, outros, sponsor segments, channel promotion and off-topic tangents.',
     '- Tag each page with 1-6 concepts. A concept is one idea that can be explained and checked in a few minutes (e.g. "Docker named volumes", not "Docker"). Give a broader parent where one fits.',
     '- The learner keeps ONE catalogue of concepts across all courses. Before inventing a concept, look for the same idea in the catalogue, even under different wording, and reuse its id with match "existing". Only create a concept (id null, match "new") when nothing there is the same idea. Say why in "reason".',
@@ -138,7 +145,7 @@ export function outlinePrompt({ topic, title, category, sources, catalogue }) {
       ? [`### ${source.id}: video "${source.title}" by ${source.channel}, ${Math.round((source.durationSec || 0) / 60)} min`,
          source.chapters.length ? `Chapters:\n${source.chapters.map(chapter => `- ${chapter.start}s-${chapter.end}s ${chapter.title}`).join('\n')}` : 'No chapters.',
          'Transcript sample ([m:ss] at each line):', source.excerpt].join('\n')
-      : [`### ${source.id}: web page "${source.title}" (${source.url})`, 'Headings with the start of each section:', source.excerpt].join('\n')),
+      : [`### ${source.id}: ${describeSource(source)}`, 'Headings with the start of each section:', source.excerpt].join('\n')),
   ].join('\n');
 }
 
@@ -183,7 +190,7 @@ export function pagePrompt({ course, page, position, total, prevTitles, nextTitl
     '- A full lesson, about 1200-2500 words. The page title is shown above it, so start with a short paragraph, then ## sections.',
     '- Teach in your own words. Never copy the transcript; it is speech, and the learner can watch the video for that.',
     '- Explain what it is, why it exists, how it works underneath, and how it is used in real work. Use concrete examples, real commands and code in fenced blocks with a language (```bash, ```yaml, ```ts...), and common mistakes.',
-    '- Cite as you go: after something from a video, put the time it is said as [m:ss] or [h:mm:ss]. When the material has more than one video, put the video\'s id first, as in [s4 1:05]. After something from a web page, put [sec: Exact Heading].',
+    '- Cite as you go: after something from a video, put the time it is said as [m:ss] or [h:mm:ss]. When the material has more than one video, put the video\'s id first, as in [s4 1:05]. After something from a web page, document or brief, put [sec: Exact Heading].',
     '- When you add something that is NOT in the material below (a fact, a command, a caveat), put (added) right after that sentence.',
     DIAGRAM_RULE,
     '- End with a short "## Recap" of the key points. Do not put the check questions in the Markdown.',
@@ -191,6 +198,54 @@ export function pagePrompt({ course, page, position, total, prevTitles, nextTitl
     '',
     'MATERIAL:',
     material,
+  ].filter(line => line !== '').join('\n');
+}
+
+// --- A course from one of the learner's chats -----------------------------------
+
+export const BRIEF_SCHEMA = {
+  type: 'object',
+  properties: {
+    found: { type: 'boolean', description: 'False when the chat has nothing about the focus' },
+    courseTitle: { type: 'string', description: 'A short title for the course' },
+    summary: { type: 'string', description: 'One or two sentences: what the learner will understand afterwards' },
+    category: { type: 'string', description: 'One of their category names if one fits, else a new short one' },
+    sections: {
+      type: 'array',
+      maxItems: 15,
+      items: {
+        type: 'object',
+        properties: {
+          heading: { type: 'string', description: 'A short, distinct heading' },
+          text: { type: 'string', description: 'The section in Markdown: several paragraphs, with the code and commands that matter in fenced blocks' },
+        },
+        required: ['heading', 'text'],
+      },
+    },
+  },
+  required: ['found', 'courseTitle', 'summary', 'category', 'sections'],
+};
+
+export function chatBriefPrompt({ focus, title, project, cwd, categories }) {
+  return [
+    `The learner wants a course about something they did with their coding agent (Claude Code) in one of their chats${title ? `, "${title}"` : ''}${project ? `, in the project ${project}` : ''}. ${LEARNER}`,
+    `What the course should cover: ${focus}`,
+    '',
+    'The file chat.txt in the current folder is that whole chat, oldest first: the learner\'s messages (LEARNER), the agent\'s replies (CLAUDE), a line for each tool call (commands run, files read and edited, with short before/after), cut-down results, and marks where the chat was compacted. It is long: do NOT read it whole. Search it with Grep for the words of the focus and its likely terms, then Read the parts that matter (offset and limit). Follow the thread: the problem, the attempts, what was decided, what was changed, how it was checked.',
+    cwd ? `You may also read the project's files under ${cwd} (read only) to see the code as it is now; prefer what the code shows when the chat is unclear.` : '',
+    '',
+    'Then write the study material a course will be built from: 6-15 sections, each several paragraphs, in teaching order, covering:',
+    '- the problem and its context, in plain terms;',
+    '- what was built or changed, and how it works underneath;',
+    '- why: each decision with the options that were rejected and the reasons;',
+    '- the code and commands that matter, as short excerpts in fenced blocks with a language;',
+    '- the problems hit, how they were found, and how they were fixed;',
+    '- how it was checked, and what to remember next time.',
+    'Teach the engineering ideas underneath too (the general knowledge a reader needs to understand it), not only the story of this chat; put (added) after a fact you add from your own knowledge rather than from the chat or the code.',
+    'Write for the learner, as "you". Never copy a secret: tokens, passwords, keys, connection strings or .env values stay out; write <hidden> instead.',
+    'If the chat has nothing about the focus, set found to false, say so in the summary, and leave sections empty.',
+    '',
+    `Their categories: ${categories.join(', ') || '(none yet)'}`,
   ].filter(line => line !== '').join('\n');
 }
 
@@ -205,7 +260,7 @@ export function pagePlanPrompt({ course, topic, titles, sources, catalogue }) {
     '',
     'Plan that single page, the same way the course was planned:',
     '- Give it a clear title and 2-6 subtopics. Do not repeat what the existing pages already teach.',
-    '- Bind it to the source that covers the topic best (a video time window or exact web headings), with support sources where they help. If no source covers it well, pick the closest one; the writer will mark what it adds.',
+    '- Bind it to the source that covers the topic best (a video time window or exact headings of a web page or document), with support sources where they help. If no source covers it well, pick the closest one; the writer will mark what it adds.',
     '- Tag it with 1-6 concepts, reusing catalogue ids for the same idea before making new ones, with a reason for each.',
     '',
     'CATALOGUE (id | name | parent | other names | category):',
@@ -216,7 +271,7 @@ export function pagePlanPrompt({ course, topic, titles, sources, catalogue }) {
       ? [`### ${source.id}: video "${source.title}" by ${source.channel}, ${Math.round((source.durationSec || 0) / 60)} min`,
          source.chapters.length ? `Chapters:\n${source.chapters.map(chapter => `- ${chapter.start}s-${chapter.end}s ${chapter.title}`).join('\n')}` : 'No chapters.',
          'Transcript sample:', source.excerpt].join('\n')
-      : [`### ${source.id}: web page "${source.title}" (${source.url})`, 'Headings with the start of each section:', source.excerpt].join('\n')),
+      : [`### ${source.id}: ${describeSource(source)}`, 'Headings with the start of each section:', source.excerpt].join('\n')),
   ].join('\n');
 }
 

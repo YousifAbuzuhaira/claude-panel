@@ -29,6 +29,16 @@ export type LearnView = (typeof LEARN_VIEWS)[number]
 
 export const isLearnView = (name: string): name is LearnView => (LEARN_VIEWS as readonly string[]).includes(name)
 
+/**
+ * `/course <what>`: Learn's helper builds a course from this chat about `focus` (the helper reads
+ * the chat's saved record; nothing is sent to this chat). Leading dashes are taken off, so the
+ * focus can't be read as a flag.
+ */
+export function courseArgv({ pluginRoot, sessionId, focus }: { pluginRoot: string; sessionId: string; focus: string }): string[] {
+  const what = focus.replace(/\s+/g, ' ').trim().replace(/^-+\s*/, '').slice(0, 300)
+  return ['bash', `${pluginRoot}/learn/learn.sh`, 'build', 'start', '--chat', sessionId, '--focus', what]
+}
+
 const text = (value: unknown, max = 120) => (typeof value === 'string' ? value.slice(0, max) : '')
 const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0)
 

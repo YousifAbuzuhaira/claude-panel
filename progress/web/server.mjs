@@ -14,7 +14,7 @@
 // token: /look.css, the colour scheme for a page's first paint (colours are not secret).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, extname, join, normalize, sep } from 'node:path';
@@ -66,6 +66,12 @@ const RPC_TIMEOUT_MS = 10 * 60_000;
 const MAX_BODY = 4 * 1024 * 1024;
 // The appearance and the prefs are a few hundred bytes; every window re-reads the appearance.
 const MAX_SMALL_BODY = 4 * 1024;
+// A document for a new course, sent by Learn's page: kept here until build.start moves it into
+// the library (learn/build.mjs takes anything under this folder by moving, not copying).
+const UPLOADS_DIR = join(CONFIG_DIR, 'uploads');
+const MAX_UPLOAD = 64 * 1024 * 1024;
+const UPLOAD_TYPES = new Set(['.pdf', '.docx', '.md', '.markdown', '.txt', '.text', '.html', '.htm']);
+const UPLOAD_MAX_AGE_MS = 24 * 3600_000;
 
 // The game data the WPF games read, served as is.
 const DATA_FILES = new Set(['ChessPuzzles.txt', 'ChessThemes.txt', 'ChessPieces.txt', 'TypeThemes.txt', 'Presets.json']);
@@ -293,6 +299,49 @@ function stockfishFile(name) {
 
 // --- HTTP ---------------------------------------------------------------------------------
 
+/** An upload's name made safe for a file name, keeping its extension. */
+export function uploadName(raw) {
+  let name = '';
+  try { name = decodeURIComponent(String(raw || '')); } catch { name = String(raw || ''); }
+  name = name.split(/[\\/]/).pop().replace(/[^\w.\- ]+/g, '_').replace(/^\.+/, '').trim().slice(0, 120);
+  return name;
+}
+
+/** The body streamed to `file`, up to `limit` bytes; rejects (and removes the file) past it. */
+function saveBody(req, file, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const out = createWriteStream(file, { mode: 0o600 });
+    const fail = error => {
+      out.destroy();
+      rmSync(file, { force: true });
+      reject(error);
+    };
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > limit) {
+        req.destroy();
+        fail(new Error('too large'));
+      }
+    });
+    req.on('error', fail);
+    out.on('error', fail);
+    out.on('finish', () => resolve(size));
+    req.pipe(out);
+  });
+}
+
+function pruneUploads() {
+  try {
+    for (const name of readdirSync(UPLOADS_DIR)) {
+      const file = join(UPLOADS_DIR, name);
+      if (Date.now() - statSync(file).mtimeMs > UPLOAD_MAX_AGE_MS) rmSync(file, { force: true });
+    }
+  } catch {
+    // No uploads yet.
+  }
+}
+
 function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -424,6 +473,27 @@ function serve() {
           lastActive = Date.now();
         });
         return;
+      }
+
+      // A document for a new course: raw bytes, its name in X-File-Name. Answers its path here,
+      // for build.start { file, name }.
+      if (path === '/api/upload' && req.method === 'POST') {
+        const name = uploadName(req.headers['x-file-name']);
+        if (!name || !UPLOAD_TYPES.has(extname(name).toLowerCase())) return send(400, { ok: false, error: 'Learn reads PDF, Word (.docx), Markdown, text and HTML files' });
+        if (Number(req.headers['content-length']) > MAX_UPLOAD) return send(413, { ok: false, error: 'the file is over 64 MB' });
+        mkdirSync(UPLOADS_DIR, { recursive: true, mode: 0o700 });
+        pruneUploads();
+        const file = join(UPLOADS_DIR, `${randomBytes(6).toString('hex')}-${name}`);
+        try {
+          const size = await saveBody(req, file, MAX_UPLOAD);
+          if (!size) {
+            rmSync(file, { force: true });
+            return send(400, { ok: false, error: 'the file is empty' });
+          }
+          return send(200, { ok: true, path: file, name, size });
+        } catch (error) {
+          return send(error.message === 'too large' ? 413 : 400, { ok: false, error: error.message === 'too large' ? 'the file is over 64 MB' : 'the upload broke off' });
+        }
       }
 
       if (path === '/api/rpc' && req.method === 'POST') {

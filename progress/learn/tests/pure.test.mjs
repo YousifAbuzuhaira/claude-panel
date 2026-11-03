@@ -1,5 +1,5 @@
 // The pure parts of Learn's helper: Markdown, the catalogue, the overlap, captions and
-// pages, Claude's stream, settings, diagrams. node --test learn/tests/
+// pages, Claude's stream, settings, diagrams, documents, chats. node --test learn/tests/
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
@@ -9,10 +9,16 @@ import {
 import { claudeArgs, readStreamLine } from '../claude.mjs';
 import { readMarkers } from '../chat.mjs';
 import { cleanLabel, diagramBlock, parseFlow, parseSequence, wrapLabel } from '../diagram.mjs';
+import { chatTitle, condenseChat, listClaudeChats, maskSecrets, projectSlug } from '../chats.mjs';
+import { cutLongSections, docxToSections, documentType, pageIsJunk, pagesForClaude, pdfSections, readZip, uniqueHeadings } from '../documents.mjs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { crc32, deflateRawSync } from 'node:zlib';
 import { markdownToBlocks, parseInline } from '../markdown.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { normalizeSettings, toWslPath } from '../settings.mjs';
-import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, parseJson3, parseTime, transcriptText, youTubeId } from '../sources.mjs';
+import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
 
 describe('markdown', () => {
   test('headings, paragraphs, fenced code with its language, quotes, rules, tables', () => {
@@ -335,5 +341,168 @@ describe('diagrams', () => {
     assert.equal(cleanLabel('a #quot;b#quot; &amp; c'), 'a "b" & c');
     assert.deepEqual(wrapLabel('one two three four five six', 9), ['one two', 'three', 'four five', 'six']);
     assert.deepEqual(wrapLabel('abcdefghijkl', 5), ['abcde', 'fghij', 'kl']);
+  });
+});
+
+/** A zip made here, as a .docx is: each entry deflated, with its directory at the end. */
+function makeZip(files) {
+  const locals = [];
+  const central = [];
+  let offset = 0;
+  for (const [name, text] of Object.entries(files)) {
+    const data = Buffer.from(text, 'utf8');
+    const packed = deflateRawSync(data);
+    const nameBytes = Buffer.from(name, 'utf8');
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(crc32(data), 14); local.writeUInt32LE(packed.length, 18); local.writeUInt32LE(data.length, 22); local.writeUInt16LE(nameBytes.length, 26);
+    const entry = Buffer.alloc(46);
+    entry.writeUInt32LE(0x02014b50, 0); entry.writeUInt16LE(20, 4); entry.writeUInt16LE(20, 6); entry.writeUInt16LE(8, 10);
+    entry.writeUInt32LE(crc32(data), 16); entry.writeUInt32LE(packed.length, 20); entry.writeUInt32LE(data.length, 24); entry.writeUInt16LE(nameBytes.length, 28); entry.writeUInt32LE(offset, 42);
+    locals.push(local, nameBytes, packed);
+    central.push(entry, nameBytes);
+    offset += 30 + nameBytes.length + packed.length;
+  }
+  const directory = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(Object.keys(files).length, 8); end.writeUInt16LE(Object.keys(files).length, 10);
+  end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, directory, end]);
+}
+
+describe('documents', () => {
+  const W = body => `<?xml version="1.0"?><w:document xmlns:w="w"><w:body>${body}</w:body></w:document>`;
+  const para = (text, style = null, list = false) => `<w:p><w:pPr>${style ? `<w:pStyle w:val="${style}"/>` : ''}${list ? '<w:numPr><w:ilvl w:val="0"/></w:numPr>' : ''}</w:pPr><w:r><w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
+
+  test('the types Learn reads, by extension', () => {
+    assert.deepEqual(['a.PDF', 'b.docx', 'c.md', 'd.txt', 'e.htm', 'f.doc', 'g'].map(documentType), ['PDF', 'Word', 'Markdown', 'Text', 'HTML', null, null]);
+  });
+
+  test('a zip is read entry by entry', () => {
+    const zip = readZip(makeZip({ 'a.txt': 'hello', 'dir/b.txt': 'world'.repeat(100) }));
+    assert.equal(zip.get('a.txt')().toString(), 'hello');
+    assert.equal(zip.get('dir/b.txt')().toString().length, 500);
+    assert.throws(() => readZip(Buffer.from('not a zip at all, sorry')), /not a zip/);
+  });
+
+  test('Word: the title, headings by style (named or by outline level), lists, tables and entities', () => {
+    const styles = '<w:styles><w:style w:styleId="Kop1"><w:name w:val="heading 1"/></w:style><w:style w:styleId="Mine"><w:name w:val="Mine"/><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style></w:styles>';
+    const body = para('Runbook', 'Title') + para('For the on-call engineer.') + para('Before you start', 'Kop1') + para('Check the lag &amp; alerts', null, true)
+      + '<w:tbl><w:tr><w:tc>' + para('Step') + '</w:tc><w:tc>' + para('Command') + '</w:tc></w:tr><w:tr><w:tc>' + para('Promote') + '</w:tc><w:tc>' + para('select pg_promote();') + '</w:tc></w:tr></w:tbl>'
+      + para('After', 'Mine') + para('Rebuild the old primary.');
+    const read = docxToSections(makeZip({ 'word/document.xml': W(body), 'word/styles.xml': styles }));
+    assert.equal(read.title, 'Runbook');
+    assert.deepEqual(read.sections.map(section => [section.heading, section.level]), [['Introduction', 1], ['Before you start', 1], ['After', 2]]);
+    assert.equal(read.sections[1].text, '- Check the lag & alerts\n| Step | Command |\n| Promote | select pg_promote(); |');
+    assert.throws(() => docxToSections(makeZip({ 'other.xml': '<x/>' })), /not a Word document/);
+  });
+
+  test('PDF: sections by the top two levels of bookmarks, the page in each heading', () => {
+    const pages = ['Cover', 'Intro text '.repeat(40), 'WAL text '.repeat(40), 'More WAL '.repeat(40), 'Failover text '.repeat(40)];
+    const outline = [{ title: 'Write-ahead log', page: 2, level: 0 }, { title: 'Deep detail', page: 3, level: 2 }, { title: 'Failover', page: 4, level: 1 }, { title: 'Intro', page: 1, level: 0 }];
+    const sections = pdfSections(pages, outline);
+    assert.deepEqual(sections.map(section => section.heading), ['Intro (p. 2)', 'Write-ahead log (pp. 3-4)', 'Failover (p. 5)'], 'a short front matter (the cover) is left out; level 2 is inside its parent');
+    assert.ok(sections[1].text.includes('More WAL'));
+  });
+
+  test('PDF without bookmarks: three pages at a time; a long part cut at page ends', () => {
+    const pages = Array.from({ length: 7 }, (_, i) => `Page ${i + 1} `.repeat(30));
+    assert.deepEqual(pdfSections(pages).map(section => section.heading), ['Pages 1-3', 'Pages 4-6', 'Page 7']);
+    const big = Array.from({ length: 4 }, () => 'word '.repeat(2400)); // 12,000 characters a page
+    const cut = pdfSections(big, [{ title: 'All', page: 0, level: 0 }, { title: 'Rest', page: 3, level: 0 }]);
+    assert.deepEqual(cut.map(section => section.heading), ['All (pp. 1-2)', 'All (p. 3)', 'Rest (p. 4)']);
+  });
+
+  test('a page with no usable text goes to Claude only when such pages are a real share', () => {
+    assert.equal(pageIsJunk(''), true);
+    assert.equal(pageIsJunk('%%%% ### $$$ 1234 5678 !!!! '.repeat(8)), true, 'symbols, no words');
+    assert.equal(pageIsJunk('A standby connects with a replication slot and receives the WAL as it is written by the primary.'), false);
+    const good = 'A standby connects with a replication slot and receives the WAL as it is written by the primary.';
+    assert.deepEqual(pagesForClaude([good, '', good, good, good, good, good, good, good, good, good, good, good, good, good, good, good, good, good, good]), [], 'one empty page in twenty: a figure or a blank');
+    assert.deepEqual(pagesForClaude([good, '', '', good, '', good]), [1, 2, 4]);
+  });
+
+  test('headings made unique; long sections cut into parts at paragraph ends', () => {
+    assert.deepEqual(uniqueHeadings([{ heading: 'Setup', text: 'a' }, { heading: 'setup', text: 'b' }, { heading: '', text: 'c' }]).map(section => section.heading), ['Setup', 'setup (2)', 'Section']);
+    const long = [{ heading: 'Notes', level: 1, text: ['one '.repeat(200), 'two '.repeat(200), 'three '.repeat(200)].join('\n\n') }];
+    const parts = cutLongSections(long, 1000);
+    assert.ok(parts.length >= 3);
+    assert.match(parts[0].heading, /^Notes \(part 1\)$/);
+    assert.ok(parts.every(part => part.text.length <= 1000));
+    assert.deepEqual(cutLongSections([{ heading: 'Introduction', text: 'x '.repeat(800) }], 1000).map(part => part.heading), ['Part 1', 'Part 2']);
+  });
+
+  test('Markdown: a # inside a code fence is not a heading', () => {
+    const read = textToSections('# Title\nintro\n```bash\n# a comment\nls\n```\n## Next\nmore', 'x');
+    assert.deepEqual(read.sections.map(section => section.heading), ['Title', 'Next']);
+    assert.match(read.sections[0].text, /# a comment/);
+  });
+});
+
+describe('chats', () => {
+  const line = value => JSON.stringify(value);
+  const records = [
+    { type: 'user', cwd: '/home/me/app', timestamp: '2026-11-03T10:00:00Z', message: { content: 'Why does the browser link do nothing?' } },
+    { type: 'user', isMeta: true, message: { content: '<system-reminder>hidden</system-reminder>' } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Looking at the opener.' }, { type: 'tool_use', name: 'Bash', input: { command: 'cat log.txt' } }, { type: 'tool_use', name: 'Edit', input: { file_path: '/app/a.ps1', old_string: 'Start-Process', new_string: 'Process.Start' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', content: 'opener exited 0 with GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwx1234' }] } },
+    { type: 'system', subtype: 'compact_boundary' },
+    { type: 'user', isCompactSummary: true, message: { content: 'Summary: the opener died with wsl.exe.' } },
+    { type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'a subagent at work' }] } },
+    { type: 'custom-title', customTitle: 'browser-link' },
+  ];
+
+  test('a chat shrunk to text: turns, tool lines, edits, cut results, the compaction, secrets masked', () => {
+    const text = condenseChat(records.map(line).join('\n'), { title: 'browser-link' });
+    assert.match(text, /^CHAT: browser-link/);
+    assert.match(text, /\[#1 2026-11-03 10:00\] LEARNER: Why does the browser link do nothing\?/);
+    assert.match(text, /tool Bash: cat log.txt/);
+    assert.match(text, /tool Edit: \/app\/a.ps1\n  was: Start-Process\n  now: Process.Start/);
+    assert.match(text, /result: opener exited 0 with GITHUB_TOKEN=<hidden>/);
+    assert.match(text, /compacted here/);
+    assert.match(text, /\[summary written at the compaction\]/);
+    assert.ok(!text.includes('system-reminder'));
+    assert.ok(!text.includes('subagent at work'));
+    assert.ok(!text.includes('ghp_'));
+  });
+
+  test("a chat's title: its own, else Claude's, else its first words", () => {
+    assert.equal(chatTitle(records), 'browser-link');
+    assert.equal(chatTitle([{ type: 'ai-title', aiTitle: 'Fix the opener' }, records[0]]), 'Fix the opener');
+    assert.equal(chatTitle([records[1], records[0]]), 'Why does the browser link do nothing?');
+  });
+
+  test('secrets: keys, tokens, JWTs, passwords in URLs, NAME=value and JSON', () => {
+    const masked = maskSecrets([
+      'sk-ant-api03-abcdefghijklmnopqrstuvwxyz', 'AKIAABCDEFGHIJKLMNOP', 'eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4',
+      'postgres://app:s3cretpw@db:5432/x', 'DB_PASSWORD=hunter2hunter2', 'export API_KEY="abcdef123456"', '{"client_secret": "zzzzzzzz"}',
+      '-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----',
+    ].join('\n'));
+    for (const secret of ['abcdefghijklmnopqrstuvwxyz', 'AKIAABCDEFGHIJKLMNOP', 'SflKxwRJSMeKKF2QT4', 's3cretpw', 'hunter2hunter2', 'abcdef123456', 'zzzzzzzz', 'MIIE']) assert.ok(!masked.includes(secret), secret);
+    assert.match(masked, /postgres:\/\/app:<hidden>@db/);
+    assert.match(masked, /DB_PASSWORD=<hidden>/);
+    assert.equal(maskSecrets('a commit 3f2a9c1 and a path /home/me/app'), 'a commit 3f2a9c1 and a path /home/me/app', 'ordinary text is left alone');
+  });
+
+  test("the chats are listed newest first, Learn's own and empty ones left out", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'learn-chats-'));
+    try {
+      const write = (project, id, items, at) => {
+        mkdirSync(join(dir, project), { recursive: true });
+        const file = join(dir, project, `${id}.jsonl`);
+        writeFileSync(file, `${items.map(line).join('\n')}\n${' '.repeat(2100)}`);
+        return file;
+      };
+      write('-home-me-app', '11111111-1111-4111-8111-111111111111', records);
+      write(projectSlug('/home/me/.claude/learn'), '22222222-2222-4222-8222-222222222222', records);
+      write('-home-me-app', '33333333-3333-4333-8333-333333333333', [records[1]]);
+      write('-home-me-app', 'not-a-session', records);
+      const chats = listClaudeChats({ dir, exclude: ['/home/me/.claude/learn'] });
+      assert.deepEqual(chats.map(chat => chat.id), ['11111111-1111-4111-8111-111111111111']);
+      assert.equal(chats[0].title, 'browser-link');
+      assert.equal(chats[0].project, 'app');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

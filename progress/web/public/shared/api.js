@@ -26,6 +26,18 @@ export async function rpc(cmd, args = {}) {
   return answer.result;
 }
 
+/** A document for a new course, sent as it is: resolves `{ path, name, size }` on the server. */
+export async function upload(file) {
+  const response = await fetch('/api/upload', {
+    method: 'POST',
+    headers: { 'X-Learn-Token': token, 'X-File-Name': encodeURIComponent(file.name), 'Content-Type': 'application/octet-stream' },
+    body: file,
+  });
+  const answer = await response.json().catch(() => ({ ok: false, error: `HTTP ${response.status}` }));
+  if (!answer.ok) throw new Error(answer.error || `HTTP ${response.status}`);
+  return answer;
+}
+
 /** Every helper event (ready, status, chat.delta, chat.tool, chat.done, chat.error, fatal). */
 export function onEvents(handler) {
   const source = new EventSource(`/api/events?token=${token}`);
