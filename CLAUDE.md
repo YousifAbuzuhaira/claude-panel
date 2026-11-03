@@ -25,6 +25,9 @@ progress/
   widget/Learn.ps1 (+ LearnRender.ps1, LearnViews.ps1, LearnCore.cs)   the Learn window
   widget/{Sudoku,Game2048,TypeTest,ChessPuzzles}.ps1, ChessCore.cs, *.txt   the games and their data
   learn/*.mjs, learn/learn.sh     Learn's helper (Node 22, no dependencies): library, builds, chats, prompts
+                                  diagram.mjs (Mermaid subset -> laid-out diagram blocks), documents.mjs (PDF via pypdf,
+                                  .docx via its own zip reader, Markdown, HTML -> sections), chats.mjs (Claude Code chats
+                                  listed, found and shrunk to text, secrets masked)
   releases.json                   what each version brought: the Releases tab in every panel
   hooks/releases.ts, hooks/pages.ts   reading releases.json; the one TypeScript list of pages and windows
   tools/build-*.mjs               rebuild the chess puzzles / pieces from their public sources
@@ -102,8 +105,8 @@ Start it with `bash learn/learn.sh serve`, which finds Node 22 and `claude` even
 | pages | `page.get {courseId, n}` (also marks its concepts Seen), `page.rename {courseId, n, title}`, `page.move {courseId, n, delta}`, `page.remove {courseId, n}`, `page.skip {courseId, n, skip}`, `page.rewrite {courseId, n, note}`, `page.add {courseId, topic, after}`, `progress.set {courseId, n, scroll}` |
 | concepts | `concept.list`, `concept.learn {id, learned, courseId?, n?}`, `concept.add {text, category}`, `concept.update {id, name?, definition?, parent?}`, `concept.move {id, category}`, `concept.merge {keep, drop}`, `concept.remove {id}`, `concept.tidy`, `concept.prune` (concepts no course teaches) |
 | overlap | `overlap.get {courseId}`, `overlap.apply {courseId, skip}` |
-| chats | `chat.get {courseId, n \| advisor:true}`, `chat.send {…, text}` (answers `{key}`, then streams events), `chat.stop {key}`, `chat.clear {…}` |
-| builds | `build.start {topic \| link, category, mode: pick\|auto}`, `build.pick {jobId, picks}`, `build.resume {jobId}`, `build.cancel {jobId}`, `build.dismiss {jobId}`, `jobs.list` |
+| chats | `chat.get {courseId, n \| advisor:true, chatId}`, `chat.send {…, text}` (answers `{key}`, then streams events), `chat.stop {key}`, `chat.clear {…}`; Ask's chats: `advisor.list` → `[{id, title, createdAt, updatedAt, count}]`, `advisor.remove {chatId}` |
+| builds | `build.start {topic \| link \| file, name \| chat, focus; category, mode: pick\|auto}`, `build.pick {jobId, picks}`, `build.resume {jobId}`, `build.cancel {jobId}`, `build.dismiss {jobId}`, `jobs.list`, `claudeChats.list` → `[{id, title, project, cwd, at, size}]` |
 | tools | `deps.check`, `deps.install` (yt-dlp) |
 
 **Rules a front end must keep:**
@@ -111,8 +114,11 @@ Start it with `bash learn/learn.sh serve`, which finds Node 22 and `claude` even
 - A page's `n` is its permanent id. Its **order** is its position in `course.pages`; show "page X of Y" by position.
 - **Learned** is set only by the person's own action: a tick, or the *Mark learned* button. Never mark anything learned automatically.
 - A chat reply's `offers` (concept ids) become a *Mark learned* button, and its `builds` (`{topic, category}`) become *Build this* buttons.
+- **Ask's chats:** a window makes a new chat's id itself (`a` + letters and digits), so the streaming key `advisor:<id>` never changes mid-reply. A chat is saved, titled by its first question, when that question is sent. Before there were several, there was one `advisor/chat.json`; it becomes the first chat and is renamed `chat.json.moved`.
+- **Blocks:** a page's and a reply's blocks are `h p code ul ol quote hr table`, plus `diagram`. That is a ```mermaid block (`flowchart`/`graph` TD/LR/BT/RL, or `sequenceDiagram`) that `learn/diagram.mjs` laid out: `{w, h, font, line, small, smallLine, nodes:[{x, y, w, h, shape, lines}], edges:[{pts, dash, thick, head, tail, life, label?}], frames, source}`. It carries positions only; a front end draws it in its own colours, scaled by its text size over `font` and never wider than the column. One it can't read stays `code`, and a front end that doesn't know `diagram` skips it.
+- **Sources:** `youtube` and `web` come from research. `doc` is a document: the build keeps a copy, `courses/<id>/sources/<sid>.document.<ext>` (`page.source.file`). `chat` is a brief written from a Claude Code chat. Both have sections and are cited `[sec: Heading]` with no link. A web page's upload goes to `<config>/uploads/` (`POST /api/upload`), and `build.start` moves it in.
 
-The helper also works as a CLI (`learn.sh build start|list|run|pick|resume|cancel`, `settings`, `deps`, `library`, `status`, `transcript <url>`, `ping`).
+The helper also works as a CLI (`learn.sh build start|list|run|pick|resume|cancel`, `chats`, `extract <file>`, `settings`, `deps`, `library`, `status`, `transcript <url>`, `ping`). `/course <what>` in a chat runs `learn.sh build start --chat <session> --focus <what>` (`courseArgv` in `hooks/learn.ts`).
 
 **Every Claude call Learn makes** runs:
 
@@ -124,6 +130,8 @@ claude -p --safe-mode --restricted --strict-mcp-config --permission-mode dontAsk
 - Tools go in **both** `--tools` and `--allowedTools`, because `dontAsk` denies anything else.
 - `--bare` can't be used: it only accepts `ANTHROPIC_API_KEY`, not a subscription login.
 - `CLAUDE_PROGRESS_OFF=1` makes this plugin step aside inside those runs.
+- A course from a chat makes one run with `Read`, `Grep` and `Glob` only, in a folder holding just the chat's text (`jobs/<id>.chat/chat.txt`, removed afterwards). It also gets `--add-dir` for the chat's working folder, so it can read the code as it is now. Nothing ever writes to the chat it reads.
+- A PDF's text comes from pypdf, run with `python3 -I` straight from its wheel (`deps.mjs ensurePypdf`: PyPI's sha256 checked, refreshed after 30 days). Claude reads only pages with no usable text. Its `Read` tool takes a whole PDF of 10 pages or fewer without poppler, so pypdf cuts those pages out first.
 
 ## Contract 3: the appearance
 

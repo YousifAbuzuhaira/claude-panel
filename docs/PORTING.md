@@ -291,9 +291,14 @@ Rebuild the WPF window in `widget/Learn.ps1`, `LearnViews.ps1` and `LearnRender.
   - an always-visible ✕ (`concept.remove`).
 
 **Ask**
-- The Advisor chat (`advisor: true`) with four suggestion chips.
+- The Advisor's chats (`advisor: true, chatId`), listed with `advisor.list`; a new one's id made by the page (`a` + letters and digits). Four suggestion chips.
 - Its *Build this* buttons as above.
-- *New conversation* sends `chat.clear {advisor: true}`.
+- *+ New chat* shows an empty chat with a fresh id; it is saved with its first question. A delete (`advisor.remove {chatId}`) takes two clicks.
+
+**New course: what it is built from**
+- A topic or link (`build.start {topic | link}`), a document (`build.start {file, name}`: a path the helper can read, or from a browser `POST /api/upload` first), or a Claude chat (`claudeChats.list`, then `build.start {chat, focus}`).
+- A page's `source.kind` `doc` or `chat` has no link; a `doc`'s `source.file` is the copy in the library, to open where the front end can.
+- `diagram` blocks: draw the helper's boxes, text and lines in the scheme's colours (see CLAUDE.md, contract 2).
 
 **Settings** (`settings.get`, `settings.set {change}`)
 - The library folder. If it changes, drop everything cached and close the Course tab.

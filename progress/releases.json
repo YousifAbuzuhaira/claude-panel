@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.4.0",
+      "date": "2026-11-03",
+      "by": "Yousif",
+      "notes": [
+        "Learn pages draw diagrams; Ask keeps several chats",
+        "Build a course from a document: PDF, Word, Markdown, HTML",
+        "Or from one of your Claude chats: /course <what>"
+      ]
+    },
+    {
       "version": "0.3.0",
       "date": "2026-10-29",
       "by": "Yousif",
