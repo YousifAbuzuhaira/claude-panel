@@ -39,12 +39,20 @@ export const widgetStatePath = (sessionId: string) => `${STATE_ROOT}/${sessionId
  * the panel draws them. `focus` names the newest run: when it changes, the
  * panel turns to its Tests tab. `totals` adds up the runs shown.
  */
-export function panelState(sessionId: string, plan: PhasePlan | null, runs: readonly TestRun[], learn: LearnStatus | null = null): string {
+export function panelState(
+  sessionId: string,
+  plan: PhasePlan | null,
+  runs: readonly TestRun[],
+  learn: LearnStatus | null = null,
+  title?: string,
+): string {
   const hasPlan = plan !== null && plan.items.length > 0
   const counts = hasPlan ? phaseCounts(plan) : null
   return JSON.stringify({
     v: 2,
     sessionId,
+    // The chat's title, so a window that shows every chat (Learn's footer) can name each one.
+    ...(title ? { title } : {}),
     plan: hasPlan && counts ? { title: plan.title, items: plan.items, done: counts.done, total: counts.total } : null,
     runs: runs.map(run => ({
       id: run.id,

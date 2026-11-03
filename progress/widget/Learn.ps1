@@ -448,12 +448,12 @@ $toastText.FontSize = 11.5
 $toastText.TextTrimming = 'CharacterEllipsis'
 [void]$footer.Children.Add($toastText)
 
-# Before the messages: what Claude is on while you read, from the panel's own state files
-# (the newest chat's plan, and a test run while one is live). Hidden when there is nothing.
+# Before the messages: what Claude is on while you read, in every chat at work, from the
+# panel's own state files. Hidden when no chat has anything on.
 $phaseGlance = New-Object System.Windows.Controls.TextBlock
 $phaseGlance.FontSize = 11.5
 $phaseGlance.TextTrimming = 'CharacterEllipsis'
-$phaseGlance.MaxWidth = 520
+$phaseGlance.MaxWidth = 820
 $phaseGlance.Margin = New-Gap 0 0 16 0
 $phaseGlance.Visibility = 'Collapsed'
 [System.Windows.Controls.DockPanel]::SetDock($phaseGlance, 'Left')
@@ -1074,51 +1074,74 @@ function Add-GlanceRun([string]$Text, $Foreground) {
   [void]$phaseGlance.Inlines.Add($run)
 }
 
+# One short text, cut with an ellipsis: each chat's part of the line keeps its own room.
+function Get-GlanceShort([string]$Text, [int]$Max) {
+  if ($Text.Length -le $Max) { return $Text }
+  return $Text.Substring(0, [Math]::Max(1, $Max - 1)).TrimEnd() + [string][char]0x2026
+}
+
+# Every chat at work, newest first: its title, then the phase it's on and its count (or its live
+# test run when it has no plan). A chat shows while its plan has phases left, a test runs, or it
+# changed in the last 15 minutes. The tooltip holds each chat's whole plan.
 function Update-PhaseGlance {
   if (-not $STATE_ROOT -or $SelfTest) { return }
   $now = [Environment]::TickCount
   if ($script:glanceAt -and [Math]::Abs($now - $script:glanceAt) -lt 2000) { return }
   $script:glanceAt = $now
-  # The newest chat's file: each chat has a folder, and its file goes when the chat ends.
-  $newest = $null
+  $files = New-Object System.Collections.Generic.List[object]
   try {
     foreach ($dir in [System.IO.Directory]::GetDirectories($STATE_ROOT)) {
       $file = New-Object System.IO.FileInfo((Join-Path $dir 'phases.json'))
-      if ($file.Exists -and (-not $newest -or $file.LastWriteTimeUtc -gt $newest.LastWriteTimeUtc)) { $newest = $file }
+      if ($file.Exists) { $files.Add($file) }
     }
   } catch {}
-  if (-not $newest) { $phaseGlance.Visibility = 'Collapsed'; $script:glanceStamp = ''; return }
-  $stamp = '{0}|{1}|{2}' -f $newest.FullName, $newest.LastWriteTimeUtc.Ticks, $newest.Length
+  $ordered = @($files | Sort-Object LastWriteTimeUtc -Descending)
+  $stamp = ($ordered | ForEach-Object { '{0}|{1}|{2}' -f $_.FullName, $_.LastWriteTimeUtc.Ticks, $_.Length }) -join ';'
   if ($stamp -eq $script:glanceStamp) { return }
   $script:glanceStamp = $stamp
-  try { $state = [System.IO.File]::ReadAllText($newest.FullName, [System.Text.Encoding]::UTF8) | ConvertFrom-Json } catch { return }
   $phaseGlance.Inlines.Clear()
   $tip = New-Object System.Collections.Generic.List[string]
-  $items = @()
-  if ($state.plan) { $items = @($state.plan.items) }
-  if ($items.Count -gt 0) {
-    $nowItem = $items | Where-Object { [string]$_.status -eq 'in_progress' } | Select-Object -First 1
-    $done = [int]$state.plan.done
-    $total = [int]$state.plan.total
-    if ($nowItem) { Add-GlanceRun "$GLYPH_FULL " $accent; Add-GlanceRun ([string]$nowItem.name) $ink }
-    elseif ($done -ge $total) { Add-GlanceRun "$GLYPH_CHECK " $green; Add-GlanceRun 'All phases done' $ink }
-    else { Add-GlanceRun "$GLYPH_EMPTY " $dim; Add-GlanceRun ([string]$state.plan.title) $ink }
-    Add-GlanceRun "  $done/$total" $dim
-    $tip.Add([string]$state.plan.title)
-    foreach ($item in $items) {
-      $mark = switch ([string]$item.status) { 'done' { $GLYPH_CHECK } 'in_progress' { $GLYPH_FULL } default { $GLYPH_EMPTY } }
-      $tip.Add("$mark  $([string]$item.name)")
+  $shown = 0
+  foreach ($file in $ordered) {
+    try { $state = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8) | ConvertFrom-Json } catch { continue }
+    $items = @()
+    if ($state.plan) { $items = @($state.plan.items) }
+    $live = @($state.runs) | Where-Object { $_ -and [string]$_.status -eq 'running' } | Select-Object -Last 1
+    $left = @($items | Where-Object { [string]$_.status -ne 'done' }).Count
+    $isRecent = ([DateTime]::UtcNow - $file.LastWriteTimeUtc).TotalMinutes -lt 15
+    if ($left -eq 0 -and -not $live -and -not $isRecent) { continue }
+    if ($items.Count -eq 0 -and -not $live) { continue }
+    $label = [string]$state.title
+    if (-not $label -and $state.plan) { $label = [string]$state.plan.title }
+    if (-not $label) { $label = 'chat ' + ([string]$state.sessionId).Substring(0, [Math]::Min(4, ([string]$state.sessionId).Length)) }
+    if ($shown -gt 0) { Add-GlanceRun '   |   ' $faint }
+    Add-GlanceRun ((Get-GlanceShort $label 24) + '  ') $dim
+    if ($items.Count -gt 0) {
+      $nowItem = $items | Where-Object { [string]$_.status -eq 'in_progress' } | Select-Object -First 1
+      $done = [int]$state.plan.done
+      $total = [int]$state.plan.total
+      if ($nowItem) { Add-GlanceRun "$GLYPH_FULL " $accent; Add-GlanceRun (Get-GlanceShort ([string]$nowItem.name) 34) $ink }
+      elseif ($left -eq 0) { Add-GlanceRun "$GLYPH_CHECK " $green; Add-GlanceRun 'All done' $ink }
+      else { Add-GlanceRun "$GLYPH_EMPTY " $dim; Add-GlanceRun (Get-GlanceShort ([string]$state.plan.title) 34) $ink }
+      Add-GlanceRun " $done/$total" $dim
+    } else {
+      Add-GlanceRun 'Tests ' $dim
+      Add-GlanceRun "$GLYPH_FULL " $accent
+      Add-GlanceRun ([string]$live.count) $ink
     }
+    if ($tip.Count -gt 0) { $tip.Add('') }
+    $tip.Add($label)
+    if ($items.Count -gt 0) {
+      $tip.Add('  ' + [string]$state.plan.title)
+      foreach ($item in $items) {
+        $mark = switch ([string]$item.status) { 'done' { $GLYPH_CHECK } 'in_progress' { $GLYPH_FULL } default { $GLYPH_EMPTY } }
+        $tip.Add("    $mark  $([string]$item.name)")
+      }
+    }
+    if ($live) { $tip.Add("  Tests: $([string]$live.label) $([string]$live.count)") }
+    $shown++
   }
-  $live = @($state.runs) | Where-Object { $_ -and [string]$_.status -eq 'running' } | Select-Object -Last 1
-  if ($live) {
-    if ($phaseGlance.Inlines.Count -gt 0) { Add-GlanceRun "  $GLYPH_DOT  " $dim }
-    Add-GlanceRun 'Tests ' $dim
-    Add-GlanceRun "$GLYPH_FULL " $accent
-    Add-GlanceRun ([string]$live.count) $ink
-    $tip.Add("Tests: $([string]$live.label) $([string]$live.count)")
-  }
-  if ($phaseGlance.Inlines.Count -eq 0) { $phaseGlance.Visibility = 'Collapsed'; return }
+  if ($shown -eq 0) { $phaseGlance.Visibility = 'Collapsed'; return }
   $phaseGlance.ToolTip = ($tip -join [Environment]::NewLine)
   $phaseGlance.Visibility = 'Visible'
 }

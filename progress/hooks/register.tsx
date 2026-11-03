@@ -186,7 +186,7 @@ async function doSyncPanel($: EngineInterface) {
 
   // Contract 1: the state file is written on every setup, for any panel to read.
   const sessionId = await $.session.id()
-  await $.fs.write(widgetStatePath(sessionId), panelState(sessionId, plan, runs, learn))
+  await $.fs.write(widgetStatePath(sessionId), panelState(sessionId, plan, runs, learn, sessionTitle))
 
   const distro = await panelDistro($)
   if (distro === null) {

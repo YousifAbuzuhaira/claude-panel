@@ -63,6 +63,7 @@ Learn window ─ JSON lines ─ learn/learn.sh serve   ← contract 2
 {
   "v": 2,
   "sessionId": "…",
+  "title": "the chat's title (optional)",
   "plan": { "title": "…", "items": [{ "name": "…", "status": "todo|in_progress|done" }], "done": 1, "total": 3 },
   "runs": [{ "id": "…", "label": "pnpm test", "status": "running|passed|failed", "count": "12/40", "ratio": 0.3, "passed": 12, "failed": 0, "skipped": 0 }],
   "focus": "<id of the newest run>",

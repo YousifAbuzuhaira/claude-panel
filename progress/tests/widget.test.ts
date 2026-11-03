@@ -152,3 +152,10 @@ describe('panel helpers', () => {
     expect(argv).toContain('\\\\wsl.localhost\\Ubuntu\\home\\y\\mods\\progress\\widget\\PhasesWidget.ps1')
   })
 })
+
+describe('panel state: the chat title', () => {
+  test("carries the chat's title when there is one, and leaves it out when not", () => {
+    expect(JSON.parse(panelState('s', null, [], null, 'braxtone (6)')).title).toBe('braxtone (6)')
+    expect('title' in JSON.parse(panelState('s', null, []))).toBe(false)
+  })
+})
