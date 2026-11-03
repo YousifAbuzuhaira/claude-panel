@@ -578,30 +578,53 @@ function Open-Sibling([string]$Id, [int64]$OwnerHwnd, [string]$SessionId, [strin
   } catch {}
 }
 
-# Opens a page of the web version ('learn', 'games' or 'games/<name>') in the browser: the
-# plugin's web server runs inside WSL, started (or found) by web/web.sh, which opens the page.
-# These windows run from \\wsl.localhost\<distro>\...\widget, which names the distro and the path.
+# Opens a page of the web version ('learn', 'games' or 'games/<name>') in the browser. The plugin's
+# web server runs inside WSL: wsl.exe runs web/web.sh, which starts (or finds) it and answers a
+# one-time link, and this window opens that link with Windows' own default browser. (Asking WSL to
+# start the browser fails when the wsl.exe it ran in ends at once, as it does here.) A timer waits
+# for the answer, so the window never blocks. These windows run from \\wsl.localhost\<distro>\...
+# \widget, which names the distro and the path. Each attempt is noted in %TEMP%\claude-panel-browser.log.
 function Open-InBrowser([string]$Page = 'learn') {
-  try { [System.IO.File]::AppendAllText((Join-Path $env:TEMP 'claude-panel-browser.log'), ('{0} asked for {1} from {2}' -f (Get-Date -Format s), $Page, $PSScriptRoot) + [Environment]::NewLine) } catch {}
   try {
     $match = [regex]::Match([string]$PSScriptRoot, '^\\\\wsl(?:\.localhost|\$)\\([^\\]+)(\\.*)$', 'IgnoreCase')
-    if (-not $match.Success) { return }
+    if (-not $match.Success) { Write-UiBrowserLog "not run from WSL ($PSScriptRoot)"; return }
     $distro = $match.Groups[1].Value
     $webScript = ($match.Groups[2].Value -replace '\\', '/') -replace '/widget$', '/web/web.sh'
-    # Shell-started and hidden, as the windows start each other: wsl.exe gets a console of its own
-    # (a console-less wsl.exe can't run the Windows command that opens the browser).
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = 'wsl.exe'
-    $start.Arguments = "-d $distro -e bash `"$webScript`" open $Page"
-    $start.UseShellExecute = $true
-    $start.WindowStyle = 'Hidden'
+    $start.Arguments = "-d $distro -e env CLAUDE_PANEL_LAUNCH=1 bash `"$webScript`" open $Page"
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
     $start.WorkingDirectory = $env:TEMP
     $child = [System.Diagnostics.Process]::Start($start)
-    # What ran, kept in %TEMP% so a link that seems to do nothing can be looked into.
-    try { [System.IO.File]::AppendAllText((Join-Path $env:TEMP 'claude-panel-browser.log'), ('{0} started wsl.exe {1} (pid {2})' -f (Get-Date -Format s), $start.Arguments, $child.Id) + [Environment]::NewLine) } catch {}
-  } catch {
-    try { [System.IO.File]::AppendAllText((Join-Path $env:TEMP 'claude-panel-browser.log'), ('{0} {1}' -f (Get-Date -Format s), $_) + [Environment]::NewLine) } catch {}
-  }
+    Write-UiBrowserLog "asked WSL for $Page (pid $($child.Id))"
+    $wait = New-Object System.Windows.Threading.DispatcherTimer
+    $wait.Interval = [TimeSpan]::FromMilliseconds(200)
+    $wait.Tag = @{ child = $child; until = [DateTime]::UtcNow.AddSeconds(30) }
+    $wait.Add_Tick({
+      param($sender, $e)
+      $state = $sender.Tag
+      if (-not $state.child.HasExited -and [DateTime]::UtcNow -lt $state.until) { return }
+      $sender.Stop()
+      try {
+        if (-not $state.child.HasExited) { Write-UiBrowserLog 'no answer from WSL in 30 s'; return }
+        $lines = @($state.child.StandardOutput.ReadToEnd() -split "`n" | Where-Object { $_.Trim() })
+        $answer = if ($lines.Count) { $lines[$lines.Count - 1] | ConvertFrom-Json } else { $null }
+        if ($answer -and $answer.ok -and $answer.launch -match '^http://127\.0\.0\.1:\d+/launch/[0-9a-f]+$') {
+          [void][System.Diagnostics.Process]::Start([string]$answer.launch)
+          Write-UiBrowserLog "opened $($answer.url)"
+        } else {
+          Write-UiBrowserLog ("no link from WSL: " + ($lines -join ' | '))
+        }
+      } catch { Write-UiBrowserLog "failed: $_" }
+    })
+    $wait.Start()
+  } catch { Write-UiBrowserLog "failed: $_" }
+}
+
+function Write-UiBrowserLog([string]$Text) {
+  try { [System.IO.File]::AppendAllText((Join-Path $env:TEMP 'claude-panel-browser.log'), ('{0} {1}' -f (Get-Date -Format s), $Text) + [Environment]::NewLine) } catch {}
 }
 
 # The other windows as a row of chips (this one left out); a pick opens it and closes the row.

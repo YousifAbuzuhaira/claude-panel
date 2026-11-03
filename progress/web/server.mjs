@@ -778,6 +778,13 @@ async function open(page, terminal = {}, deep = {}) {
   const record = await findOrStart();
   const url = `http://127.0.0.1:${record.port}/${target.path}`;
   let shown = 'browser';
+  // CLAUDE_PANEL_LAUNCH=1: open nothing, answer a one-time link instead (the Windows panel opens
+  // it itself, which works where starting a Windows program from WSL doesn't).
+  if (process.env.CLAUDE_PANEL_LAUNCH === '1') {
+    const nonce = await launchNonce(record, target);
+    process.stdout.write(JSON.stringify({ ok: true, url, port: record.port, shown: 'none', launch: `http://127.0.0.1:${record.port}/launch/${nonce}` }) + '\n');
+    return;
+  }
   if (process.env.CLAUDE_PANEL_NO_BROWSER !== '1') {
     const app = nativeApp();
     if (app) {
