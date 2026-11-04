@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Learn video</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/shared/theme.css">
+<link rel="stylesheet" href="/look.css?group=learn">
+<link rel="stylesheet" href="video.css">
+<script src="/shared/theme.js"></script>
+<script type="module" src="player.js"></script>
+</head>
+<body>
+<div class="page">
+  <header><span class="eyebrow" id="courseTitle"></span><h1 id="pageTitle"></h1></header>
+  <p class="note" id="note" hidden></p>
+  <div class="frame awake" id="frame" tabindex="0">
+    <div class="stage" id="stage">
+      <div class="camera" id="camera"><svg class="wires" id="wires"></svg><div class="objects" id="objects"></div></div>
+      <div class="stage-head" id="head"><div class="stage-section" id="section"></div><div class="stage-title" id="title"></div></div>
+      <div class="quiz" id="quiz" hidden></div>
+    </div>
+    <div class="cc" id="cc"></div>
+    <div class="flash" id="flash"></div>
+    <div class="cover" id="cover">
+      <div class="cover-title" id="coverTitle"></div>
+      <div class="cover-meta" id="coverMeta"></div>
+      <button class="big-play" id="coverPlay" aria-label="Play"></button>
+    </div>
+    <aside class="drawer" id="drawer"><h2>Chapters</h2><div id="chapters"></div></aside>
+    <div class="menu" id="speedMenu" hidden></div>
+    <div class="controls" id="controls">
+      <div class="scrub" id="scrub"><div class="tip" id="tip"></div><div class="knob" id="knob"></div></div>
+      <div class="buttons">
+        <button class="ctl" id="play" title="Play or pause (space)"></button>
+        <button class="ctl" id="back" title="Back 10 seconds (J)"></button>
+        <button class="ctl" id="forward" title="Forward 10 seconds (L)"></button>
+        <div class="sound-group">
+          <button class="ctl" id="mute" title="Sound (M)"></button>
+          <input class="volume" id="volume" type="range" min="0" max="1" step="0.02" value="1" aria-label="Volume">
+        </div>
+        <span class="clock" id="clock"></span>
+        <span class="now-chapter" id="nowChapter"></span>
+        <button class="ctl" id="captions" title="Subtitles (C)"></button>
+        <button class="ctl text" id="speed" title="Speed">1x</button>
+        <button class="ctl" id="chaptersButton" title="Chapters (G)"></button>
+        <button class="ctl" id="full" title="Full screen (F)"></button>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

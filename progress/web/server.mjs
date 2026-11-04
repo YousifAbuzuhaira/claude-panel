@@ -84,7 +84,7 @@ const STOCKFISH = {
 
 // --- The pages that open on their own, and their window titles --------------------------------
 
-export const WINDOW_TITLES = { learn: 'Learn', games: 'Games', 'games/sudoku': 'Sudoku', 'games/2048': '2048', 'games/typing': 'Typing', 'games/chess': 'Chess' };
+export const WINDOW_TITLES = { learn: 'Learn', 'learn/video': 'Learn video', games: 'Games', 'games/sudoku': 'Sudoku', 'games/2048': '2048', 'games/typing': 'Typing', 'games/chess': 'Chess' };
 // Learn's views a link can ask for (web/public/learn/app.js reads ?view= and ?course=).
 const LEARN_VIEWS = new Set(['library', 'course', 'review', 'learned', 'ask', 'settings', 'overlap']);
 const COURSE_ID = /^[\w.-]{1,160}$/;
@@ -94,7 +94,7 @@ const COURSE_ID = /^[\w.-]{1,160}$/;
  * and a course alone opens that course. A view or course that isn't well formed is left out, so
  * the page opens where it would anyway. Null for a page that doesn't exist.
  */
-export function pagePath(page, { view, course } = {}) {
+export function pagePath(page, { view, course, n } = {}) {
   const key = String(page ?? '').replace(/^\/+|\/+$/g, '') || 'learn';
   if (!Object.hasOwn(WINDOW_TITLES, key)) return null;
   const query = new URLSearchParams();
@@ -104,8 +104,13 @@ export function pagePath(page, { view, course } = {}) {
     else if (hasCourse) query.set('view', 'course');
     if (hasCourse) query.set('course', course);
   }
+  if (key === 'learn/video') {
+    if (typeof course !== 'string' || !COURSE_ID.test(course) || !/^\d{1,4}$/.test(String(n))) return null;
+    query.set('course', course);
+    query.set('page', String(n));
+  }
   const search = query.toString();
-  return { key, path: `${key}/${search ? `?${search}` : ''}`, view: query.get('view'), course: query.get('course') };
+  return { key, path: `${key}/${search ? `?${search}` : ''}`, view: query.get('view'), course: query.get('course'), n: query.get('page') };
 }
 
 // --- The look, Learn's prefs, and the terminal a window follows (pure, for the tests) ---------
@@ -182,9 +187,10 @@ export function cleanTerminal(value) {
 }
 
 // WebAssembly and a worker for Stockfish; YouTube frames for Learn's videos; inline styles only.
+// Learn's own videos play from a Blob: an audio element can't send the token.
 const CSP = [
   "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "worker-src 'self' blob:", "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: https:", "connect-src 'self'", 'frame-src https://www.youtube.com https://www.youtube-nocookie.com',
+  "img-src 'self' data: https:", 'media-src blob:', "connect-src 'self'", 'frame-src https://www.youtube.com https://www.youtube-nocookie.com',
   "object-src 'none'", "base-uri 'none'", "form-action 'self'",
 ].join('; ');
 
@@ -425,8 +431,8 @@ function serve() {
       if (path === '/api/ping') return send(200, { ok: true, pid: process.pid });
 
       if (path === '/api/launch' && req.method === 'POST') {
-        const { page, view, course } = JSON.parse((await readBody(req)) || '{}') || {};
-        const target = typeof page === 'string' && page ? pagePath(page, { view, course }) : null;
+        const { page, view, course, n } = JSON.parse((await readBody(req)) || '{}') || {};
+        const target = typeof page === 'string' && page ? pagePath(page, { view, course, n }) : null;
         if (!target) return send(400, { error: 'no such page' });
         const nonce = randomBytes(16).toString('hex');
         launches.set(nonce, { page: target.path, until: Date.now() + LAUNCH_MS });
@@ -436,8 +442,8 @@ function serve() {
       // A page in a native window opening another page in its own window (Learn's games mark):
       // one window per page, as `open` gives. Only where the window app is already built.
       if (path === '/api/open' && req.method === 'POST') {
-        const { page, view, course, from } = JSON.parse((await readBody(req, MAX_SMALL_BODY)) || '{}') || {};
-        const target = typeof page === 'string' && page ? pagePath(page, { view, course }) : null;
+        const { page, view, course, n, from } = JSON.parse((await readBody(req, MAX_SMALL_BODY)) || '{}') || {};
+        const target = typeof page === 'string' && page ? pagePath(page, { view, course, n }) : null;
         if (!target) return send(400, { error: 'no such page' });
         const app = nativeApp({ build: false });
         if (!app) return send(200, { ok: false, error: 'no window app here' });
@@ -494,6 +500,14 @@ function serve() {
         } catch (error) {
           return send(error.message === 'too large' ? 413 : 400, { ok: false, error: error.message === 'too large' ? 'the file is over 64 MB' : 'the upload broke off' });
         }
+      }
+
+      // A video's sound, for the player to play from a Blob. The helper says where it is, so this
+      // server learns nothing about how a library is laid out.
+      if (path === '/api/video-audio' && req.method === 'GET') {
+        const answer = await helper.ask({ cmd: 'video.audio', courseId: url.searchParams.get('course'), n: Number(url.searchParams.get('page')) });
+        if (!answer.ok) return send(404, { error: answer.error });
+        return send(200, readFileSync(answer.result.path), 'audio/mpeg');
       }
 
       if (path === '/api/rpc' && req.method === 'POST') {
@@ -660,7 +674,7 @@ function readRecord() {
 
 /** A one-time /launch/<nonce> address for `target` (from pagePath), from the running server. */
 async function launchNonce(record, target) {
-  const { nonce } = await postJson(record, '/api/launch', { page: target.key, view: target.view, course: target.course });
+  const { nonce } = await postJson(record, '/api/launch', { page: target.key, view: target.view, course: target.course, n: target.n });
   if (typeof nonce !== 'string') throw new Error('the server gave no launch link');
   return nonce;
 }
@@ -904,7 +918,7 @@ if (isMain) {
   // `open learn --view <library|course|learned|ask|settings> --course <id>`: where Learn opens.
   const flag = name => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
   const terminal = { program: flag('--terminal') || process.env.TERM_PROGRAM, itermSession: flag('--iterm-session') || process.env.ITERM_SESSION_ID };
-  const deep = { view: flag('--view'), course: flag('--course') };
+  const deep = { view: flag('--view'), course: flag('--course'), n: flag('--page') };
   if (mode === 'serve') serve();
   else if (mode === 'app-path') {
     // The plugin's floating panel on macOS runs this binary (in panel mode); null: no Swift here.

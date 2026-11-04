@@ -26,6 +26,16 @@ test('the games hub opens on its own, as each game and Learn do', () => {
   }
 });
 
+test('a video page names its course and page, or it is no page', () => {
+  const target = pagePath('learn/video', { course: 'a-course', n: 3 });
+  assert.equal(target.path, 'learn/video/?course=a-course&page=3');
+  assert.equal(target.key, 'learn/video');
+  assert.equal(target.n, '3');
+  assert.equal(pagePath('learn/video'), null);
+  assert.equal(pagePath('learn/video', { course: '../x', n: 3 }), null);
+  assert.equal(pagePath('learn/video', { course: 'a-course', n: '3;rm' }), null);
+});
+
 test('no page, or slashes around one, is still that page', () => {
   assert.equal(pagePath('').path, 'learn/');
   assert.equal(pagePath(undefined).path, 'learn/');
@@ -67,7 +77,7 @@ test('every page has a window title, and Chess is "Chess"', () => {
   assert.equal(WINDOW_TITLES.games, 'Games');
   for (const [key, title] of Object.entries(WINDOW_TITLES)) {
     assert.ok(title && !/puzzles/i.test(title), key);
-    assert.ok(pagePath(key), key);
+    assert.ok(pagePath(key, { course: 'a-course', n: 3 }), key);
   }
 });
 

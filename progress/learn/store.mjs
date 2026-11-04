@@ -101,11 +101,15 @@ export function libraryPaths(root) {
     root,
     catalogue: join(root, 'catalogue.json'),
     review: join(root, 'review.json'),
+    videoQueue: join(root, 'videos-queue.json'),
     courses: join(root, 'courses'),
     course: id => join(course(id), 'course.json'),
     source: (id, sourceId) => join(course(id), 'sources', `${safeId(sourceId)}.json`),
     captions: id => join(course(id), 'sources', 'captions'),
     page: (id, n) => join(course(id), 'pages', pageFile(n)),
+    // A page's video: <base>.mp3, <base>.json (the timed script) and <base>.meta.json, written
+    // last, whose presence means the other two are whole.
+    videoBase: (id, n) => join(course(id), 'videos', pageFile(n).replace('.json', '')),
     chat: (id, n) => join(course(id), 'chats', pageFile(n)),
     chatSystem: (id, n) => join(course(id), 'chats', pageFile(n).replace('.json', '.system.md')),
     advisorChat: join(root, 'advisor', 'chat.json'), // the one chat before there were several: moved into advisorChats
