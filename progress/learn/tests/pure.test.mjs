@@ -19,7 +19,8 @@ import { askNumbers, cleanAsks, picksCovering, uncovered } from '../coverage.mjs
 import { markdownToBlocks, parseInline } from '../markdown.mjs';
 import { DAILY_CAP, LADDER, answerInReview, answerOnPage, dropCourse, dueToday, emptyReview, flagItem, itemKey, nextDue, parseKey, recallDays, swapConcept } from '../review.mjs';
 import { markTerms, pageGlossary } from '../terms.mjs';
-import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, tidyAids } from '../teach.mjs';
+import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
+import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, tidyDisputes } from '../verify.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { normalizeSettings, toWslPath } from '../settings.mjs';
 import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
@@ -745,5 +746,101 @@ describe('chats', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('the fact-check', () => {
+  const markdown = [
+    '# Beam search',
+    '',
+    'Beam search always finds an output at least as likely as greedy search does [sec: Beam search].',
+    '',
+    'Greedy search takes the single most likely token at every step of the way.',
+  ].join('\n');
+  const flag = { quote: 'Beam search always finds an output at least as likely as greedy search does', problem: 'It can prune the greedy path.', correction: 'It usually does, with no guarantee.', evidence: 'https://example.org/beam', checks: [] };
+
+  test('a flag stays when its quote is on the page and its evidence is elsewhere', () => {
+    const { disputes, rejected } = tidyDisputes({ disputes: [flag] }, { markdown, sourceUrls: ['https://other.org/a'] });
+    assert.equal(disputes.length, 1);
+    assert.deepEqual(rejected, []);
+  });
+
+  test('a flag goes when its quote is not on the page', () => {
+    const { disputes, rejected } = tidyDisputes({ disputes: [{ ...flag, quote: 'A claim this page never makes anywhere at all' }] }, { markdown });
+    assert.equal(disputes.length, 0);
+    assert.match(rejected[0].reason, /not on the page/);
+  });
+
+  test('a page\'s own source is no evidence, however it is written', () => {
+    const { disputes, rejected } = tidyDisputes({ disputes: [{ ...flag, evidence: 'https://www.example.org/beam/#top' }] }, { markdown, sourceUrls: ['http://example.org/beam'] });
+    assert.equal(disputes.length, 0);
+    assert.match(rejected[0].reason, /own sources/);
+  });
+
+  test('a flag needs a real link, a problem and a correction', () => {
+    const flags = [{ ...flag, evidence: 'not a link' }, { ...flag, evidence: 'javascript:alert(1)' }, { ...flag, correction: '' }];
+    assert.equal(tidyDisputes({ disputes: flags }, { markdown }).disputes.length, 0);
+  });
+
+  test('the same claim is flagged once, and only known questions are named', () => {
+    const { disputes } = tidyDisputes({ disputes: [{ ...flag, checks: ['q1', 'made-up'] }, flag] }, { markdown, checkIds: ['q1'] });
+    assert.equal(disputes.length, 1);
+    assert.deepEqual(disputes[0].checks, ['q1']);
+  });
+
+  test('flags stop at the most a page can carry', () => {
+    const many = Array.from({ length: MAX_DISPUTES + 3 }, (_, index) => ({ ...flag, quote: `Claim number ${index} is written out here in five words or more` }));
+    const page = many.map(item => item.quote).join('. ');
+    assert.equal(tidyDisputes({ disputes: many }, { markdown: page }).disputes.length, MAX_DISPUTES);
+  });
+
+  test('a question quoting a disputed passage is held back, and others stay', () => {
+    const quick = [
+      { id: 'q1', q: 'Does beam beat greedy?', quote: 'always finds an output at least as likely' },
+      { id: 'q2', q: 'What does greedy take?', quote: 'takes the single most likely token' },
+    ];
+    const closing = [{ id: 'c1', q: 'Explain beam search', quote: 'Beam search always finds an output' }];
+    const held = holdBack({ quick, closing }, [{ ...flag, checks: [] }], markdown);
+    assert.deepEqual(held.quick.map(check => check.id), ['q2']);
+    assert.deepEqual(held.closing, []);
+    assert.equal(held.heldBack.length, 2);
+  });
+
+  test('a question the check names is held back whatever it quotes', () => {
+    const quick = [{ id: 'q2', q: 'What does greedy take?', quote: 'takes the single most likely token' }];
+    assert.deepEqual(holdBack({ quick, closing: [] }, [{ ...flag, checks: ['q2'] }], markdown).quick, []);
+  });
+
+  test('no flags change nothing', () => {
+    const aids = { quick: [{ id: 'q1', q: 'a', quote: 'b' }], closing: [] };
+    assert.equal(holdBack(aids, [], markdown).quick.length, 1);
+  });
+
+  test('the box sits right under the passage', () => {
+    const blocks = markdownToBlocks(markdown);
+    const placed = placeDisputes(blocks, [flag]);
+    const at = placed.findIndex(block => block.kind === 'disputed');
+    assert.equal(placed.length, blocks.length + 1);
+    assert.equal(placed[at - 1].t, 'p');
+    assert.match(placed[at - 1].inlines.map(item => item.s).join(''), /always finds/);
+  });
+
+  test('a box is never lost: a quote that is nowhere still lands on the page', () => {
+    const placed = placeDisputes(markdownToBlocks(markdown), [{ ...flag, quote: 'nothing like this is anywhere on it' }]);
+    assert.equal(placed.at(-1).kind, 'disputed');
+  });
+
+  test('the box carries the problem, the correction and a link', () => {
+    const box = disputeBlock(flag);
+    assert.equal(box.kind, 'disputed');
+    const inlines = box.blocks[0].inlines;
+    assert.match(inlines.map(item => item.s).join(''), /prune the greedy path.*no guarantee/);
+    assert.equal(inlines.find(item => item.link)?.link, 'https://example.org/beam');
+  });
+
+  test('a span is where a quote sits, and null when it is not on the page', () => {
+    const map = pageMap('One two three four five six seven.');
+    assert.deepEqual(spanOf('three four five six seven', map), { start: 2, end: 7 });
+    assert.equal(spanOf('eight nine ten eleven twelve', map), null);
   });
 });

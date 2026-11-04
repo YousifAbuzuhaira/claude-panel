@@ -15,10 +15,11 @@ import { inlineText, markdownToBlocks } from './markdown.mjs';
 import { askNumbers, cleanAsks, picksCovering, uncovered } from './coverage.mjs';
 import { overlapReport } from './overlap.mjs';
 import {
-  BRIEF_SCHEMA, OUTLINE_SCHEMA, PAGE_PLAN_SCHEMA, PAGE_SCHEMA, READER_SCHEMA, RESEARCH_SCHEMA, TEACH_SCHEMA,
-  chatBriefPrompt, outlinePrompt, pagePlanPrompt, pagePrompt, readerPrompt, researchPrompt, teachPrompt,
+  BRIEF_SCHEMA, OUTLINE_SCHEMA, PAGE_PLAN_SCHEMA, PAGE_SCHEMA, READER_SCHEMA, RESEARCH_SCHEMA, TEACH_SCHEMA, VERIFY_SCHEMA,
+  chatBriefPrompt, outlinePrompt, pagePlanPrompt, pagePrompt, readerPrompt, researchPrompt, teachPrompt, verifyPrompt,
 } from './prompts.mjs';
 import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, placeChecks, tidyAids } from './teach.mjs';
+import { holdBack, placeDisputes, tidyDisputes } from './verify.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
 import {
   condenseTranscript, fetchPage, formatTime, isExtractorError, isPlaylist, isYouTube, sectionsOutline, sectionsText,
@@ -734,10 +735,10 @@ function material(source, from, to, sections, budget) {
  * and questions, then a third sees only the page and answers them blind. What fails gets one
  * repair; what still fails is dropped. A concept left with no closing question gets a plain one.
  */
-async function makePage({ lib, io, page, concepts, isStopping, onStep, writeRequest }) {
+async function makePage({ lib, io, page, concepts, sourceUrls, isStopping, onStep, writeRequest }) {
   const conceptIds = concepts.map(concept => concept.id);
-  const ask = async (prompt, schema) => {
-    const call = () => io.askStructured({ prompt, schema, tools: [], model: lib.settings.models.build, cwd: lib.root, onRateLimit: recordUsage });
+  const ask = async (prompt, schema, tools = []) => {
+    const call = () => io.askStructured({ prompt, schema, tools, model: lib.settings.models.build, cwd: lib.root, onRateLimit: recordUsage });
     try {
       return await call();
     } catch (error) {
@@ -770,13 +771,22 @@ async function makePage({ lib, io, page, concepts, isStopping, onStep, writeRequ
     stats.repaired = true;
     aids = mergeAids(aids, await teachAndRead(markdown, aids));
   }
+  // Last, so it reads what the learner will. A failed call stops the build like any other: a
+  // page is never saved unchecked.
+  onStep(`checking the facts in ${page.title}`);
+  const found = await ask(verifyPrompt({ page, markdown, sources: sourceUrls, quick: aids.quick, closing: aids.closing }), VERIFY_SCHEMA, ['WebSearch', 'WebFetch']);
+  const { disputes, rejected } = tidyDisputes(found, { markdown, sourceUrls, checkIds: [...aids.quick, ...aids.closing].map(check => check.id) });
+  aids = holdBack(aids, disputes, markdown);
+  stats.disputed = disputes.length;
+  stats.flagsRejected = rejected;
+  stats.heldBack = aids.heldBack;
   const tested = new Set(aids.closing.flatMap(check => check.concepts));
   const closing = [...aids.closing, ...concepts.filter(concept => !tested.has(concept.id)).map(closingFor)];
   stats.quick = Math.min(aids.quick.length, MAX_QUICK);
   stats.closing = closing.length;
   stats.terms = aids.terms.length;
   stats.leftUnknown = aids.unknown;
-  return { markdown, aids: { terms: aids.terms, quick: aids.quick.slice(0, MAX_QUICK), closing }, stats };
+  return { markdown, aids: { terms: aids.terms, quick: aids.quick.slice(0, MAX_QUICK), closing }, disputes, stats };
 }
 
 async function writePages(lib, job, save, io, isStopping) {
@@ -800,11 +810,13 @@ async function writePages(lib, job, save, io, isStopping) {
       const concepts = page.concepts.map(id => catalogue.concepts.find(concept => concept.id === id)).filter(Boolean);
       // Order is the place in the list; `n` is only the page's id.
       const position = course.pages.findIndex(other => other.n === page.n);
+      const pageSources = [main, ...(page.support || []).map(item => sources.get(item.sourceId))];
       const made = await makePage({
         lib,
         io,
         page,
         concepts,
+        sourceUrls: pageSources.map(source => source?.url).filter(Boolean),
         isStopping,
         onStep: text => save({ message: `Page ${position + 1}/${course.pages.length}: ${text}` }),
         writeRequest: missing => pagePrompt({
@@ -827,9 +839,9 @@ async function writePages(lib, job, save, io, isStopping) {
       for (const web of [main, ...(page.support || []).map(item => sources.get(item.sourceId))].filter(other => other && other.kind === 'web')) {
         for (const section of web.sections) if (!sectionLinks[section.heading]) sectionLinks[section.heading] = section.anchor ? `${web.url.replace(/#.*$/, '')}#${section.anchor}` : web.url;
       }
-      const { markdown, aids, stats } = made;
+      const { markdown, aids, disputes, stats } = made;
       const ctx = { videoId: videoSource?.videoId || null, videos, sectionLinks };
-      const blocks = placeChecks(markdownToBlocks(markdown, ctx), aids.quick.map(check => ({ block: checkBlock(check, ctx), section: check.section })));
+      const blocks = placeDisputes(placeChecks(markdownToBlocks(markdown, ctx), aids.quick.map(check => ({ block: checkBlock(check, ctx), section: check.section }))), disputes, ctx);
       withLock(lib.root, () => writeJson(lib.paths.page(course.id, page.n), {
         v: 1,
         n: page.n,
@@ -842,6 +854,7 @@ async function writePages(lib, job, save, io, isStopping) {
         outcomes: page.outcomes || [],
         terms: aids.terms,
         checks: aids.closing,
+        disputes,
         stats,
         writtenAt: now(),
       }));

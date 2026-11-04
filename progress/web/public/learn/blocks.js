@@ -10,7 +10,7 @@ import { renderDiagram } from './diagram.js';
 
 const ADDED_TIP = 'Claude added this: it is not in the sources';
 const SECTION_MARK = '\u00a7';
-const CALLOUTS = { example: 'Example', key: 'Key idea', warning: 'Watch out', analogy: 'Analogy' };
+const CALLOUTS = { example: 'Example', key: 'Key idea', warning: 'Watch out', analogy: 'Analogy', disputed: 'Disputed' };
 
 // What the page being drawn adds: its `glossary`, and `check` to draw a quick check.
 let active = null;

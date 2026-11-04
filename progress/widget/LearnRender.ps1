@@ -493,6 +493,7 @@ function New-Callout($Block, [double]$Size) {
     key = @{ label = 'Key idea'; color = $accent; fill = $surface2 }
     warning = @{ label = 'Watch out'; color = $gold; fill = $T.goldSoft }
     analogy = @{ label = 'Analogy'; color = $green; fill = $surface2 }
+    disputed = @{ label = 'Disputed'; color = $T.red; fill = $T.redSoft }
   }
   $kind = $kinds[[string]$Block.kind]
   if (-not $kind) { $kind = $kinds.key }

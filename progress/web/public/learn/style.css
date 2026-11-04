@@ -600,11 +600,13 @@ html[data-see-through] :is(.ui-btn.green, .chat-button.learn:not(.done), .toast)
 .callout.example { border-left-color: var(--blue); }
 .callout.warning { border-left-color: var(--gold); background: var(--gold-soft); }
 .callout.analogy { border-left-color: var(--green); }
+.callout.disputed { border-left-color: var(--red); background: var(--red-soft); }
 .callout-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 6px; font-family: var(--sans); font-size: calc(13px * var(--scale)); }
 .callout-kind { font-weight: 700; color: var(--accent); }
 .callout.example .callout-kind { color: var(--blue); }
 .callout.warning .callout-kind { color: var(--gold); }
 .callout.analogy .callout-kind { color: var(--green); }
+.callout.disputed .callout-kind { color: var(--red); }
 .callout-title { font-weight: 600; }
 .callout-body .diagram-svg { max-width: 100%; }
 .check { margin: 0 0 1.4em; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); font-family: var(--sans); font-size: calc(14px * var(--scale)); line-height: 1.45; }

@@ -9,7 +9,7 @@ const MAX_QUICK = 12;
 const CITE = /\[(?:s\d{1,2}\s+)?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[-–]\s*\d{1,2}:\d{2}(?::\d{2})?)?\]|\[sec:[^\]]*\]/g;
 const ADDED = /\(added\)/g;
 
-const tokens = text => String(text ?? '').toLowerCase().replace(CITE, ' ').replace(ADDED, ' ').match(/[\p{L}\p{N}]+/gu) || [];
+export const tokens = text => String(text ?? '').toLowerCase().replace(CITE, ' ').replace(ADDED, ' ').match(/[\p{L}\p{N}]+/gu) || [];
 
 /** A term is a word or short phrase, not a mark on the page, a command or a value from an example. */
 export const isTerm = text => {
@@ -45,14 +45,21 @@ export function pageMap(markdown) {
   return { words, added, text: ` ${words.join(' ')} ` };
 }
 
+/** The words a quote covers on the page, as `{ start, end }`; null when it isn't there. */
+export function spanOf(quote, map) {
+  const words = tokens(quote);
+  if (words.length < MIN_QUOTE_WORDS) return null;
+  const at = map.text.indexOf(` ${words.join(' ')} `);
+  if (at < 0) return null;
+  const start = map.text.slice(0, at + 1).trim().split(' ').filter(Boolean).length;
+  return { start, end: start + words.length };
+}
+
 /** Where a quote sits: 'missing', 'added', or 'sourced'. */
 export function quoteState(quote, map) {
-  const words = tokens(quote);
-  if (words.length < MIN_QUOTE_WORDS) return 'missing';
-  const at = map.text.indexOf(` ${words.join(' ')} `);
-  if (at < 0) return 'missing';
-  const start = map.text.slice(0, at + 1).trim().split(' ').filter(Boolean).length;
-  return map.added.slice(start, start + words.length).some(Boolean) ? 'added' : 'sourced';
+  const span = spanOf(quote, map);
+  if (!span) return 'missing';
+  return map.added.slice(span.start, span.end).some(Boolean) ? 'added' : 'sourced';
 }
 
 /** The right option gives itself away when it's much longer than every wrong one. */
