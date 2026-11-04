@@ -11,10 +11,14 @@ import { fileURLToPath } from 'node:url';
 import { applyProposals, compactCatalogue, ensureCategory, findCategory, stateOf } from './catalogue.mjs';
 import { askStructured, describeTool, stopAll } from './claude.mjs';
 import { activeJobFor, buildStatus, newCourseId, readCatalogue, readCourse, readStatus, recordUsage, updateCatalogue, updateCourse, writeStatus } from './library.mjs';
-import { markdownToBlocks } from './markdown.mjs';
+import { inlineText, markdownToBlocks } from './markdown.mjs';
 import { askNumbers, cleanAsks, picksCovering, uncovered } from './coverage.mjs';
 import { overlapReport } from './overlap.mjs';
-import { BRIEF_SCHEMA, OUTLINE_SCHEMA, PAGE_PLAN_SCHEMA, PAGE_SCHEMA, RESEARCH_SCHEMA, chatBriefPrompt, outlinePrompt, pagePlanPrompt, pagePrompt, researchPrompt } from './prompts.mjs';
+import {
+  BRIEF_SCHEMA, OUTLINE_SCHEMA, PAGE_PLAN_SCHEMA, PAGE_SCHEMA, READER_SCHEMA, RESEARCH_SCHEMA, TEACH_SCHEMA,
+  chatBriefPrompt, outlinePrompt, pagePlanPrompt, pagePrompt, readerPrompt, researchPrompt, teachPrompt,
+} from './prompts.mjs';
+import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, placeChecks, tidyAids } from './teach.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
 import {
   condenseTranscript, fetchPage, formatTime, isExtractorError, isPlaylist, isYouTube, sectionsOutline, sectionsText,
@@ -638,7 +642,9 @@ async function planPage(lib, job, save, io) {
   const saved = updateCourse(lib, course.id, item => {
     const n = Math.max(0, ...item.pages.map(other => other.n)) + 1;
     const at = job.after === null ? item.pages.length : item.pages.findIndex(other => other.n === job.after) + 1;
-    item.pages.splice(at > 0 ? at : item.pages.length, 0, { ...rest, n, concepts: [...new Set(ids)], status: 'todo', added: true });
+    // It joins the part of the page before it.
+    const part = item.pages[(at > 0 ? at : item.pages.length) - 1]?.part || '';
+    item.pages.splice(at > 0 ? at : item.pages.length, 0, { ...rest, part, n, concepts: [...new Set(ids)], status: 'todo', added: true });
     item.status = 'building';
     return item;
   });
@@ -691,6 +697,56 @@ function material(source, from, to, sections, budget) {
   return `### ${name}\n${sectionsText(source.sections, sections && sections.length ? sections : null, budget)}`;
 }
 
+/**
+ * One page: Claude writes it, then a second call reads the finished page and writes its terms
+ * and questions, then a third sees only the page and answers them blind. What fails gets one
+ * repair; what still fails is dropped. A concept left with no closing question gets a plain one.
+ */
+async function makePage({ lib, io, page, concepts, isStopping, onStep, writeRequest }) {
+  const conceptIds = concepts.map(concept => concept.id);
+  const ask = async (prompt, schema) => {
+    const call = () => io.askStructured({ prompt, schema, tools: [], model: lib.settings.models.build, cwd: lib.root, onRateLimit: recordUsage });
+    try {
+      return await call();
+    } catch (error) {
+      if (isStopping()) throw error;
+      return call(); // one more go before the build stops
+    }
+  };
+  const teachAndRead = async (markdown, repair) => {
+    onStep(repair ? `fixing what didn't pass in ${page.title}` : `writing the questions for ${page.title}`);
+    const raw = await ask(teachPrompt({ page, concepts, markdown, repair }), TEACH_SCHEMA);
+    const blocks = markdownToBlocks(markdown);
+    const headings = blocks.filter(block => block.t === 'h').map(block => inlineText(block.inlines));
+    const aids = tidyAids(raw, { markdown, conceptIds, headings });
+    onStep(`testing the questions for ${page.title}`);
+    const reading = await ask(readerPrompt({ page, markdown, terms: [...(repair?.terms || []), ...aids.terms], quick: aids.quick, closing: aids.closing }), READER_SCHEMA);
+    return applyReader(aids, reading, conceptIds);
+  };
+  onStep(`writing ${page.title}`);
+  let markdown = String((await ask(writeRequest([]), PAGE_SCHEMA)).markdown || '');
+  let aids = await teachAndRead(markdown, null);
+  const stats = { asked: aids.quick.length + aids.closing.length + aids.failed.length, failed: aids.failed.length, unknown: aids.unknown.length, missing: aids.missing.length, rewritten: false, repaired: false };
+  if (aids.missing.length) {
+    // The page left out something it had to cover: it's written again, and so is the rest.
+    stats.rewritten = true;
+    onStep(`adding what ${page.title} left out`);
+    const rewrite = await ask(writeRequest(aids.missing), PAGE_SCHEMA);
+    markdown = String(rewrite.markdown || markdown);
+    aids = await teachAndRead(markdown, null);
+  } else if (aids.failed.length || aids.unknown.length || aids.untested.length) {
+    stats.repaired = true;
+    aids = mergeAids(aids, await teachAndRead(markdown, aids));
+  }
+  const tested = new Set(aids.closing.flatMap(check => check.concepts));
+  const closing = [...aids.closing, ...concepts.filter(concept => !tested.has(concept.id)).map(closingFor)];
+  stats.quick = Math.min(aids.quick.length, MAX_QUICK);
+  stats.closing = closing.length;
+  stats.terms = aids.terms.length;
+  stats.leftUnknown = aids.unknown;
+  return { markdown, aids: { terms: aids.terms, quick: aids.quick.slice(0, MAX_QUICK), closing }, stats };
+}
+
 async function writePages(lib, job, save, io, isStopping) {
   const course = readCourse(lib, job.courseId);
   const catalogue = readCatalogue(lib);
@@ -712,8 +768,14 @@ async function writePages(lib, job, save, io, isStopping) {
       const concepts = page.concepts.map(id => catalogue.concepts.find(concept => concept.id === id)).filter(Boolean);
       // Order is the place in the list; `n` is only the page's id.
       const position = course.pages.findIndex(other => other.n === page.n);
-      const ask = () => io.askStructured({
-        prompt: pagePrompt({
+      const made = await makePage({
+        lib,
+        io,
+        page,
+        concepts,
+        isStopping,
+        onStep: text => save({ message: `Page ${position + 1}/${course.pages.length}: ${text}` }),
+        writeRequest: missing => pagePrompt({
           course,
           page,
           position: position + 1,
@@ -723,24 +785,8 @@ async function writePages(lib, job, save, io, isStopping) {
           concepts,
           material: parts.join('\n\n'),
           learned,
+          missing,
         }),
-        schema: PAGE_SCHEMA,
-        tools: [],
-        model: lib.settings.models.build,
-        cwd: lib.root,
-        onRateLimit: recordUsage,
-      });
-      let answer;
-      try {
-        answer = await ask();
-      } catch (error) {
-        if (isStopping()) throw error;
-        answer = await ask(); // one more go before the build stops
-      }
-      const pageIds = new Set(page.concepts);
-      const checks = (answer.checks || []).slice(0, 3).map(check => {
-        const tests = (check.concepts || []).filter(id => pageIds.has(id));
-        return { q: String(check.q), answer: String(check.answer), concepts: tests.length ? tests : page.concepts };
       });
       const videoSource = main.kind === 'youtube' ? main : (page.support || []).map(item => sources.get(item.sourceId)).find(other => other && other.kind === 'youtube');
       const videos = {};
@@ -749,7 +795,9 @@ async function writePages(lib, job, save, io, isStopping) {
       for (const web of [main, ...(page.support || []).map(item => sources.get(item.sourceId))].filter(other => other && other.kind === 'web')) {
         for (const section of web.sections) if (!sectionLinks[section.heading]) sectionLinks[section.heading] = section.anchor ? `${web.url.replace(/#.*$/, '')}#${section.anchor}` : web.url;
       }
-      const markdown = String(answer.markdown || '');
+      const { markdown, aids, stats } = made;
+      const ctx = { videoId: videoSource?.videoId || null, videos, sectionLinks };
+      const blocks = placeChecks(markdownToBlocks(markdown, ctx), aids.quick.map(check => ({ block: checkBlock(check, ctx), section: check.section })));
       withLock(lib.root, () => writeJson(lib.paths.page(course.id, page.n), {
         v: 1,
         n: page.n,
@@ -758,14 +806,18 @@ async function writePages(lib, job, save, io, isStopping) {
         source: { id: main.id, kind: main.kind, url: main.url, title: main.title, videoId: videoSource?.videoId || null, fromSec: page.fromSec, toSec: page.toSec, ...(main.kind === 'doc' ? { file: main.file || null, fileName: main.fileName || null, docType: main.docType || null } : {}) },
         support: (page.support || []).map(item => ({ ...item, url: sources.get(item.sourceId)?.url, title: sources.get(item.sourceId)?.title })),
         markdown,
-        blocks: markdownToBlocks(markdown, { videoId: videoSource?.videoId || null, videos, sectionLinks }),
-        checks,
+        blocks,
+        outcomes: page.outcomes || [],
+        terms: aids.terms,
+        checks: aids.closing,
+        stats,
         writtenAt: now(),
       }));
       updateCourse(lib, course.id, saved => {
         const entry = saved.pages.find(item => item.n === page.n);
         entry.status = 'written';
         entry.writtenAt = now();
+        saved.terms = mergeTerms(saved.terms, aids.terms, page.n);
         if (saved.pages.every(item => item.status === 'written')) saved.status = 'ready';
       });
       done++;

@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { crc32, deflateRawSync } from 'node:zlib';
 import { askNumbers, cleanAsks, picksCovering, uncovered } from '../coverage.mjs';
 import { markdownToBlocks, parseInline } from '../markdown.mjs';
+import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, tidyAids } from '../teach.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { normalizeSettings, toWslPath } from '../settings.mjs';
 import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
@@ -38,7 +39,122 @@ describe('what you asked for', () => {
   });
 });
 
+describe('questions must come from the page', () => {
+  const markdown = '## Why it loops\nGreedy always takes the top token [sec: Greedy]. So a repeated phrase feeds itself and never stops. (added) It also misses better paths.\n\n## Recap\nDone.';
+  const options = [{ text: 'It takes the top token', right: true, why: 'Yes.' }, { text: 'It samples', right: false, why: 'No.' }, { text: 'It trains', right: false, why: 'No.' }];
+  const context = { markdown, conceptIds: ['c_a', 'c_b'], headings: ['Why it loops', 'Recap'] };
+
+  test('a quote is found through punctuation and cites; a marked sentence counts as added', () => {
+    const map = pageMap(markdown);
+    assert.equal(quoteState('Greedy always takes the top token', map), 'sourced');
+    assert.equal(quoteState('greedy ALWAYS takes, the top token.', map), 'sourced');
+    assert.equal(quoteState('So a repeated phrase feeds itself', map), 'added');
+    assert.equal(quoteState('a phrase the page never says at all', map), 'missing');
+    assert.equal(quoteState('too short', map), 'missing');
+  });
+  test('a much longer right option gives itself away', () => {
+    assert.equal(givesItselfAway([{ text: 'a'.repeat(90), right: true }, { text: 'b'.repeat(30) }, { text: 'c'.repeat(32) }]), true);
+    assert.equal(givesItselfAway(options), false);
+  });
+  test('tidying keeps what passes and says why the rest failed', () => {
+    const aids = tidyAids({
+      terms: [{ term: 'Greedy', aka: [], def: 'Takes the top.', key: true }, { term: 'greedy', aka: [], def: 'Again.' }, { term: '', def: 'x' }],
+      quick: [
+        { q: 'Good?', options, quote: 'Greedy always takes the top token', section: 'why it loops', concepts: ['c_a', 'c_x'] },
+        { q: 'Added?', options, quote: 'So a repeated phrase feeds itself', section: 'Why it loops', concepts: [] },
+        { q: 'Two options?', options: options.slice(0, 2), quote: 'Greedy always takes the top token' },
+        { q: 'Two right?', options: options.map(option => ({ ...option, right: true })), quote: 'Greedy always takes the top token' },
+      ],
+      closing: [
+        { q: 'Explain.', points: ['p'], answer: 'a', quote: 'Greedy always takes the top token', section: 'Nope', concepts: ['c_a'] },
+        { q: 'Which concept?', points: [], answer: 'a', quote: 'Greedy always takes the top token', concepts: ['c_x'] },
+      ],
+    }, context);
+    assert.deepEqual(aids.terms.map(item => item.term), ['Greedy']);
+    assert.equal(aids.quick.length, 1);
+    assert.equal(aids.quick[0].section, 'Why it loops', 'the heading as the page writes it');
+    assert.deepEqual(aids.quick[0].concepts, ['c_a']);
+    assert.equal(aids.closing[0].section, null);
+    assert.deepEqual(aids.failed.map(item => item.q), ['Added?', 'Two options?', 'Two right?', 'Which concept?']);
+  });
+  test('the blind reader must reach the same answer', () => {
+    const aids = tidyAids({
+      terms: [{ term: 'Greedy', aka: ['greedy search'], def: 'd' }],
+      quick: [
+        { q: 'One?', options, quote: 'Greedy always takes the top token', concepts: [] },
+        { q: 'Two?', options, quote: 'Greedy always takes the top token', concepts: [] },
+        { q: 'Three?', options, quote: 'Greedy always takes the top token', concepts: [] },
+      ],
+      closing: [{ q: 'Open?', points: [], answer: 'a', quote: 'Greedy always takes the top token', concepts: ['c_a'] }],
+    }, context, () => 0.5);
+    const right = check => check.options.findIndex(option => option.right);
+    const wrong = check => check.options.findIndex(option => !option.right);
+    const [one, two, three] = aids.quick;
+    const judged = applyReader(aids, {
+      answers: [{ id: one.id, choice: right(one) }, { id: two.id, choice: wrong(two) }, { id: three.id, choice: null }],
+      closing: [{ id: aids.closing[0].id, answerable: false }],
+      unknown: ['logits', 'Greedy Search'],
+      missing: ['beam search'],
+    }, context.conceptIds);
+    assert.deepEqual(judged.quick.map(check => check.q), ['One?']);
+    assert.equal(judged.closing.length, 0);
+    assert.equal(judged.failed.length, 3);
+    assert.deepEqual(judged.unknown, ['logits'], 'a word the glossary explains is not unknown');
+    assert.deepEqual(judged.missing, ['beam search']);
+    assert.deepEqual(judged.untested, ['c_a', 'c_b']);
+  });
+  test('two rounds keep what passed in either, once each', () => {
+    const first = { terms: [{ term: 'a', aka: [] }], quick: [{ id: 'q1' }], closing: [], unknown: [] };
+    const second = { terms: [{ term: 'b', aka: [] }], quick: [{ id: 'q1' }, { id: 'q2' }], closing: [{ id: 'q3' }], unknown: ['a', 'c'] };
+    const merged = mergeAids(first, second);
+    assert.deepEqual(merged.quick.map(item => item.id), ['q1', 'q2']);
+    assert.equal(merged.terms.length, 2);
+    assert.deepEqual(merged.unknown, ['c']);
+  });
+  test('a concept no question tests gets a plain one, so the lock never strands it', () => {
+    const check = closingFor({ id: 'c_a', name: 'Top-p', definition: 'd' });
+    assert.ok(check.q.includes('Top-p'));
+    assert.deepEqual(check.concepts, ['c_a']);
+    assert.equal(check.plain, true);
+  });
+  test('checks sit at the end of their section; a guess before the first heading; no section before the recap', () => {
+    const blocks = markdownToBlocks('Intro.\n\n## One\nA.\n\n### Deeper\nB.\n\n## Two\nC.\n\n## Recap\nD.');
+    const check = (id, extra = {}) => ({ t: 'check', id, ...extra });
+    const placed = placeChecks(blocks, [
+      { block: check('in-one'), section: 'One' },
+      { block: check('nowhere'), section: null },
+      { block: check('guess', { guess: 1 }), section: null },
+    ]);
+    assert.deepEqual(placed.map(block => block.id || block.t), ['p', 'guess', 'h', 'p', 'h', 'p', 'in-one', 'h', 'p', 'nowhere', 'h', 'p']);
+  });
+  test('a check block keeps its order, marks and inlines', () => {
+    const block = checkBlock({ id: 'q1', q: 'Which \`flag\`?', options: [{ text: 'a', right: false, why: 'no' }, { text: 'b', right: true, why: 'yes' }, { text: 'c', right: false, why: 'no' }], concepts: ['c_a'] });
+    assert.equal(block.t, 'check');
+    assert.ok(block.q.some(item => item.code));
+    assert.deepEqual(block.options.map(option => Boolean(option.right)), [false, true, false]);
+  });
+  test('ids follow the words; shuffling keeps every item', () => {
+    assert.equal(checkId('Why  does it loop?'), checkId('why does it loop'));
+    assert.deepEqual(shuffled([1, 2, 3], () => 0).sort(), [1, 2, 3]);
+  });
+  test('a course keeps one definition of a word, and a rewritten page replaces its own', () => {
+    let list = mergeTerms([], [{ term: 'Token', aka: [], def: 'one' }], 1);
+    list = mergeTerms(list, [{ term: 'token', aka: [], def: 'two' }, { term: 'Logit', aka: [], def: 'l' }], 2);
+    assert.deepEqual(list.map(item => item.def), ['one', 'l']);
+    list = mergeTerms(list, [{ term: 'Token', aka: [], def: 'three' }], 1);
+    assert.deepEqual(list.map(item => item.def).sort(), ['l', 'three']);
+  });
+});
+
 describe('markdown', () => {
+  test('a callout holds blocks, keeps its kind and title; a plain quote stays a quote', () => {
+    const blocks = markdownToBlocks('> [!example] Two beams\n> Step one.\n>\n> \`\`\`bash\n> ls\n> \`\`\`\n\n> just a quote');
+    assert.equal(blocks[0].t, 'callout');
+    assert.equal(blocks[0].kind, 'example');
+    assert.equal(blocks[0].title[0].s, 'Two beams');
+    assert.deepEqual(blocks[0].blocks.map(block => block.t), ['p', 'code']);
+    assert.equal(blocks[1].t, 'quote');
+  });
   test('headings, paragraphs, fenced code with its language, quotes, rules, tables', () => {
     const blocks = markdownToBlocks('## Why\nText **bold** and `code`.\n\n```bash\ndocker ps\n```\n\n> quoted\n\n---\n\n| a | b |\n|---|---|\n| 1 | 2 |');
     assert.deepEqual(blocks.map(block => block.t), ['h', 'p', 'code', 'quote', 'hr', 'table']);

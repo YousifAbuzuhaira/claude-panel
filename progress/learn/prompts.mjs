@@ -5,7 +5,7 @@ const LEARNER = 'The learner is a strong software engineer, but assume they know
 
 // Diagrams: Mermaid that learn/diagram.mjs can lay out (anything else shows as code).
 export const DIAGRAM_RULE = [
-  '- Where a picture would help the reader understand (a flow, an architecture, a request between parts, a state machine, a pipeline), add 1-2 diagrams as ```mermaid blocks, each right after the text it explains. Only `flowchart TD`, `flowchart LR` or `sequenceDiagram`. At most 12 boxes, labels of 4 words or fewer, edge labels of 1-3 words; no subgraph, classDef, style or HTML. Skip a diagram that would only repeat a list, and never add one for decoration.',
+  '- Anything that is a flow, an architecture, a request between parts, a state machine or a pipeline gets a diagram, as a ```mermaid block right after the text it explains; add as many as help the reader see it. Only `flowchart TD`, `flowchart LR` or `sequenceDiagram`. At most 12 boxes, labels of 4 words or fewer, edge labels of 1-3 words; no subgraph, classDef, style or HTML. Skip a diagram that would only repeat a list, and never add one for decoration. Use a table to compare things side by side.',
 ].join('\n');
 const CHAT_DIAGRAMS = 'When a picture would make an answer clearer, you may include one small diagram as a ```mermaid block (flowchart TD/LR or sequenceDiagram only, at most 10 boxes, short labels); the app draws it.';
 
@@ -176,49 +176,197 @@ export const PAGE_SCHEMA = {
   type: 'object',
   properties: {
     markdown: { type: 'string', description: 'The full lesson in Markdown' },
-    checks: {
-      type: 'array',
-      minItems: 2,
-      maxItems: 3,
-      items: {
-        type: 'object',
-        properties: {
-          q: { type: 'string', description: 'A question that tests understanding, not recall of wording' },
-          answer: { type: 'string', description: 'A model answer in 1-3 sentences' },
-          concepts: { type: 'array', items: { type: 'string' }, description: 'Ids of the concepts this question tests' },
-        },
-        required: ['q', 'answer', 'concepts'],
-      },
-    },
   },
-  required: ['markdown', 'checks'],
+  required: ['markdown'],
 };
 
-export function pagePrompt({ course, page, position, total, prevTitles, nextTitle, concepts, material, learned }) {
+export function pagePrompt({ course, page, position, total, prevTitles, nextTitle, concepts, material, learned, missing = [] }) {
   return [
     `Write page ${position} of ${total} of the course "${course.title}": "${page.title}". ${LEARNER}`,
     page.note ? `This is a rewrite of the page, and the learner asked: "${page.note}". Follow that.` : '',
     page.added && !page.note ? 'The learner added this page by hand, on a topic the sources may only partly cover: say so plainly and mark what you add (added).' : '',
-    page.subtopics.length ? `It covers: ${page.subtopics.join('; ')}.` : '',
+    (page.outcomes || []).length ? `After this page the learner must be able to: ${page.outcomes.join('; ')}.` : '',
+    page.subtopics.length ? `It must cover ALL of these: ${page.subtopics.join('; ')}.` : '',
+    missing.length ? `Your last version left these out, so teach them properly this time: ${missing.join('; ')}.` : '',
     prevTitles.length ? `Earlier pages: ${prevTitles.join('; ')}.` : 'This is the first page.',
-    nextTitle ? `The next page is "${nextTitle}", so don't teach that here.` : 'This is the last page.',
+    nextTitle ? `The next page is "${nextTitle}", so don't teach that here.` : 'This is the last page: make it a practical task that uses the whole course on something real.',
     learned.length ? `The learner already knows: ${learned.join('; ')}. Build on that rather than re-explaining it.` : '',
     '',
     'Concepts this page must teach (id: name: definition):',
     ...concepts.map(concept => `- ${concept.id}: ${concept.name}: ${concept.definition}`),
     '',
     'How to write it:',
-    '- A full lesson, about 1200-2500 words. The page title is shown above it, so start with a short paragraph, then ## sections.',
+    '- A full lesson: as long as it takes to cover everything above properly, and no longer. Cover it all; never skim something to save space. The page title is shown above it, so start with a short paragraph on why this matters, tied to something a software engineer already knows, then ## sections.',
+    '- Keep each ## section short and about one thing: quick questions sit between sections. Headings say the point ("Greedy search repeats itself"), not just a label ("Greedy search").',
     '- Teach in your own words. Never copy the transcript; it is speech, and the learner can watch the video for that.',
-    '- Explain what it is, why it exists, how it works underneath, and how it is used in real work. Use concrete examples, real commands and code in fenced blocks with a language (```bash, ```yaml, ```ts...), and common mistakes.',
-    '- Cite as you go: after something from a video, put the time it is said as [m:ss] or [h:mm:ss]. When the material has more than one video, put the video\'s id first, as in [s4 1:05]. After something from a web page, document or brief, put [sec: Exact Heading].',
-    '- When you add something that is NOT in the material below (a fact, a command, a caveat), put (added) right after that sentence.',
+    '- Never assume a word of this subject. Explain each one in plain words the first time it appears on this page, even if an earlier page did. Say what a thing is before you use its name. Keep notation out until the idea is clear, and read any formula out in words.',
+    '- Explain what it is, why it exists, how it works underneath, and how it is used in real work.',
+    '- Every concept gets at least one worked example with real values, walked through step by step so the reader sees what happens at each step. Start small enough to follow in your head, then show the real command or code in a fenced block with a language (```bash, ```yaml, ```ts...).',
+    '- Mark these with a callout, a quote block whose first line names its kind:',
+    '  > [!example] A short title',
+    '  > The worked example, which may hold code blocks and lists.',
+    '  [!key] for the one idea to remember from a section (at most a few on a page); [!warning] for a common mistake and how to spot it; [!analogy] for a comparison with something a software engineer already knows.',
+    '- Cite once per paragraph, at its end, not after every sentence: after something from a video, the time it is said as [m:ss] or [h:mm:ss] (when the material has more than one video, the video\'s id first, as in [s4 1:05]); after something from a web page, document or brief, [sec: Exact Heading].',
+    '- When you add something that is NOT in the material below (a fact, a command, a caveat, an example of your own), put (added) right after that sentence, or once after a whole example.',
     DIAGRAM_RULE,
-    '- End with a short "## Recap" of the key points. Do not put the check questions in the Markdown.',
-    '- Then write 2-3 check questions that test understanding (why, what would happen if, which would you choose), each tagged with the concept ids it tests, with a model answer.',
+    '- End with a short "## Recap" of the key points. Do not put any questions in the Markdown.',
     '',
     'MATERIAL:',
     material,
+  ].filter(line => line !== '').join('\n');
+}
+
+// --- A page's terms and questions, from the finished page ----------------------------------------
+
+const QUESTION_FIELDS = {
+  quote: { type: 'string', description: 'The exact words of the page that give the answer, copied character for character, 8-40 words' },
+  section: { type: 'string', description: 'The exact ## heading those words are under' },
+  concepts: { type: 'array', items: { type: 'string' }, description: 'Ids of the concepts this tests' },
+};
+
+export const TEACH_SCHEMA = {
+  type: 'object',
+  properties: {
+    terms: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          term: { type: 'string', description: 'The word exactly as the page writes it' },
+          aka: { type: 'array', items: { type: 'string' }, description: 'Other spellings the page uses for it' },
+          def: { type: 'string', description: 'One or two plain sentences, with no other jargon in them' },
+          key: { type: 'boolean', description: 'True for the few a reader needs before starting the page' },
+        },
+        required: ['term', 'aka', 'def', 'key'],
+      },
+    },
+    quick: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          q: { type: 'string' },
+          guess: { type: 'boolean', description: 'True for the one question asked before the page teaches its answer' },
+          options: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                text: { type: 'string' },
+                right: { type: 'boolean' },
+                why: { type: 'string', description: 'One sentence on why this option is right or wrong' },
+              },
+              required: ['text', 'right', 'why'],
+            },
+          },
+          ...QUESTION_FIELDS,
+        },
+        required: ['q', 'guess', 'options', 'quote', 'section', 'concepts'],
+      },
+    },
+    closing: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          q: { type: 'string' },
+          points: { type: 'array', items: { type: 'string' }, description: 'The 2-4 things a good answer must say' },
+          answer: { type: 'string', description: 'A model answer in 1-3 sentences' },
+          ...QUESTION_FIELDS,
+        },
+        required: ['q', 'points', 'answer', 'quote', 'section', 'concepts'],
+      },
+    },
+  },
+  required: ['terms', 'quick', 'closing'],
+};
+
+/** `repair` (what failed last time) asks only for replacements. */
+export function teachPrompt({ page, concepts, markdown, repair = null }) {
+  return [
+    `Below is a finished page of a course, "${page.title}". ${LEARNER}`,
+    `Write what helps them learn from it. Everything must come from THIS PAGE: never ask about, or rely on, anything the page doesn't teach.`,
+    (page.outcomes || []).length ? `The page's goals: ${page.outcomes.join('; ')}. Your questions must test these.` : '',
+    '',
+    ...(repair ? [
+      'Some of your first attempt didn\'t pass. Write only what is asked for here; what passed is kept.',
+      ...repair.failed.map(item => `- Replace this question (${item.reason}): ${item.q}`),
+      ...repair.unknown.map(word => `- A newcomer couldn't understand "${word}" from the page: define it in terms.`),
+      ...repair.untested.map(id => `- No closing question tests concept ${id}: write one.`),
+      '',
+    ] : []),
+    'TERMS: every word, abbreviation or piece of notation of this subject on the page that a strong software engineer who has never studied it might not know, including ones earlier pages taught. Everyday programming words (function, API, JSON) need none. Set key true on the few (at most 6) a reader needs before starting the page. A definition uses plain words, with a tiny example where that helps.',
+    '',
+    'QUICK CHECKS: a question that takes seconds, about one for each ## section that teaches something, in page order, as many as the page has real ideas to test and no more. Don\'t force one where there\'s nothing worth asking.',
+    '- Test understanding, not wording: apply the idea to a small case.',
+    '- 3-4 short options, exactly one right. Each wrong option is a mistake someone learning this would really make, ideally one the page warns about. All options about the same length and style. No "all of the above", no trick wording.',
+    '- "why" says in one sentence why that option is right or wrong.',
+    '- "quote" is copied exactly from the page and is what gives the answer. Never base a check on a sentence marked (added): that is not from the source.',
+    '- You may set guess true on ONE question, about the page\'s main idea, asked before the reader has read it: a curious guess, not a test.',
+    '',
+    'CLOSING QUESTIONS: the real test of the page. The learner answers in their own words, and passing is what lets them mark a concept as learned.',
+    '- Every concept below must be tested by at least one, and one question may test several related concepts. Use as few as that takes.',
+    '- Each asks them to explain or apply what the page taught, on a case like the page\'s, and must be fully answerable from this page alone.',
+    '- "points" are the 2-4 things a good answer must say, each taken from the page.',
+    '',
+    'Concepts (id: name):',
+    ...concepts.map(concept => `- ${concept.id}: ${concept.name}`),
+    '',
+    'THE PAGE:',
+    markdown,
+  ].filter(line => line !== '').join('\n');
+}
+
+export const READER_SCHEMA = {
+  type: 'object',
+  properties: {
+    answers: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          choice: { type: ['number', 'null'], description: 'The number of the option the page supports, or null if the page does not let you tell' },
+        },
+        required: ['id', 'choice'],
+      },
+    },
+    closing: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { id: { type: 'string' }, answerable: { type: 'boolean' } },
+        required: ['id', 'answerable'],
+      },
+    },
+    unknown: { type: 'array', items: { type: 'string' }, description: 'Words or notation you could not understand from the page' },
+    missing: { type: 'array', items: { type: 'string' }, description: 'Listed subtopics the page does not really explain' },
+  },
+  required: ['answers', 'closing', 'unknown', 'missing'],
+};
+
+/** Sees only the page, and never the answers. */
+export function readerPrompt({ page, markdown, terms, quick, closing }) {
+  return [
+    'You are testing a page of a course, as a reader. You are a strong software engineer who knows NOTHING of this subject. All you know is the page below: use no outside knowledge, even if you have it.',
+    '',
+    'Do these:',
+    '1. For each quiz question, give the number of the option THE PAGE supports, or null if the page does not let you tell.',
+    '2. For each open question, say whether you could answer it fully from this page alone.',
+    '3. In "unknown", list each word or piece of notation you could not understand from the page, unless the glossary below explains it. Leave out everyday programming words.',
+    (page.subtopics || []).length ? `4. In "missing", list any of these subtopics the page does not really explain: ${page.subtopics.join('; ')}.` : '4. Leave "missing" empty.',
+    '',
+    'GLOSSARY:',
+    ...(terms.length ? terms.map(item => `- ${item.term}: ${item.def}`) : ['(none)']),
+    '',
+    'QUIZ:',
+    ...quick.flatMap(check => [`[${check.id}] ${check.q}`, ...check.options.map((option, number) => `  ${number}: ${option.text}`)]),
+    '',
+    'OPEN QUESTIONS:',
+    ...closing.map(check => `[${check.id}] ${check.q}`),
+    '',
+    'THE PAGE:',
+    markdown,
   ].filter(line => line !== '').join('\n');
 }
 
@@ -352,17 +500,20 @@ export function pageChatSystem({ course, page, concepts, sourceLinks }) {
     '',
     'Answer questions about this page and its topic like a senior engineer mentoring a colleague: direct, concrete, with examples and commands where they help. Keep answers short unless asked to go deeper. You may search the web for current facts; say when you do.',
     '',
-    'The page ends with check questions. When the learner answers one: say plainly what they got right and what they missed or got wrong, then give the key point they need. If their answer is essentially right, end your message with this line exactly, listing the concept ids that question tests:',
+    'The page ends with closing questions, and passing one is what lets the learner mark its concepts as learned. When they answer one, judge it against its key points and the page:',
+    '- If it makes EVERY key point in their own words, say so, say why it is right, and end your message with this line exactly, listing the concept ids that question tests:',
     '[[mark-learned: id1, id2]]',
+    '- If any key point is missing or wrong, do NOT write that line. Say what they got right, then give a hint or ask a smaller question that leads them to the missing point, one step at a time, and point them to the part of the page that covers it. Let them try again.',
+    '- Be strict and fair: a vague answer, a guess or words copied from the page do not pass. Asking for help, or being told the answer, does not pass either; they must then say it themselves.',
     'The app turns that line into a button the learner may click. Never say you marked anything yourself; only the learner can.',
-    'Give the model answer only after they have tried, or if they ask.',
+    'Give the model answer only after they have really tried, or if they ask (and then the question stays unpassed).',
     CHAT_DIAGRAMS,
     '',
     'Concepts on this page (id: name: definition):',
     ...concepts.map(concept => `- ${concept.id}: ${concept.name}: ${concept.definition}`),
     '',
-    'Check questions, with model answers (keep these to yourself until the learner has answered):',
-    ...page.checks.map((check, i) => `${i + 1}. ${check.q}\n   Model answer: ${check.answer}\n   Tests: ${check.concepts.join(', ')}`),
+    'Closing questions, with what passing takes (keep these to yourself until the learner has answered):',
+    ...page.checks.map((check, i) => [`${i + 1}. ${check.q}`, (check.points || []).length ? `   Key points: ${check.points.join('; ')}` : '', `   Model answer: ${check.answer}`, check.quote ? `   From the page: ${check.quote}` : '', `   Tests: ${check.concepts.join(', ')}`].filter(Boolean).join('\n')),
     '',
     'Sources:',
     ...sourceLinks.map(link => `- ${link}`),

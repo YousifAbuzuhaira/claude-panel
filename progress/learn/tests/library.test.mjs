@@ -85,8 +85,25 @@ function fakeIo({ pageFails = 0, brief = 'some' } = {}) {
           failuresLeft--;
           throw new Error('Claude is busy');
         }
+        if (schema.properties.terms) {
+          calls.teach = (calls.teach || 0) + 1;
+          const concepts = [...prompt.matchAll(/^- (c_\w+): /gm)].map(match => match[1]);
+          return {
+            terms: [{ term: 'volume', aka: [], def: 'Storage that outlives a container.', key: true }],
+            quick: [
+              { q: 'Which keeps the data?', guess: false, options: [{ text: 'the volume', right: true, why: 'Said on the page.' }, { text: 'the layer', right: false, why: 'It goes.' }, { text: 'the image', right: false, why: 'Read only.' }], quote: 'Volumes keep your data safe when a container is removed', section: 'Part', concepts: concepts.slice(0, 1) },
+              { q: 'Not from the page?', guess: false, options: [{ text: 'a', right: true, why: 'x' }, { text: 'b', right: false, why: 'x' }, { text: 'c', right: false, why: 'x' }], quote: 'nothing like this is written anywhere on it', section: 'Part', concepts: [] },
+            ],
+            closing: [{ q: `Explain it (${calls.teach})`, points: ['one', 'two'], answer: 'Because.', quote: 'Volumes keep your data safe when a container is removed', section: 'Part', concepts }],
+          };
+        }
+        if (schema.properties.answers) {
+          const shown = [...prompt.matchAll(/^\[(q\w+)\]/gm)].map(match => match[1]);
+          const line = /^ {2}(\d): the volume$/m.exec(prompt);
+          return { answers: shown.map(id => ({ id, choice: line ? Number(line[1]) : null })), closing: shown.map(id => ({ id, answerable: true })), unknown: [], missing: [] };
+        }
         calls.pages++;
-        return { markdown: '## Part\nSaid at [1:05] (added). See [sec: Syntax].', checks: [{ q: 'Why?', answer: 'Because.', concepts: ['c_unknown'] }, { q: 'How?', answer: 'So.', concepts: [] }] };
+        return { markdown: '## Part\nSaid at [1:05] (added). See [sec: Syntax].\n\nVolumes keep your data safe when a container is removed.\n\n## Recap\nDone.' };
       },
     },
   };
@@ -169,7 +186,11 @@ describe('a build, start to finish', () => {
     const inlines = page.blocks[1].inlines;
     assert.ok(inlines.some(item => item.link === 'https://www.youtube.com/watch?v=AAAAAAAAAAA&t=65s'));
     assert.ok(inlines.some(item => item.link === 'https://docs.example/volumes#syntax'));
-    assert.deepEqual(page.checks[0].concepts, course.pages[0].concepts, 'an unknown concept id falls back to the page');
+    assert.deepEqual(page.checks[0].concepts, course.pages[0].concepts);
+    assert.deepEqual(page.blocks.map(block => block.t), ['h', 'p', 'p', 'check', 'h', 'p'], 'the check that passed sits at the end of its section');
+    assert.equal(page.stats.failed, 1, 'the question whose quote is not on the page was dropped');
+    assert.equal(page.terms[0].term, 'volume');
+    assert.ok(course.terms.some(item => item.term === 'volume' && item.n === 1));
     assert.equal(calls.pages, 3);
     assert.ok(calls.prompts.at(-1).includes('### Video s1'));
     assert.equal(readStatus().build.state, 'done');

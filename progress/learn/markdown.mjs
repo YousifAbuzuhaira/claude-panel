@@ -3,6 +3,8 @@
 //   | { t: 'ul' | 'ol', items: [{ depth, inlines }] } | { t: 'quote', inlines } | { t: 'hr' }
 //   | { t: 'table', rows: [[inlines]] }   (the first row is the header)
 //   | { t: 'diagram', ... }   (a ```mermaid block, laid out by diagram.mjs)
+//   | { t: 'callout', kind, title, blocks }   (> [!example] Title, with blocks inside)
+//   | { t: 'check', ... }   (a quick check, put in by teach.mjs)
 // Inlines: { s, b?, i?, code?, link?, time?, added? }. `[12:34]` becomes a link into the
 // page's video at that second (`[s4 12:34]` into source s4's, when a page has two videos);
 // `[sec: Heading]` a link to that part of the source page.
@@ -71,6 +73,7 @@ const RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const LIST = /^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$/;
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
 const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+const CALLOUT = /^\[!(example|key|warning|analogy)\]\s*(.*)$/i;
 
 const isBlockStart = (line, next) => FENCE.test(line) || HEADING.test(line) || RULE.test(line) || LIST.test(line) || QUOTE.test(line) || (line.includes('|') && next !== undefined && TABLE_RULE.test(next));
 
@@ -112,7 +115,9 @@ export function markdownToBlocks(markdown, ctx = {}) {
     if (QUOTE.test(line)) {
       const body = [];
       while (i < lines.length && QUOTE.test(lines[i])) body.push(QUOTE.exec(lines[i++])[1]);
-      blocks.push({ t: 'quote', inlines: parseInline(body.join(' ').trim(), ctx) });
+      const callout = CALLOUT.exec(body[0].trim());
+      if (callout) blocks.push({ t: 'callout', kind: callout[1].toLowerCase(), title: parseInline(callout[2], ctx), blocks: markdownToBlocks(body.slice(1).join('\n'), ctx) });
+      else blocks.push({ t: 'quote', inlines: parseInline(body.join(' ').trim(), ctx) });
       continue;
     }
     const list = LIST.exec(line);
