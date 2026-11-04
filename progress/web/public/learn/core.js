@@ -2,7 +2,7 @@
 // the helper call, two-click removes and inline edits. Pure DOM; no framework.
 import { rpc, token } from '../shared/api.js';
 
-export const VIEW_NAMES = ['library', 'course', 'learned', 'ask', 'settings'];
+export const VIEW_NAMES = ['library', 'course', 'review', 'learned', 'ask', 'settings'];
 export const MIN_SCALE = 0.8;
 export const MAX_SCALE = 1.6;
 
@@ -276,6 +276,7 @@ export const nav = {
   openCourse: () => {},
   refreshLibrary: () => {},
   refreshLearned: () => {},
+  showReviewCount: () => {},
   setTextScale: () => {},
 };
 

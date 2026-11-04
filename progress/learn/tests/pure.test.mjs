@@ -17,6 +17,8 @@ import { join } from 'node:path';
 import { crc32, deflateRawSync } from 'node:zlib';
 import { askNumbers, cleanAsks, picksCovering, uncovered } from '../coverage.mjs';
 import { markdownToBlocks, parseInline } from '../markdown.mjs';
+import { DAILY_CAP, LADDER, answerInReview, answerOnPage, dropCourse, dueToday, emptyReview, flagItem, itemKey, nextDue, parseKey, recallDays, swapConcept } from '../review.mjs';
+import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, tidyAids } from '../teach.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { normalizeSettings, toWslPath } from '../settings.mjs';
@@ -36,6 +38,103 @@ describe('what you asked for', () => {
     const candidates = [{ id: 's1', covers: [0] }, { id: 's2', covers: [1] }, { id: 's3', covers: [1, 2] }];
     assert.deepEqual(picksCovering(candidates, ['a', 'b', 'c'], ['s1']), ['s1', 's2', 's3']);
     assert.deepEqual(picksCovering(candidates, ['a', 'b', 'c', 'nothing has this'], ['s1', 's3']), ['s1', 's3']);
+  });
+});
+
+describe('words explained where they are used', () => {
+  const glossary = [
+    { term: 'logit', names: ['logit', 'raw score'], def: 'A score before softmax.' },
+    { term: 'SFT', names: ['SFT'], def: 'Supervised fine-tuning.' },
+  ];
+  test('a word is marked at its first use in each section, plural included', () => {
+    const { blocks, used } = markTerms(markdownToBlocks('## One\nLogits and more logits.\n\n## Two\nA raw score.'), glossary);
+    const marked = blocks.flatMap(block => block.inlines || []).filter(item => item.term !== undefined);
+    assert.deepEqual(marked.map(item => item.s), ['Logits', 'raw score']);
+    assert.deepEqual(used.map(item => item.term), ['logit']);
+  });
+  test('code, links, headings and whole other words are left alone; short names keep their case', () => {
+    const { blocks } = markTerms(markdownToBlocks('## logit\n\`logit\` and [logit](https://x.y) and catalogit, sft and SFT.'), glossary);
+    const marked = blocks.flatMap(block => block.inlines || []).filter(item => item.term !== undefined);
+    assert.deepEqual(marked.map(item => item.s), ['SFT']);
+  });
+  test('callouts, lists and tables are marked; check blocks are not touched', () => {
+    const page = markdownToBlocks('> [!key] Title\n> A logit here.\n\n- SFT here');
+    const { blocks } = markTerms([...page, { t: 'check', id: 'q1' }], glossary);
+    assert.ok(blocks[0].blocks[0].inlines.some(item => item.term !== undefined));
+    assert.ok(blocks[1].items[0].inlines.some(item => item.term !== undefined));
+    assert.deepEqual(blocks[2], { t: 'check', id: 'q1' });
+  });
+  test('the page wins, then the course, then concepts; what you have learned is not explained', () => {
+    const page = { terms: [{ term: 'Token', aka: [], def: 'page' }] };
+    const concepts = [{ name: 'Token', aliases: [], definition: 'concept' }, { name: 'Softmax', aliases: [], definition: 'c', learned: { at: 'x' } }, { name: 'Attention', aliases: ['self-attention'], definition: 'c' }];
+    const list = pageGlossary(page, [{ term: 'token', aka: [], def: 'course' }, { term: 'Softmax', aka: [], def: 'course' }, { term: 'Beam', aka: [], def: 'course' }], concepts);
+    assert.deepEqual(list.map(item => [item.term, item.def]), [['Token', 'page'], ['Beam', 'course'], ['Attention', 'c']]);
+  });
+  test('nothing to mark leaves the blocks as they are', () => {
+    const blocks = markdownToBlocks('Text.');
+    assert.equal(markTerms(blocks, []).blocks, blocks);
+  });
+});
+
+describe('review', () => {
+  const day = 86_400_000;
+  const start = new Date(2026, 10, 4, 10).getTime();
+  const key = itemKey('course', 3, 'q1');
+  test('keys come apart again', () => {
+    assert.deepEqual(parseKey(key), { courseId: 'course', n: 3, id: 'q1' });
+  });
+  test('right answers climb the ladder; a wrong one comes back tomorrow', () => {
+    const state = emptyReview();
+    let at = start;
+    answerOnPage(state, key, { right: true, choice: 1, concepts: ['c_a'] }, at);
+    for (const gap of LADDER.slice(0, -1)) {
+      assert.equal(state.items[key].due, at + gap * day);
+      at += gap * day;
+      assert.deepEqual(dueToday(state, at).due, [key]);
+      answerInReview(state, key, true, at);
+    }
+    assert.equal(state.items[key].due, at + 60 * day);
+    answerInReview(state, key, false, at);
+    assert.equal(state.items[key].due, at + day);
+    assert.equal(state.items[key].box, 0);
+  });
+  test('only the first answer on a page counts; a guess never comes back', () => {
+    const state = emptyReview();
+    answerOnPage(state, key, { right: false, choice: 0 }, start);
+    answerOnPage(state, key, { right: true, choice: 2 }, start);
+    assert.equal(state.items[key].choice, 0);
+    answerOnPage(state, 'c/1/q2', { right: true, choice: 0, guess: true }, start);
+    assert.deepEqual(dueToday(state, start + day).due, [key]);
+  });
+  test('the day has a cap; what is over it waits, and nothing is shown as a debt', () => {
+    const state = emptyReview();
+    for (let i = 0; i < DAILY_CAP + 3; i++) answerOnPage(state, `c/1/q${i}`, { right: true, choice: 0 }, start + i);
+    const later = start + day;
+    const first = dueToday(state, later);
+    assert.equal(first.due.length, DAILY_CAP);
+    assert.equal(first.waiting, 3);
+    assert.equal(first.due[0], 'c/1/q0', 'oldest first');
+    for (const item of first.due) answerInReview(state, item, true, later);
+    assert.deepEqual(dueToday(state, later).due, []);
+    assert.equal(dueToday(state, later + day).due.length, 3);
+  });
+  test('a question marked wrong is gone', () => {
+    const state = emptyReview();
+    answerOnPage(state, key, { right: true, choice: 0 }, start);
+    flagItem(state, key);
+    assert.deepEqual(dueToday(state, start + day).due, []);
+    assert.equal(nextDue(state, start), null);
+  });
+  test('recall is the longest gap a right answer crossed', () => {
+    const state = emptyReview();
+    answerOnPage(state, key, { right: true, choice: 0, concepts: ['c_a'] }, start);
+    assert.deepEqual(recallDays(state), {});
+    answerInReview(state, key, true, start + 7 * day);
+    assert.deepEqual(recallDays(state), { c_a: 7 });
+    swapConcept(state, 'c_a', 'c_b');
+    assert.deepEqual(recallDays(state), { c_b: 7 });
+    dropCourse(state, 'course');
+    assert.deepEqual(state.items, {});
   });
 });
 

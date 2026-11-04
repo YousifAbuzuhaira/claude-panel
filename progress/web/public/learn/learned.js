@@ -166,7 +166,7 @@ function conceptRow(concept, depth) {
   const state = concept.state;
   const glyph = h(`button.state-glyph.${state}`, {
     type: 'button',
-    title: state === 'learned' ? 'Learned: click to unmark' : 'Click to mark learned',
+    title: state === 'learned' ? 'Learned: click to unmark' : concept.passed ? 'You passed its closing question: click to mark learned' : 'Locked: answer its closing question in its course, or type it above if you already know it',
     onclick: async () => {
       // No courseId: a tick from the Learned list.
       if (await act('concept.learn', { id, learned: state !== 'learned' })) refreshLearned();
@@ -177,6 +177,7 @@ function conceptRow(concept, depth) {
   if (concept.learned) {
     where = `learned ${formatDate(concept.learned.at)}`;
     if (concept.learned.course) where += ` ${GLYPH.dot} ${short(courseTitle(concept.learned.course), 30)}`;
+    if (concept.recall) where += ` ${GLYPH.dot} recalled after ${concept.recall} ${concept.recall === 1 ? 'day' : 'days'}`;
   } else if ((concept.seen || []).length) {
     const courses = [...new Set(concept.seen.map(seen => seen.course))];
     where = courses.length === 1 ? `read in ${short(courseTitle(courses[0]), 30)}` : `read in ${courses.length} courses`;

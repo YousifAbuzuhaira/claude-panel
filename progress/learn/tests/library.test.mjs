@@ -12,9 +12,9 @@ process.env.LEARN_LIBRARY = join(root, 'library');
 process.env.LEARN_CONFIG_DIR = join(root, 'config');
 after(() => rmSync(root, { recursive: true, force: true }));
 
-const { createJob, createPageJob, readJob, runJob, tidyCandidates, cleanOutline } = await import('../build.mjs');
+const { createJob, createPageJob, createRefreshJob, readJob, runJob, tidyCandidates, cleanOutline } = await import('../build.mjs');
 const { listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCourse, readPage, readStatus, removeCourse, removePage, renamePage, updateCatalogue } = await import('../library.mjs');
-const { addConcept, ensureCategory } = await import('../catalogue.mjs');
+const { addConcept, ensureCategory, setPassed } = await import('../catalogue.mjs');
 const { createServer } = await import('../serve.mjs');
 const { withLock, writeJson, readJson } = await import('../store.mjs');
 const { readDocument } = await import('../documents.mjs');
@@ -108,6 +108,75 @@ function fakeIo({ pageFails = 0, brief = 'some' } = {}) {
     },
   };
 }
+
+describe('the lock on Learned', () => {
+  test('a chip is refused until a closing question is passed; unmarking and Add as learned stay open', async () => {
+    const lib = openLibrary();
+    const job = createJob(lib, { topic: 'Locked', category: 'DevOps' });
+    await runJob(lib, job.id, fakeIo().io);
+    const courseId = readJob(lib, job.id).courseId;
+    const [id] = readCourse(lib, courseId).pages[0].concepts;
+    const lines = [];
+    const server = createServer({ write: text => lines.push(text.trim()) });
+    const ask = async request => {
+      lines.length = 0;
+      await server.handle(JSON.stringify({ rid: 1, ...request }));
+      return JSON.parse(lines.at(-1));
+    };
+    const refused = await ask({ cmd: 'concept.learn', id, learned: true });
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /closing question/);
+    updateCatalogue(lib, catalogue => setPassed(catalogue, [id], { course: courseId, page: 1 }));
+    const marked = await ask({ cmd: 'concept.learn', id, learned: true });
+    assert.equal(marked.result.state, 'learned');
+    const unmarked = await ask({ cmd: 'concept.learn', id, learned: false });
+    assert.notEqual(unmarked.result.state, 'learned');
+  });
+  test('a page shows its answers, and a flagged question goes from the page and review', async () => {
+    const lib = openLibrary();
+    const job = createJob(lib, { topic: 'Checks', category: 'DevOps' });
+    await runJob(lib, job.id, fakeIo().io);
+    const courseId = readJob(lib, job.id).courseId;
+    const lines = [];
+    const server = createServer({ write: text => lines.push(text.trim()) });
+    const ask = async request => {
+      lines.length = 0;
+      await server.handle(JSON.stringify({ rid: 1, ...request }));
+      return JSON.parse(lines.at(-1)).result;
+    };
+    const first = await ask({ cmd: 'page.get', courseId, n: 1 });
+    const check = first.page.blocks.find(block => block.t === 'check');
+    const right = check.options.findIndex(option => option.right);
+    assert.deepEqual(await ask({ cmd: 'check.answer', courseId, n: 1, id: check.id, choice: right }), { right: true });
+    const second = await ask({ cmd: 'page.get', courseId, n: 1 });
+    assert.equal(second.answers[check.id], right);
+    assert.ok(second.glossary.some(item => item.term === 'volume'));
+    await ask({ cmd: 'check.flag', key: `${courseId}/1/${check.id}` });
+    const third = await ask({ cmd: 'page.get', courseId, n: 1 });
+    assert.ok(!third.page.blocks.some(block => block.t === 'check'));
+  });
+});
+
+describe('updating an older course', () => {
+  test('the same sources make a new course; the old one is untouched', async () => {
+    const lib = openLibrary();
+    const job = createJob(lib, { topic: 'Older', category: 'DevOps' });
+    const { io, calls } = fakeIo();
+    await runJob(lib, job.id, io);
+    const oldId = readJob(lib, job.id).courseId;
+    const before = calls.pages;
+    const refresh = createRefreshJob(lib, oldId);
+    assert.equal(refresh.step, 'outline', 'no research, and nothing fetched again');
+    await runJob(lib, refresh.id, io);
+    const fresh = readCourse(lib, readJob(lib, refresh.id).courseId);
+    assert.notEqual(fresh.id, oldId);
+    assert.equal(fresh.updatedFrom, oldId);
+    assert.equal(fresh.status, 'ready');
+    assert.equal(calls.pages, before + fresh.pages.length);
+    assert.equal(readCourse(lib, oldId).status, 'ready');
+    assert.ok(readPage(lib, oldId, 1));
+  });
+});
 
 describe('everything you asked for', () => {
   test('a named thing with no source gets a second search; one with no page, a second plan', async () => {

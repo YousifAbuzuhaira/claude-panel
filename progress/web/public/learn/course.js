@@ -1,7 +1,8 @@
 // Course: contents (left), the page (middle), its chat (right), and the overlap screen.
 import { token } from '../shared/api.js';
 import { renderBlocks } from './blocks.js';
-import { chatHooks, chatPanel, fillInput, forgetChat, pageKey, redrawIdle, showChat } from './chat.js';
+import { doneListeners, chatHooks, chatPanel, fillInput, forgetChat, pageKey, redrawIdle, showChat } from './chat.js';
+import { renderCheck } from './checks.js';
 import { GLYPH, S, act, action, armed, call, formatClock, formatDate, h, inlineEdit, isHttp, nav, savePrefs, short, toast } from './core.js';
 
 const C = {
@@ -27,11 +28,13 @@ export function buildCourseView(host) {
   const courseTitle = h('h2.course-name');
   const courseMeta = h('div.course-meta');
   const courseGap = h('div.course-gap', { hidden: true, title: 'You asked for this, but no source or page covers it. Add a page in Contents.' });
+  const updateLink = action('Update this course', updateCourse, 'blue');
+  updateLink.title = 'Builds a new copy from the same sources, with terms, quick checks and closing questions. This one stays until you remove it.';
   const hideLink = action('hide', () => setContentsShown(false), 'faint');
   hideLink.title = 'Hide the contents; the page takes the room';
   const pageList = h('ol.page-list');
   const contents = h('aside.contents', { 'aria-label': 'Contents' },
-    h('div.col-head', null, h('span.caption', null, 'Contents'), hideLink), courseTitle, courseMeta, courseGap, pageList);
+    h('div.col-head', null, h('span.caption', null, 'Contents'), hideLink), courseTitle, courseMeta, courseGap, updateLink, pageList);
 
   const pageCount = h('span.page-count');
   // Beside PAGE x OF y, so it stays when the contents are hidden.
@@ -56,17 +59,18 @@ export function buildCourseView(host) {
 
   chat = chatPanel({
     title: 'Ask about this page',
-    placeholder: 'Ask anything, or answer a check question (Enter sends)',
+    placeholder: 'Ask anything, or answer a closing question (Enter sends)',
     newLabel: 'new thread',
     fields: () => (S.pageData?.page ? { courseId: S.courseId, n: S.pageN } : null),
   });
   const chatColumn = h('aside.chat-column', { 'aria-label': 'Chat' }, chat.root);
   const grid = h('div.course-grid', null, contents, h('main.page-column', null, pageScroll), chatColumn);
   host.append(grid);
-  ui = { grid, contents, courseTitle, courseMeta, courseGap, pageList, pageCount, showLink, pageTitle, sourceLine, conceptChips, body, checks, prev, next, skip, article, overlap, pageScroll };
+  ui = { grid, contents, courseTitle, courseMeta, courseGap, updateLink, pageList, pageCount, showLink, pageTitle, sourceLine, conceptChips, body, checks, prev, next, skip, article, overlap, pageScroll };
   setContentsShown(S.showContents, false);
 
   chatHooks.learn = setConceptLearned;
+  doneListeners.add(onChatDone);
   window.addEventListener('pagehide', () => saveProgress(true));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveProgress(true); });
 }
@@ -197,6 +201,8 @@ function showContents() {
   const gaps = course.notCovered || [];
   ui.courseGap.hidden = !gaps.length;
   ui.courseGap.textContent = gaps.length ? `Not covered: ${gaps.join(', ')}` : '';
+  // A course from before terms and quick checks.
+  ui.updateLink.hidden = Boolean(course.terms) || course.status !== 'ready';
 
   const items = course.pages.flatMap((page, index) => {
     const n = page.n;
@@ -373,12 +379,19 @@ function sourceLinks(page) {
 }
 
 function conceptChip(concept) {
-  const glyph = concept.state === 'learned' ? GLYPH.check : concept.state === 'seen' ? GLYPH.half : GLYPH.empty;
-  const tip = `${concept.definition || ''}\n\n${concept.state === 'learned' ? 'Learned. Click to unmark.' : 'Click to mark it learned.'}`.trim();
-  return h(`button.ui-chip.concept.${concept.state}`, {
+  const learned = concept.state === 'learned';
+  const open = learned || concept.passed;
+  const glyph = learned ? GLYPH.check : concept.state === 'seen' ? GLYPH.half : GLYPH.empty;
+  const state = learned ? 'Learned. Click to unmark.' : open ? 'You passed its closing question. Click to mark it learned.' : 'Locked: answer its closing question to mark it learned.';
+  const recall = concept.recall ? `\nRecalled after ${concept.recall} ${concept.recall === 1 ? 'day' : 'days'}.` : '';
+  const tip = `${concept.definition || ''}\n\n${state}${recall}`.trim();
+  return h(`button.ui-chip.concept.${concept.state}${open ? '' : '.locked'}${concept.passed && !learned ? '.passed' : ''}`, {
     type: 'button',
     title: tip,
-    onclick: () => setConceptLearned(concept.id, concept.state !== 'learned'),
+    onclick: () => {
+      if (open) setConceptLearned(concept.id, !learned);
+      else goToClosing();
+    },
   }, h('span', null, `${glyph} ${concept.name}`));
 }
 
@@ -387,6 +400,83 @@ function showChips() {
 }
 
 /** The person's own click: the only way anything becomes Learned. */
+async function updateCourse(event) {
+  if (!armed(`update:${S.courseId}`, event.currentTarget, 'Build it again? click to confirm')) return;
+  const job = await act('course.refresh', { id: S.courseId });
+  if (!job) return;
+  toast('Building the new version. This one stays until you remove it.');
+  nav.showView('library');
+}
+
+function goToClosing() {
+  ui.checks.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  toast('Answer its closing question to unlock it');
+}
+
+/** A section the page's question comes from, by its heading. */
+function goToSection(name) {
+  const wanted = name.trim().toLowerCase();
+  const heading = [...ui.body.querySelectorAll('h2, h3, h4, h5')].find(item => item.textContent.trim().toLowerCase() === wanted);
+  if (heading) heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/** Claude passed a closing question: its concepts open, here and in the course's list. */
+function onChatDone(key, message) {
+  const offers = message?.offers || [];
+  if (!offers.length || key !== pageKey(S.courseId, S.pageN)) return;
+  for (const concept of S.pageData?.concepts || []) if (offers.includes(concept.id)) concept.passed = true;
+  for (const id of offers) if (S.courseData?.concepts?.[id]) S.courseData.concepts[id].passed = true;
+  showChips();
+  showClosing();
+}
+
+function pageCheck(block) {
+  return renderCheck(block, {
+    shown: S.pageData?.answers?.[block.id] ?? null,
+    onAnswer: choice => {
+      if (S.pageData.answers) S.pageData.answers[block.id] = choice;
+      act('check.answer', { courseId: S.courseId, n: S.pageN, id: block.id, choice });
+    },
+    onWrong: async section => {
+      if ((await act('check.flag', { key: `${S.courseId}/${S.pageN}/${block.id}` })) === undefined) return;
+      section.remove();
+      toast('Removed from this page and from Review');
+    },
+  });
+}
+
+/** What the page sets out to do, and the words to have before you start. */
+function pageIntro(page) {
+  const outcomes = page.outcomes || [];
+  const terms = (page.terms || []).filter(item => item.key).slice(0, 6);
+  if (!outcomes.length && !terms.length) return [];
+  return [h('section.page-intro', null,
+    outcomes.length ? [h('h2.intro-title', null, "You'll be able to"), h('ul.intro-list', null, outcomes.map(item => h('li', null, item)))] : null,
+    terms.length ? [h('h2.intro-title', null, 'Key terms'), h('dl.intro-terms', null, terms.flatMap(item => [h('dt', null, item.term), h('dd', null, item.def)]))] : null)];
+}
+
+function showClosing() {
+  ui.checks.replaceChildren();
+  const page = S.pageData?.page;
+  const checks = page?.checks || [];
+  if (!checks.length) return;
+  const concepts = new Map((S.pageData?.concepts || []).map(concept => [concept.id, concept]));
+  ui.checks.append(
+    h('hr'),
+    h('h2.checks-title', null, 'Closing questions'),
+    h('p.dim.checks-hint', null, 'Answer in the chat, in your own words. Passing one lets you mark its concepts as learned.'),
+    h('ol.check-list', null, checks.map((check, index) => {
+      const unlocks = (check.concepts || []).map(id => concepts.get(id)).filter(Boolean);
+      const done = unlocks.length > 0 && unlocks.every(concept => concept.passed || concept.state === 'learned');
+      return h('li', null,
+        h('span', null, `${check.q} `),
+        action(`answer ${GLYPH.right}`, () => fillInput(chat, `Question ${index + 1}: ${check.q}\nMy answer: `), 'blue'),
+        h('div.check-meta', null,
+          check.section ? action(`From: ${check.section}`, () => goToSection(check.section), 'faint') : null,
+          unlocks.length ? h(`span${done ? '.green' : '.dim'}`, null, `${done ? `${GLYPH.check} Passed: ` : 'Unlocks: '}${unlocks.map(concept => concept.name).join(', ')}`) : null));
+    })));
+}
+
 async function setConceptLearned(id, learned) {
   const result = await act('concept.learn', { id, learned, courseId: S.courseId, n: S.pageN });
   if (!result) return;
@@ -417,17 +507,8 @@ function showPage() {
   const page = result.page;
   ui.sourceLine.replaceChildren(...sourceLinks(page));
   showChips();
-  ui.body.replaceChildren(...renderBlocks(page.blocks));
-  const checks = page.checks || [];
-  if (checks.length) {
-    ui.checks.append(
-      h('hr'),
-      h('h2.checks-title', null, 'Check yourself'),
-      h('p.dim.checks-hint', null, 'Answer in the chat. Claude says what you got right and what you missed; when you have it, you can mark it learned.'),
-      h('ol.check-list', null, checks.map((check, index) => h('li', null,
-        h('span', null, `${check.q} `),
-        action(`answer ${GLYPH.right}`, () => fillInput(chat, `Check ${index + 1}: ${check.q}\nMy answer: `), 'blue')))));
-  }
+  ui.body.replaceChildren(...pageIntro(page), ...renderBlocks(page.blocks, { glossary: result.glossary || [], check: pageCheck }));
+  showClosing();
   showChat(chat, key, result.chat?.messages || []);
   const progress = result.progress;
   C.pendingScroll = progress && progress.page === S.pageN && progress.scroll > 0 ? Number(progress.scroll) : 0;

@@ -3,9 +3,9 @@
 // fresh run every time with the learner's current state, since a resumed session keeps the
 // system prompt it started with. An Advisor chat's id is made by the window when it starts
 // one, so its streaming key never changes mid-reply.
-import { stateOf } from './catalogue.mjs';
+import { setPassed, stateOf } from './catalogue.mjs';
 import { runClaude } from './claude.mjs';
-import { courseSummary, listCourses, readCatalogue, readCourse, readPage } from './library.mjs';
+import { courseSummary, listCourses, readCatalogue, readCourse, readPage, updateCatalogue } from './library.mjs';
 import { advisorSystem, pageChatSystem } from './prompts.mjs';
 import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { readJson, safeId, withLock, writeJson, writeText } from './store.mjs';
@@ -178,6 +178,10 @@ export function sendChat(lib, target, text, { onDelta, onTool, onRateLimit } = {
       }
     }
     const markers = readMarkers(reply.text, allowed);
+    // Claude judged a closing question right: that opens the lock. Marking is still the person's.
+    if (!target.advisor && markers.offers.length) {
+      updateCatalogue(lib, catalogue => setPassed(catalogue, markers.offers, { course: target.courseId, page: target.n }));
+    }
     const saved = readChat(lib, target);
     if (!target.advisor && reply.sessionId) saved.sessionId = reply.sessionId;
     const message = { role: 'assistant', text: markers.text, offers: markers.offers, builds: markers.builds, at: new Date().toISOString() };

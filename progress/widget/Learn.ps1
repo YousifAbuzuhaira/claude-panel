@@ -25,7 +25,7 @@ param(
   # and exit, from a library and config of the snapshot's own (WSL paths).
   [switch]$SelfTest,
   [string]$SnapshotPath = '',
-  [ValidateSet('library', 'course', 'overlap', 'learned', 'ask', 'settings')][string]$SnapshotView = 'library',
+  [ValidateSet('library', 'course', 'overlap', 'review', 'learned', 'ask', 'settings')][string]$SnapshotView = 'library',
   [string]$SnapshotLibrary = '',
   [string]$SnapshotConfig = '',
   [string]$SnapshotCourse = '',
@@ -116,6 +116,7 @@ $GLYPH_FULL = [string][char]0x25CF
 $GLYPH_HALF = [string][char]0x25D0
 $GLYPH_PLAY = [string][char]0x25B6
 $GLYPH_LINK = [string][char]0x2197
+$GLYPH_SECTION = [string][char]0x00A7
 $GLYPH_LEFT = [string][char]0x2190
 $GLYPH_RIGHT = [string][char]0x2192
 $GLYPH_SKIP = [string][char]0x2298
@@ -133,14 +134,15 @@ $MIN_TEXT = 0.8
 $MAX_TEXT = 1.5
 $BASE_TEXT = 14.5
 $TOAST_MS = 5000
-$VIEW_NAMES = @('library', 'course', 'learned', 'ask', 'settings')
-$VIEW_LABELS = @{ library = 'Library'; course = 'Course'; learned = 'Learned'; ask = 'Ask'; settings = 'Settings' }
+$VIEW_NAMES = @('library', 'course', 'review', 'learned', 'ask', 'settings')
+$VIEW_LABELS = @{ library = 'Library'; course = 'Course'; review = 'Review'; learned = 'Learned'; ask = 'Ask'; settings = 'Settings' }
 $VIEW_TIPS = @{
   library = 'Your courses, and new ones  (Ctrl+1)'
   course = 'The course you are reading  (Ctrl+2)'
-  learned = 'Everything you have learned  (Ctrl+3)'
-  ask = 'Ask what to learn next  (Ctrl+4)'
-  settings = 'Settings and colours  (Ctrl+5)'
+  review = 'Quick checks coming back  (Ctrl+3)'
+  learned = 'Everything you have learned  (Ctrl+4)'
+  ask = 'Ask what to learn next  (Ctrl+5)'
+  settings = 'Settings and colours  (Ctrl+6)'
 }
 # How wide the views can get on a wide window (they start on the header's left edge; the rest is
 # left over on the right), and the lesson page's reading width in ems of the text size, so a line
@@ -505,7 +507,7 @@ foreach ($name in $VIEW_NAMES) {
 # (A view stretched to a MaxWidth would be centred, and its left edge would move with the width.)
 function Update-ViewColumns([double]$Width) {
   $spare = [Math]::Max(0.0, $Width - [double]$CONTENT_MAX)
-  foreach ($name in @('library', 'learned', 'ask', 'settings')) {
+  foreach ($name in @('library', 'review', 'learned', 'ask', 'settings')) {
     $viewHost = $script:viewHosts[$name]
     if ($viewHost.Padding.Right -ne $spare) { $viewHost.Padding = New-Gap 0 0 $spare 0 }
   }
@@ -705,6 +707,7 @@ function Show-View([string]$Name) {
   switch ($Name) {
     'library' { Update-Library }
     'course' { Open-Course $script:courseId $null }
+    'review' { Update-Review }
     'learned' { Update-Learned }
     'ask' { Open-Advisor }
     'settings' { Update-Settings }
@@ -758,7 +761,7 @@ $win.Add_PreviewKeyDown({
     $ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
     if ($ctrl -and ($e.Key -eq 'OemPlus' -or $e.Key -eq 'Add')) { Set-TextScale ($script:textScale + 0.1); $e.Handled = $true; return }
     if ($ctrl -and ($e.Key -eq 'OemMinus' -or $e.Key -eq 'Subtract')) { Set-TextScale ($script:textScale - 0.1); $e.Handled = $true; return }
-    if ($ctrl -and $e.Key -ge 'D1' -and $e.Key -le 'D5') {
+    if ($ctrl -and $e.Key -ge 'D1' -and $e.Key -le 'D6') {
       $index = [int]$e.Key - [int][System.Windows.Input.Key]::D1
       Show-View $VIEW_NAMES[$index]
       $e.Handled = $true
@@ -1028,6 +1031,7 @@ function Start-SnapshotView {
       Show-View 'library'
       if ($SnapshotSource) { Set-NewSource $SnapshotSource }
     }
+    'review' { Show-View 'review' }
     'learned' { Show-View 'learned' }
     'ask' { Show-View 'ask' }
     'settings' { Show-View 'settings' }

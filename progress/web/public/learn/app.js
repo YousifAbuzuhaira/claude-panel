@@ -8,6 +8,7 @@ import { GLYPH, MAX_SCALE, MIN_SCALE, S, VIEW_NAMES, banner, call, loadPrefs, na
 import { buildCourseView, courseStatus, openCourse, openOverlap, overlapOpen, saveProgress, showOverlap, stepPage } from './course.js';
 import { buildLearnedView, leaveLearnedModes, refreshLearned, resetLearned } from './learned.js';
 import { buildLibraryView, libraryDue, refreshLibrary, resetLibraryModes } from './library.js';
+import { buildReviewView, refreshReview } from './review.js';
 import { appearanceChanged, buildSettingsView, leaveSettings, refreshSettings, settingsStatus } from './settings.js';
 
 const hosts = Object.fromEntries(VIEW_NAMES.map(name => [name, document.getElementById(`view-${name}`)]));
@@ -29,6 +30,7 @@ function showView(name) {
   switch (name) {
     case 'library': refreshLibrary(); break;
     case 'course': openCourse(S.courseId, null); break;
+    case 'review': refreshReview(); break;
     case 'learned': refreshLearned(); break;
     case 'ask': openAdvisor(); break;
     case 'settings': refreshSettings(); break;
@@ -60,7 +62,11 @@ function setTextScale(scale) {
   savePrefs();
 }
 
-Object.assign(nav, { showView, openCourse: openCourseView, refreshLibrary, refreshLearned, setTextScale });
+function showReviewCount() {
+  tabs.review.textContent = S.reviewDue ? `Review ${S.reviewDue}` : 'Review';
+}
+
+Object.assign(nav, { showView, openCourse: openCourseView, refreshLibrary, refreshLearned, showReviewCount, setTextScale });
 
 function updateBuildChip() {
   const build = S.status?.build;
@@ -156,7 +162,7 @@ document.addEventListener('keydown', event => {
     setTextScale(S.textScale - 0.1);
     return;
   }
-  if (event.ctrlKey && !event.metaKey && /^[1-5]$/.test(event.key)) {
+  if (event.ctrlKey && !event.metaKey && /^[1-6]$/.test(event.key)) {
     event.preventDefault();
     showView(VIEW_NAMES[Number(event.key) - 1]);
     return;
@@ -177,6 +183,7 @@ document.addEventListener('keydown', event => {
 await loadPrefs();
 document.documentElement.style.setProperty('--scale', String(S.textScale));
 buildLibraryView(hosts.library);
+buildReviewView(hosts.review);
 buildCourseView(hosts.course);
 buildLearnedView(hosts.learned);
 buildAskView(hosts.ask);

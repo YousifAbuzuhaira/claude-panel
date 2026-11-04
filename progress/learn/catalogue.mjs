@@ -92,6 +92,7 @@ export function addConcept(catalogue, { name, definition = '', parent = null, al
     alsoUsedIn: [],
     seen: [],
     learned: null,
+    passed: null,
     by,
     createdAt: at,
   };
@@ -161,6 +162,14 @@ export function markSeen(catalogue, ids, where) {
     if (!concept) continue;
     concept.seen = concept.seen || [];
     if (!concept.seen.some(entry => entry.course === where.course && entry.page === where.page)) concept.seen.push(where);
+  }
+}
+
+/** Claude judged a closing question right: these may now be marked Learned, by the person. */
+export function setPassed(catalogue, ids, where) {
+  for (const id of ids) {
+    const concept = conceptById(catalogue, id);
+    if (concept) concept.passed = { course: where?.course || null, page: where?.page || null, at: where?.at || new Date().toISOString() };
   }
 }
 
@@ -235,6 +244,7 @@ export function mergeConcepts(catalogue, keepId, dropId) {
   for (const alias of drop.aliases || []) addAlias(keep, alias);
   for (const entry of drop.seen || []) markSeen(catalogue, [keepId], entry);
   if (drop.learned && (!keep.learned || drop.learned.at < keep.learned.at)) keep.learned = drop.learned;
+  if (drop.passed && !keep.passed) keep.passed = drop.passed;
   if (!keep.definition) keep.definition = drop.definition;
   for (const other of [drop.category, ...(drop.alsoUsedIn || [])]) {
     if (other && other !== keep.category && !(keep.alsoUsedIn || []).includes(other)) keep.alsoUsedIn = [...(keep.alsoUsedIn || []), other];

@@ -100,6 +100,7 @@ export function libraryPaths(root) {
   return {
     root,
     catalogue: join(root, 'catalogue.json'),
+    review: join(root, 'review.json'),
     courses: join(root, 'courses'),
     course: id => join(course(id), 'course.json'),
     source: (id, sourceId) => join(course(id), 'sources', `${safeId(sourceId)}.json`),

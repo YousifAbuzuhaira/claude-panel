@@ -8,9 +8,14 @@ import {
   addConcept, compactCatalogue, conceptById, ensureCategory, findConcept, markSeen, mergeConcepts, moveConcept,
   removeCategory, removeConcept, renameCategory, renameConcept, setDefinition, setLearned, setParent, stateOf,
 } from './catalogue.mjs';
+import {
+  DAILY_CAP, answerInReview, answerOnPage, dropCourse, dueToday, emptyReview, flagItem, isFlagged, itemKey, nextDue, parseKey, recallDays, swapConcept,
+} from './review.mjs';
+import { markTerms, pageGlossary } from './terms.mjs';
+import { shuffled } from './teach.mjs';
 import { askStructured, describeTool } from './claude.mjs';
 import { chatKey, clearChat, listAdvisorChats, readChat, removeAdvisorChat, sendChat } from './chat.mjs';
-import { cancelJob, createJob, createPageJob, dropJobFiles, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon } from './build.mjs';
+import { cancelJob, createJob, createPageJob, createRefreshJob, dropJobFiles, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon } from './build.mjs';
 import { ensureYtDlp, installedYtDlp } from './deps.mjs';
 import {
   courseSummary, listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCourse, readPage, readStatus, recordUsage,
@@ -20,12 +25,12 @@ import { markdownToBlocks } from './markdown.mjs';
 import { overlapReport } from './overlap.mjs';
 import { MATCH_SCHEMA, TIDY_SCHEMA, matchPrompt, tidyPrompt } from './prompts.mjs';
 import { STATUS_FILE, readSettings, writeSettings } from './settings.mjs';
-import { safeId } from './store.mjs';
+import { readJson, safeId, withLock, writeJson } from './store.mjs';
 import { listClaudeChats } from './chats.mjs';
 
 export const encodeLine = value => JSON.stringify(value).replace(/[\u007f-￿]/g, ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`) + '\n';
 
-const conceptView = (catalogue, concept) => ({
+const conceptView = (catalogue, concept, recall = {}) => ({
   id: concept.id,
   name: concept.name,
   definition: concept.definition,
@@ -35,6 +40,8 @@ const conceptView = (catalogue, concept) => ({
   aliases: concept.aliases || [],
   state: stateOf(concept),
   learned: concept.learned,
+  passed: Boolean(concept.passed),
+  recall: recall[concept.id] || 0,
   seen: concept.seen || [],
 });
 
@@ -52,6 +59,16 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
   const send = value => write(encodeLine(value));
   const chats = new Map();
   let lib = openLibrary();
+
+  const readReview = () => readJson(lib.paths.review) || emptyReview();
+  /** `fn` changes the review state in place; what it returns is passed back. */
+  const updateReview = fn => withLock(lib.root, () => {
+    const state = readReview();
+    const result = fn(state);
+    writeJson(lib.paths.review, state);
+    return result;
+  });
+  const pageCheck = (courseId, n, id) => (readPage(lib, courseId, n)?.blocks || []).find(block => block.t === 'check' && block.id === id) || null;
 
   const target = request => (request.advisor ? { advisor: true, chatId: safeId(request.chatId) } : { courseId: String(request.courseId), n: Number(request.n) });
 
@@ -72,7 +89,7 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
         .sort((a, b) => String(b.lastOpened || b.createdAt).localeCompare(String(a.lastOpened || a.createdAt)));
       const day = Date.now() - 86_400_000;
       const jobs = listJobs(lib).filter(job => !job.dismissed && (job.state !== 'done' || Date.parse(job.updatedAt) > day)).slice(0, 10);
-      return { categories: catalogue.categories, courses, jobs, status: readStatus() };
+      return { categories: catalogue.categories, courses, jobs, status: readStatus(), reviewDue: dueToday(readReview()).due.length };
     },
 
     'category.add': ({ name }) => updateCatalogue(lib, catalogue => ensureCategory(catalogue, name)),
@@ -86,10 +103,11 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       const course = readCourse(lib, id);
       if (!course) throw new Error('no such course');
       const catalogue = readCatalogue(lib);
+      const recall = recallDays(readReview());
       const concepts = {};
       for (const page of course.pages) for (const conceptId of page.concepts || []) {
         const concept = conceptById(catalogue, conceptId);
-        if (concept) concepts[conceptId] = conceptView(catalogue, concept);
+        if (concept) concepts[conceptId] = conceptView(catalogue, concept, recall);
       }
       return { course, concepts, categories: catalogue.categories };
     },
@@ -101,6 +119,7 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
     }),
     'course.remove': ({ id }) => {
       const removedConcepts = removeCourse(lib, id);
+      updateReview(state => dropCourse(state, id));
       if (readStatus().course?.id === id) writeStatus({ course: null });
       return { removedConcepts };
     },
@@ -124,8 +143,58 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       const position = saved.pages.findIndex(item => item.n === Number(n)) + 1;
       writeStatus({ course: { id: course.id, title: course.title, page: position, total: course.pages.length, next: next ? next.title : '' } });
       const catalogue = readCatalogue(lib);
-      const concepts = page.concepts.map(id => conceptById(catalogue, id)).filter(Boolean).map(concept => conceptView(catalogue, concept));
-      return { page, concepts, chat: chatView(readChat(lib, { courseId, n: Number(n) })), progress: saved.progress, total: course.pages.length, skipped: saved.skipped || [] };
+      const review = readReview();
+      const recall = recallDays(review);
+      const concepts = page.concepts.map(id => conceptById(catalogue, id)).filter(Boolean).map(concept => conceptView(catalogue, concept, recall));
+      // Words are marked as the page is read, so they follow what you have learned since.
+      const shown = page.blocks.filter(block => block.t !== 'check' || !isFlagged(review, itemKey(courseId, Number(n), block.id)));
+      const { blocks, used } = markTerms(shown, pageGlossary(page, saved.terms, catalogue.concepts));
+      const answers = {};
+      for (const block of shown) {
+        const item = block.t === 'check' ? review.items[itemKey(courseId, Number(n), block.id)] : null;
+        if (item && item.choice !== null) answers[block.id] = item.choice;
+      }
+      return { page: { ...page, blocks }, glossary: used, answers, concepts, chat: chatView(readChat(lib, { courseId, n: Number(n) })), progress: saved.progress, total: course.pages.length, skipped: saved.skipped || [] };
+    },
+
+    'check.answer': ({ courseId, n, id, choice }) => {
+      const block = pageCheck(courseId, Number(n), id);
+      if (!block) throw new Error('that question is gone');
+      const right = block.options[Number(choice)]?.right === 1;
+      updateReview(state => answerOnPage(state, itemKey(courseId, Number(n), id), { right, choice: Number(choice), concepts: block.concepts, guess: Boolean(block.guess) }));
+      return { right };
+    },
+    'check.flag': ({ key }) => {
+      const { courseId, n, id } = parseKey(key);
+      const block = pageCheck(courseId, n, id);
+      return updateReview(state => Boolean(flagItem(state, key, { concepts: block?.concepts, guess: Boolean(block?.guess) })));
+    },
+
+    'review.list': () => {
+      const state = readReview();
+      const { due, waiting, done } = dueToday(state);
+      const items = [];
+      const gone = [];
+      for (const key of due) {
+        const { courseId, n, id } = parseKey(key);
+        const block = pageCheck(courseId, n, id);
+        if (!block) {
+          // Its page was rewritten or removed.
+          gone.push(key);
+          continue;
+        }
+        items.push({ key, courseId, n, courseTitle: readCourse(lib, courseId)?.title || '', pageTitle: readPage(lib, courseId, n)?.title || '', check: { ...block, options: shuffled(block.options.map((option, i) => ({ ...option, i }))) } });
+      }
+      if (gone.length) updateReview(latest => { for (const key of gone) delete latest.items[key]; });
+      return { items, waiting, done, cap: DAILY_CAP, next: nextDue(state) };
+    },
+    'review.answer': ({ key, choice }) => {
+      const { courseId, n, id } = parseKey(key);
+      const block = pageCheck(courseId, n, id);
+      if (!block) throw new Error('that question is gone');
+      const right = block.options[Number(choice)]?.right === 1;
+      updateReview(state => answerInReview(state, key, right));
+      return { right };
     },
     'progress.set': ({ courseId, n, scroll }) => updateCourse(lib, courseId, course => {
       course.progress = { page: Number(n), scroll: Math.max(0, Math.min(1, Number(scroll) || 0)), at: new Date().toISOString() };
@@ -137,6 +206,11 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       const course = removePage(lib, courseId, Number(n));
       if (readStatus().course?.id === courseId) writeStatus({ course: { ...readStatus().course, total: course.pages.length } });
       return course;
+    },
+    'course.refresh': ({ id }) => {
+      const job = createRefreshJob(lib, id);
+      startDaemon(lib, job.id);
+      return job;
     },
     'page.rewrite': ({ courseId, n, note }) => {
       const job = createPageJob(lib, { courseId, kind: 'page-rewrite', n, note });
@@ -158,9 +232,15 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
     'concept.list': () => {
       const catalogue = readCatalogue(lib);
       const titles = Object.fromEntries(listCourses(lib).map(course => [course.id, course.title]));
-      return { categories: catalogue.categories, concepts: catalogue.concepts.map(concept => conceptView(catalogue, concept)), courseTitles: titles };
+      const recall = recallDays(readReview());
+      return { categories: catalogue.categories, concepts: catalogue.concepts.map(concept => conceptView(catalogue, concept, recall)), courseTitles: titles };
     },
-    'concept.learn': ({ id, learned, courseId, n }) => updateCatalogue(lib, catalogue => conceptView(catalogue, setLearned(catalogue, id, Boolean(learned), courseId ? { course: courseId, page: Number(n) || null } : null))),
+    'concept.learn': ({ id, learned, courseId, n }) => updateCatalogue(lib, catalogue => {
+      // The lock: only passing a closing question opens it. Unmarking is always allowed.
+      const concept = conceptById(catalogue, id);
+      if (learned && concept && !concept.learned && !concept.passed) throw new Error(`Answer the closing question for ${concept.name} first. If you already know it, add it in the Learned tab.`);
+      return conceptView(catalogue, setLearned(catalogue, id, Boolean(learned), courseId ? { course: courseId, page: Number(n) || null } : null));
+    }),
     'concept.add': async ({ text, category }) => {
       const name = String(text || '').trim();
       if (!name) throw new Error('type a concept');
@@ -194,6 +274,7 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
     'concept.merge': ({ keep, drop }) => {
       const kept = updateCatalogue(lib, catalogue => conceptView(catalogue, mergeConcepts(catalogue, keep, drop)));
       rewriteConceptIds(lib, drop, keep);
+      updateReview(state => swapConcept(state, drop, keep));
       return kept;
     },
     'concept.tidy': async () => {

@@ -229,6 +229,8 @@ export async function refreshLibrary() {
   if (!result) return;
   S.library = result;
   if (result.status) S.status = result.status;
+  S.reviewDue = result.reviewDue || 0;
+  nav.showReviewCount();
   showLibrary();
 }
 

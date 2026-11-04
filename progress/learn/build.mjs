@@ -4,8 +4,8 @@
 // sleep or a reboot carries on from where it got to. Builds run as their own detached
 // process (`learn.mjs build run <id>`), so closing the window doesn't stop them.
 import { spawn } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname, resolve } from 'node:path';
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { applyProposals, compactCatalogue, ensureCategory, findCategory, stateOf } from './catalogue.mjs';
@@ -85,6 +85,37 @@ export function createPageJob(lib, { courseId, kind, n = null, note = null, topi
     return saveJob(lib, { ...base, topic: `New page: ${clean}`, pageTopic: clean, after: after === null ? null : Number(after), step: 'plan-page', message: `Planning a page on ${clean}` });
   }
   throw new Error(`unknown page job ${kind}`);
+}
+
+/**
+ * An older course made the new way: the same sources planned and written again, as a new course.
+ * The old one stays until you remove it, so a build that stops half way costs you nothing.
+ */
+export function createRefreshJob(lib, courseId) {
+  const course = readCourse(lib, courseId);
+  if (!course) throw new Error('no such course');
+  if (activeJobFor(lib, courseId)) throw new Error('this course is being written: wait for that to finish');
+  const usable = course.sources.filter(source => source.usable);
+  if (!usable.length) throw new Error('this course has no readable sources to plan from');
+  const id = newCourseId(course.title);
+  const stamp = now().replace(/[-:T]/g, '').slice(0, 12);
+  const jobId = `j${stamp}${randomBytes(2).toString('hex')}`;
+  const from = join(dirname(lib.paths.course(courseId)), 'sources');
+  const to = join(dirname(lib.paths.course(id)), 'sources');
+  cpSync(from, to, { recursive: true });
+  // A document's stored copy moved with it.
+  for (const source of usable) {
+    const data = readJson(lib.paths.source(id, source.id));
+    if (data?.file && data.file.startsWith(`${from}/`)) writeJson(lib.paths.source(id, source.id), { ...data, file: data.file.replace(from, to) });
+  }
+  const category = readCatalogue(lib).categories.find(item => item.id === course.category)?.name || 'General';
+  withLock(lib.root, () => writeJson(lib.paths.course(id), {
+    ...course, id, status: 'building', createdAt: now(), jobId, pages: [], read: [], skipped: [], progress: null, overlap: null, terms: [], notCovered: [], updatedFrom: courseId,
+  }));
+  return saveJob(lib, {
+    v: 1, id: jobId, kind: 'course-refresh', topic: course.topic || course.title, link: null, category, mode: 'page', courseId: id, courseTitle: course.title, summary: null,
+    asks: course.asks || [], step: 'outline', state: 'running', message: `Planning ${course.title} again`, done: 0, total: 0, candidates: null, picks: null, pid: null, error: null, startedAt: now(),
+  });
 }
 
 /** A document given to a build: its path here (a Windows path is turned into WSL's), and its name. */

@@ -101,7 +101,7 @@ function messageSection(message) {
 function emptyNote(key) {
   return h('p.chat-empty', null, isAdvisorKey(key)
     ? 'Ask what to learn next. Claude looks at what you have learned and read, and at the work folders you set in Settings, to suggest what would help you most.'
-    : 'Ask about anything on this page, or answer one of its check questions. Claude knows the page and its sources.');
+    : 'Ask about anything on this page, or answer one of its closing questions. Claude knows the page and its sources.');
 }
 
 function redraw(key) {
@@ -269,7 +269,7 @@ export function chatEvent(event) {
       }
       updatePanelsFor(event.key);
       toEndFor(event.key);
-      for (const listener of doneListeners) listener(event.key);
+      for (const listener of doneListeners) listener(event.key, event.message);
       break;
     }
     case 'chat.error':

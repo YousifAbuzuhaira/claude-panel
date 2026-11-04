@@ -407,6 +407,9 @@ function Add-Inlines($Target, $Inlines, [double]$Size) {
     $text = [string]$item.s
     # A no-break space: the play mark never ends a line without its time.
     if ($item.time) { $text = $GLYPH_PLAY + $GLYPH_NBSP + $text }
+    # A source's heading and Claude's additions are small marks; the words are in the tooltip.
+    if ($item.sec) { $text = $GLYPH_SECTION }
+    if ($item.added) { $text = '+' }
     $run = New-Object System.Windows.Documents.Run($text)
     if ($item.code) {
       $run.FontFamily = $monoFont
@@ -416,37 +419,215 @@ function Add-Inlines($Target, $Inlines, [double]$Size) {
     }
     if ($item.b) { $run.FontWeight = 'SemiBold' }
     if ($item.i) { $run.FontStyle = 'Italic' }
+    if ($item.added -or $item.sec) {
+      $run.FontSize = $Size * 0.8
+      $run.BaselineAlignment = 'Superscript'
+    }
     if ($item.added) {
       $run.Foreground = $gold
-      $run.FontSize = $Size * 0.85
+      $run.FontWeight = 'Bold'
     }
     if ($item.link) {
       $link = New-Object System.Windows.Documents.Hyperlink($run)
       try { $link.NavigateUri = New-Object System.Uri([string]$item.link) } catch {}
-      $link.Foreground = $blue
+      $link.Foreground = if ($item.sec) { $faint } else { $blue }
       $link.TextDecorations = $null
       $link.Cursor = [System.Windows.Input.Cursors]::Hand
-      $link.ToolTip = if ($item.time) { 'Watch from here' } else { [string]$item.link }
+      $link.ToolTip = if ($item.time) { 'Watch from here' } elseif ($item.sec) { "From the source: $([string]$item.s)" } else { [string]$item.link }
       Add-LinkHover $link
       $link.Add_Click({ param($sender, $e) try { if ($sender.NavigateUri) { Open-Link $sender.NavigateUri.AbsoluteUri } } catch { Write-Failure $_ } })
       [void]$Target.Add($link)
     } else {
       if ($item.added) { $run.ToolTip = 'Claude added this: it is not in the sources' }
-      # A part of a source with no link (a document's, a chat brief's): named in italics, as the web does.
+      # A part of a source with no link (a document's, a chat brief's): the same small mark.
       if ($item.sec) {
-        $run.FontStyle = 'Italic'
-        $run.Foreground = $dim
-        $run.ToolTip = 'A part of the source'
+        $run.Foreground = $faint
+        $run.ToolTip = "From the source: $([string]$item.s)"
+      }
+      if ($null -ne $item.term -and $script:pageGlossary) {
+        $entry = @($script:pageGlossary)[[int]$item.term]
+        if ($entry) { Set-TermLook $run $entry }
       }
       [void]$Target.Add($run)
     }
   }
 }
 
+# A word with its definition: a dotted line under it, and the definition on hover.
+function Set-TermLook($Run, $Entry) {
+  $pen = New-Object System.Windows.Media.Pen($faint, 1)
+  $pen.DashStyle = [System.Windows.Media.DashStyles]::Dot
+  $line2 = New-Object System.Windows.TextDecoration
+  $line2.Location = 'Underline'
+  $line2.Pen = $pen
+  $decorations = New-Object System.Windows.TextDecorationCollection
+  $decorations.Add($line2)
+  $Run.TextDecorations = $decorations
+  $Run.Cursor = [System.Windows.Input.Cursors]::Help
+  $tip = New-Object System.Windows.Controls.StackPanel
+  $tip.MaxWidth = 340
+  $name = New-Object System.Windows.Controls.TextBlock
+  $name.Text = [string]$Entry.term
+  $name.FontWeight = 'SemiBold'
+  $name.TextWrapping = 'Wrap'
+  $definition = New-Object System.Windows.Controls.TextBlock
+  $definition.Text = [string]$Entry.def
+  $definition.TextWrapping = 'Wrap'
+  [void]$tip.Children.Add($name)
+  [void]$tip.Children.Add($definition)
+  $Run.ToolTip = $tip
+  [System.Windows.Controls.ToolTipService]::SetInitialShowDelay($Run, 150)
+  [System.Windows.Controls.ToolTipService]::SetShowDuration($Run, 30000)
+}
+
 # A link in a document is underlined while the pointer is on it.
 function Add-LinkHover($Link) {
   $Link.Add_MouseEnter({ param($sender, $e) $sender.TextDecorations = [System.Windows.TextDecorations]::Underline })
   $Link.Add_MouseLeave({ param($sender, $e) $sender.TextDecorations = $null })
+}
+
+# A box in the text: an example, a key idea, a warning or an analogy, with blocks inside.
+function New-Callout($Block, [double]$Size) {
+  $kinds = @{
+    example = @{ label = 'Example'; color = $blue; fill = $surface2 }
+    key = @{ label = 'Key idea'; color = $accent; fill = $surface2 }
+    warning = @{ label = 'Watch out'; color = $gold; fill = $T.goldSoft }
+    analogy = @{ label = 'Analogy'; color = $green; fill = $surface2 }
+  }
+  $kind = $kinds[[string]$Block.kind]
+  if (-not $kind) { $kind = $kinds.key }
+  $section = New-Object System.Windows.Documents.Section
+  $section.Background = $kind.fill
+  $section.BorderBrush = $kind.color
+  $section.BorderThickness = New-Object System.Windows.Thickness(3, 0, 0, 0)
+  $section.Padding = New-Gap 12 8 10 2
+  $section.Margin = New-Gap 0 0 0 ($Size * 0.85)
+  $head = New-Paragraph ($Size * 0.9) $ink
+  $head.Margin = New-Gap 0 0 0 ($Size * 0.35)
+  $label = New-Object System.Windows.Documents.Run($kind.label)
+  $label.Foreground = $kind.color
+  $label.FontWeight = 'Bold'
+  [void]$head.Inlines.Add($label)
+  if (@($Block.title).Count -gt 0) {
+    [void]$head.Inlines.Add((New-Object System.Windows.Documents.Run('   ')))
+    $title = New-Object System.Windows.Documents.Span
+    $title.FontWeight = 'SemiBold'
+    Add-Inlines $title.Inlines $Block.title ($Size * 0.9)
+    [void]$head.Inlines.Add($title)
+  }
+  [void]$section.Blocks.Add($head)
+  Add-Blocks $section.Blocks $Block.blocks $Size
+  return $section
+}
+
+# A quick check: pick an option, then see why each one is right or wrong. $Hooks holds onAnswer
+# (given the check's state and the choice) and onWrong (given the state), or leaves them out.
+function New-QuickCheck($Block, [double]$Size, $Chosen, [string]$Label, $Hooks) {
+  $box = New-Object System.Windows.Controls.Border
+  $box.BorderBrush = $line
+  $box.BorderThickness = New-Object System.Windows.Thickness(1)
+  $box.CornerRadius = New-Object System.Windows.CornerRadius($UI_RADIUS)
+  $box.Padding = New-Gap 12 10 12 10
+  $stack = New-Object System.Windows.Controls.StackPanel
+  $box.Child = $stack
+  $title = if ($Label) { $Label } elseif ($Block.guess) { 'Guess first' } else { 'Quick check' }
+  $kicker = New-Text $title $accent
+  $kicker.FontSize = $Size * 0.82
+  $kicker.FontWeight = 'SemiBold'
+  $kicker.Margin = New-Gap 0 0 0 3
+  [void]$stack.Children.Add($kicker)
+  $question = New-Object System.Windows.Controls.TextBlock
+  $question.TextWrapping = 'Wrap'
+  $question.FontSize = $Size * 0.95
+  $question.FontWeight = 'SemiBold'
+  $question.Foreground = $ink
+  $question.Margin = New-Gap 0 0 0 8
+  Add-Inlines $question.Inlines $Block.q ($Size * 0.95)
+  [void]$stack.Children.Add($question)
+  $options = New-Object System.Windows.Controls.StackPanel
+  [void]$stack.Children.Add($options)
+  $state = @{ block = $Block; size = $Size; options = $options; stack = $stack; hooks = $Hooks; box = $box; holder = $null; result = $null }
+  Show-QuickOptions $state $Chosen
+  return $state
+}
+
+function Show-QuickOptions($State, $Chosen) {
+  $answered = $null -ne $Chosen
+  $size = [double]$State.size * 0.93
+  $State.options.Children.Clear()
+  $index = -1
+  $hit = $null
+  foreach ($option in @($State.block.options)) {
+    $index++
+    $place = if ($null -ne $option.i) { [int]$option.i } else { $index }
+    $isRight = [bool]$option.right
+    $picked = $answered -and $place -eq [int]$Chosen
+    if ($picked) { $hit = $option }
+    $fill = if (-not $answered) { $hover } elseif ($isRight) { $greenSoft } elseif ($picked) { $redSoft } else { $noFill }
+    $glyph = if ($answered -and $isRight) { $GLYPH_CHECK } elseif ($picked) { $GLYPH_CLOSE } else { $GLYPH_EMPTY }
+    $tint = if ($answered -and $isRight) { $green } elseif ($picked) { $red } else { $faint }
+    $row = New-Object System.Windows.Controls.DockPanel
+    $mark = New-Text $glyph $tint
+    $mark.Width = 18
+    $mark.FontSize = $size
+    [System.Windows.Controls.DockPanel]::SetDock($mark, 'Left')
+    [void]$row.Children.Add($mark)
+    $words = New-Object System.Windows.Controls.StackPanel
+    $text = New-Object System.Windows.Controls.TextBlock
+    $text.TextWrapping = 'Wrap'
+    $text.FontSize = $size
+    $text.Foreground = if ($answered -and -not $isRight -and -not $picked) { $dim } else { $ink }
+    Add-Inlines $text.Inlines $option.inlines $size
+    [void]$words.Children.Add($text)
+    if ($answered) {
+      $why = New-Object System.Windows.Controls.TextBlock
+      $why.TextWrapping = 'Wrap'
+      $why.FontSize = $size * 0.92
+      $why.Foreground = $dim
+      $why.Margin = New-Gap 0 2 0 0
+      Add-Inlines $why.Inlines $option.why ($size * 0.92)
+      [void]$words.Children.Add($why)
+    }
+    [void]$row.Children.Add($words)
+    $button = New-Object System.Windows.Controls.Button
+    $button.Template = $script:docButtonTemplate
+    $button.Background = $fill
+    $button.Padding = New-Gap 8 6 8 6
+    $button.Margin = New-Gap 0 0 0 4
+    $button.Focusable = $false
+    $button.HorizontalAlignment = 'Stretch'
+    $button.Content = $row
+    if (-not $answered) {
+      $button.Cursor = [System.Windows.Input.Cursors]::Hand
+      $button.Tag = @{ state = $State; place = $place }
+      $button.Add_Click({
+        param($sender, $e)
+        $e.Handled = $true
+        try {
+          $picked2 = $sender.Tag
+          Show-QuickOptions $picked2.state $picked2.place
+          if ($picked2.state.hooks.onAnswer) { & $picked2.state.hooks.onAnswer $picked2.state $picked2.place }
+        } catch { Write-Failure $_ }
+      })
+    }
+    [void]$State.options.Children.Add($button)
+  }
+  if (-not $answered) { return }
+  if ($State.result) { [void]$State.stack.Children.Remove($State.result) }
+  $line2 = if ($State.block.guess) { 'Now see what the page says.' } elseif ($hit -and $hit.right) { 'Right.' } else { 'Not quite: the reason is under each option.' }
+  $State.result = New-Text $line2 $dim
+  $State.result.FontSize = $size
+  $State.result.TextWrapping = 'Wrap'
+  $State.result.Margin = New-Gap 0 3 0 0
+  [void]$State.stack.Children.Add($State.result)
+  if ($State.hooks.onWrong -and -not $State.flag) {
+    $State.flag = New-DocButton 'This question is wrong' $noFill $faint { param($Data, $Sender) & $Data.hooks.onWrong $Data } $State
+    $State.flag.Padding = New-Gap 0 4 0 0
+    $State.flag.Content.FontSize = 12
+    $State.flag.Content.FontWeight = 'Normal'
+    $State.flag.ToolTip = 'Removes it from this page and from Review'
+    [void]$State.stack.Children.Add($State.flag)
+  }
 }
 
 function New-Paragraph([double]$Size, $Foreground) {
@@ -815,6 +996,8 @@ function Add-Blocks($Target, $Blocks, [double]$Size) {
         $paragraph.FontWeight = 'SemiBold'
         $paragraph.Margin = New-Gap 0 ($Size * 0.9) 0 ($Size * 0.4)
         Add-Inlines $paragraph.Inlines $block.inlines ($Size * $scale)
+        # Questions name the section they come from; Show-PageSection finds it by this.
+        $paragraph.Tag = (@($block.inlines | ForEach-Object { [string]$_.s }) -join '').Trim().ToLowerInvariant()
         [void]$Target.Add($paragraph)
       }
       'p' {
@@ -831,6 +1014,8 @@ function Add-Blocks($Target, $Blocks, [double]$Size) {
         [void]$Target.Add($paragraph)
       }
       'code' { [void]$Target.Add((New-CodeBlock ([string]$block.text) ([string]$block.lang) $Size)) }
+      'callout' { [void]$Target.Add((New-Callout $block $Size)) }
+      'check' { if ($script:drawCheck) { [void]$Target.Add((& $script:drawCheck $block $Size)) } }
       'diagram' {
         try { [void]$Target.Add((New-DiagramBlock $block $Size)) }
         catch {

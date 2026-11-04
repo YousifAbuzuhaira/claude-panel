@@ -1,5 +1,5 @@
 # Learn's views, dot-sourced by Learn.ps1: Library, Course (contents, page, chat),
-# Learned, Ask and Settings. Every change goes to the helper (Invoke-Helper) and the
+# Review, Learned, Ask and Settings. Every change goes to the helper (Invoke-Helper) and the
 # view redraws from its answer. Script state is always $script:, never a bare name.
 
 $script:ui = @{}
@@ -244,6 +244,7 @@ function Get-CategoryName([string]$Id) {
 function Build-Views {
   Build-LibraryView
   Build-CourseView
+  Build-ReviewView
   Build-LearnedView
   Build-AskView
   Build-SettingsView
@@ -642,6 +643,7 @@ function Update-Library {
   Invoke-Helper 'library.get' $null {
     param($Result, $Context)
     $script:library = $Result
+    Set-ReviewCount ([int]$Result.reviewDue)
     Show-Library
   }
 }
@@ -1066,6 +1068,22 @@ function Build-CourseView {
   $courseGap.Visibility = 'Collapsed'
   $courseGap.ToolTip = 'You asked for this, but no source or page covers it. Add a page in Contents.'
   [void]$contentsTop.Children.Add($courseGap)
+  $updateLink = New-Pressable 'Update this course' $null $blue
+  $updateLink.FontSize = 11.5
+  $updateLink.Margin = New-Gap 0 5 0 0
+  $updateLink.HorizontalAlignment = 'Left'
+  $updateLink.Visibility = 'Collapsed'
+  $updateLink.ToolTip = 'Builds a new copy from the same sources, with terms, quick checks and closing questions. This one stays until you remove it.'
+  Set-Click $updateLink {
+    param($Data, $Sender)
+    if (-not (Test-ArmedHere $Sender "update:$($script:courseId)" 'Build it again? click to confirm')) { return }
+    Invoke-Helper 'course.refresh' @{ id = $script:courseId } {
+      param($Result, $Context)
+      Show-Toast 'Building the new version. This one stays until you remove it.'
+      Show-View 'library'
+    }
+  }
+  [void]$contentsTop.Children.Add($updateLink)
   [void]$contentsTop.Children.Add($hideLink)
   [System.Windows.Controls.DockPanel]::SetDock($contentsTop, 'Top')
   $pageList = New-Object System.Windows.Controls.StackPanel
@@ -1200,7 +1218,7 @@ function Build-CourseView {
   $sendButton.Margin = New-Gap 6 0 0 0
   $sendButton.ToolTip = 'Send  (Enter; Shift+Enter for a new line)'
   [System.Windows.Controls.DockPanel]::SetDock($sendButton, 'Right')
-  $chatInput = New-InputBox 'Ask, or answer a check question' $true
+  $chatInput = New-InputBox 'Ask, or answer a closing question' $true
   $chatInput.box.Height = 64
   [void]$chatBottom.Children.Add($sendButton)
   [void]$chatBottom.Children.Add($chatInput.holder)
@@ -1223,6 +1241,7 @@ function Build-CourseView {
   $script:ui.courseTitle = $courseTitle
   $script:ui.courseMeta = $courseMeta
   $script:ui.courseGap = $courseGap
+  $script:ui.updateLink = $updateLink
   $script:ui.overlapLink = $overlapLink
   $script:ui.pageList = $pageList
   $script:ui.pageCount = $pageCount
@@ -1352,6 +1371,8 @@ function Show-Contents {
   $gaps = @($course.notCovered | Where-Object { $_ })
   $script:ui.courseGap.Text = if ($gaps.Count -gt 0) { "Not covered: $($gaps -join ', ')" } else { '' }
   $script:ui.courseGap.Visibility = if ($gaps.Count -gt 0) { 'Visible' } else { 'Collapsed' }
+  # A course from before terms and quick checks.
+  $script:ui.updateLink.Visibility = if ($null -eq $course.terms -and [string]$course.status -eq 'ready') { 'Visible' } else { 'Collapsed' }
   $list = $script:ui.pageList
   $list.Children.Clear()
   $position = 0
@@ -1639,41 +1660,12 @@ function Show-Page {
 
   foreach ($concept in @($result.concepts)) { [void]$script:ui.conceptChips.Children.Add((New-ConceptChip $concept)) }
 
+  $script:pageGlossary = @($result.glossary)
+  $script:drawCheck = { param($Block, $Size) New-PageCheck $Block $Size }
+  Add-PageIntro $doc $page $size
   Add-Blocks $doc.Blocks $page.blocks $size
-  $checks = @($page.checks)
-  if ($checks.Count -gt 0) {
-    $rule = New-Object System.Windows.Controls.Border
-    $rule.Height = 1
-    $rule.Background = $line
-    $ruleHolder = New-Object System.Windows.Documents.BlockUIContainer($rule)
-    $ruleHolder.Margin = New-Gap 0 8 0 12
-    [void]$doc.Blocks.Add($ruleHolder)
-    $heading = New-Paragraph ($size * 1.2) $accent
-    $heading.FontWeight = 'SemiBold'
-    [void]$heading.Inlines.Add((New-Object System.Windows.Documents.Run('Check yourself')))
-    [void]$doc.Blocks.Add($heading)
-    $hint = New-Paragraph ($size * 0.9) $dim
-    [void]$hint.Inlines.Add((New-Object System.Windows.Documents.Run('Answer in the chat. Claude says what you got right and what you missed; when you have it, you can mark it learned.')))
-    [void]$doc.Blocks.Add($hint)
-    for ($k = 0; $k -lt $checks.Count; $k++) {
-      $question = New-Paragraph $size $ink
-      [void]$question.Inlines.Add((New-Object System.Windows.Documents.Run(("{0}. {1}  " -f ($k + 1), [string]$checks[$k].q))))
-      $answer = New-Object System.Windows.Documents.Hyperlink((New-Object System.Windows.Documents.Run("answer $GLYPH_RIGHT")))
-      $answer.Foreground = $blue
-      $answer.TextDecorations = $null
-      $answer.Cursor = [System.Windows.Input.Cursors]::Hand
-      $answer.Tag = "Check $($k + 1): $([string]$checks[$k].q)`nMy answer: "
-      $answer.Add_Click({
-        param($sender, $e)
-        try {
-          Set-InputText $script:ui.chatInput ([string]$sender.Tag)
-          [void]$script:ui.chatInput.Focus()
-        } catch { Write-Failure $_ }
-      })
-      [void]$question.Inlines.Add($answer)
-      [void]$doc.Blocks.Add($question)
-    }
-  }
+  $script:drawCheck = $null
+  Add-ClosingQuestions $doc $page $size
   $script:ui.reader.Document = $doc
   $progress = $result.progress
   if ($progress -and [int]$progress.page -eq $script:pageNumber -and [double]$progress.scroll -gt 0) {
@@ -1682,6 +1674,150 @@ function Show-Page {
     $script:pendingScroll = @{ ratio = 0.0; tries = 0 }
   }
   Show-Chat (Get-PageKey) @($result.chat.messages) $script:ui.chatReader
+}
+
+# What the page sets out to do, and the words to have before you start.
+function Add-PageIntro($Doc, $Page, [double]$Size) {
+  $outcomes = @($Page.outcomes | Where-Object { $_ })
+  $terms = @($Page.terms | Where-Object { $_.key } | Select-Object -First 6)
+  if ($outcomes.Count -eq 0 -and $terms.Count -eq 0) { return }
+  $section = New-Object System.Windows.Documents.Section
+  $section.BorderBrush = $line
+  $section.BorderThickness = New-Object System.Windows.Thickness(1)
+  $section.Padding = New-Gap 14 10 14 4
+  $section.Margin = New-Gap 0 0 0 ($Size * 1.1)
+  $add = {
+    param($Title)
+    $head = New-Paragraph ($Size * 0.84) $accent
+    $head.FontWeight = 'SemiBold'
+    $head.Margin = New-Gap 0 0 0 3
+    [void]$head.Inlines.Add((New-Object System.Windows.Documents.Run($Title)))
+    [void]$section.Blocks.Add($head)
+  }
+  if ($outcomes.Count -gt 0) {
+    & $add "You'll be able to"
+    foreach ($outcome in $outcomes) {
+      $item = New-Paragraph ($Size * 0.95) $ink
+      $item.Margin = New-Gap 0 0 0 ($Size * 0.25)
+      [void]$item.Inlines.Add((New-Object System.Windows.Documents.Run("$GLYPH_DOT $([string]$outcome)")))
+      [void]$section.Blocks.Add($item)
+    }
+  }
+  if ($terms.Count -gt 0) {
+    & $add 'Key terms'
+    foreach ($term in $terms) {
+      $item = New-Paragraph ($Size * 0.95) $dim
+      $item.Margin = New-Gap 0 0 0 ($Size * 0.3)
+      $name = New-Object System.Windows.Documents.Run([string]$term.term)
+      $name.FontWeight = 'SemiBold'
+      $name.Foreground = $ink
+      [void]$item.Inlines.Add($name)
+      [void]$item.Inlines.Add((New-Object System.Windows.Documents.Run("  $([string]$term.def)")))
+      [void]$section.Blocks.Add($item)
+    }
+  }
+  [void]$Doc.Blocks.Add($section)
+}
+
+# The real test of a page: answered in the chat, and what opens a concept's lock.
+function Add-ClosingQuestions($Doc, $Page, [double]$Size) {
+  $checks = @($Page.checks | Where-Object { $_ })
+  if ($checks.Count -eq 0) { return }
+  $rule = New-Object System.Windows.Controls.Border
+  $rule.Height = 1
+  $rule.Background = $line
+  $ruleHolder = New-Object System.Windows.Documents.BlockUIContainer($rule)
+  $ruleHolder.Margin = New-Gap 0 8 0 12
+  [void]$Doc.Blocks.Add($ruleHolder)
+  $heading = New-Paragraph ($Size * 1.2) $accent
+  $heading.FontWeight = 'SemiBold'
+  $heading.Tag = 'closing questions'
+  [void]$heading.Inlines.Add((New-Object System.Windows.Documents.Run('Closing questions')))
+  [void]$Doc.Blocks.Add($heading)
+  $hint = New-Paragraph ($Size * 0.9) $dim
+  [void]$hint.Inlines.Add((New-Object System.Windows.Documents.Run('Answer in the chat, in your own words. Passing one lets you mark its concepts as learned.')))
+  [void]$Doc.Blocks.Add($hint)
+  $concepts = @{}
+  foreach ($concept in @($script:pageData.concepts)) { if ($concept) { $concepts[[string]$concept.id] = $concept } }
+  for ($k = 0; $k -lt $checks.Count; $k++) {
+    $check = $checks[$k]
+    $question = New-Paragraph $Size $ink
+    $question.Margin = New-Gap 0 0 0 2
+    [void]$question.Inlines.Add((New-Object System.Windows.Documents.Run(("{0}. {1}  " -f ($k + 1), [string]$check.q))))
+    $answer = New-Object System.Windows.Documents.Hyperlink((New-Object System.Windows.Documents.Run("answer $GLYPH_RIGHT")))
+    $answer.Foreground = $blue
+    $answer.TextDecorations = $null
+    $answer.Cursor = [System.Windows.Input.Cursors]::Hand
+    $answer.Tag = "Question $($k + 1): $([string]$check.q)`nMy answer: "
+    $answer.Add_Click({
+      param($sender, $e)
+      try {
+        Set-InputText $script:ui.chatInput ([string]$sender.Tag)
+        [void]$script:ui.chatInput.Focus()
+      } catch { Write-Failure $_ }
+    })
+    [void]$question.Inlines.Add($answer)
+    [void]$Doc.Blocks.Add($question)
+    $unlocks = @(@($check.concepts) | ForEach-Object { $concepts[[string]$_] } | Where-Object { $_ })
+    $done = $unlocks.Count -gt 0 -and @($unlocks | Where-Object { $_.passed -or [string]$_.state -eq 'learned' }).Count -eq $unlocks.Count
+    $meta = New-Paragraph ($Size * 0.86) $(if ($done) { $green } else { $dim })
+    $meta.Margin = New-Gap 0 0 0 ($Size * 0.7)
+    if ($check.section) {
+      $from = New-Object System.Windows.Documents.Hyperlink((New-Object System.Windows.Documents.Run("From: $([string]$check.section)")))
+      $from.Foreground = $faint
+      $from.TextDecorations = $null
+      $from.Cursor = [System.Windows.Input.Cursors]::Hand
+      $from.Tag = [string]$check.section
+      Add-LinkHover $from
+      $from.Add_Click({ param($sender, $e) try { Show-PageSection ([string]$sender.Tag) } catch { Write-Failure $_ } })
+      [void]$meta.Inlines.Add($from)
+      [void]$meta.Inlines.Add((New-Object System.Windows.Documents.Run('    ')))
+    }
+    if ($unlocks.Count -gt 0) {
+      $names = @($unlocks | ForEach-Object { [string]$_.name }) -join ', '
+      [void]$meta.Inlines.Add((New-Object System.Windows.Documents.Run($(if ($done) { "$GLYPH_CHECK Passed: $names" } else { "Unlocks: $names" }))))
+    }
+    [void]$Doc.Blocks.Add($meta)
+  }
+}
+
+# Scrolls the page to a heading, or to the closing questions.
+function Show-PageSection([string]$Name) {
+  $wanted = $Name.Trim().ToLowerInvariant()
+  foreach ($block in $script:ui.reader.Document.Blocks) {
+    if ([string]$block.Tag -eq $wanted) {
+      $block.BringIntoView()
+      return
+    }
+  }
+}
+
+function New-PageCheck($Block, [double]$Size) {
+  $chosen = $null
+  $answers = $script:pageData.answers
+  if ($answers) {
+    $saved = $answers.PSObject.Properties[[string]$Block.id]
+    if ($saved) { $chosen = [int]$saved.Value }
+  }
+  $hooks = @{
+    onAnswer = {
+      param($State, $Choice)
+      if ($script:pageData.answers) { $script:pageData.answers | Add-Member -Force -NotePropertyName ([string]$State.block.id) -NotePropertyValue $Choice }
+      Invoke-Helper 'check.answer' @{ courseId = $script:courseId; n = $script:pageNumber; id = [string]$State.block.id; choice = $Choice }
+    }
+    onWrong = {
+      param($State)
+      Invoke-Helper 'check.flag' @{ key = "$($script:courseId)/$($script:pageNumber)/$([string]$State.block.id)" } {
+        param($Result, $Context)
+        [void]$Context.holder.SiblingBlocks.Remove($Context.holder)
+        Show-Toast 'Removed from this page and from Review'
+      } $State
+    }
+  }
+  $state = New-QuickCheck $Block $Size $chosen '' $hooks
+  $state.holder = New-Object System.Windows.Documents.BlockUIContainer($state.box)
+  $state.holder.Margin = New-Gap 0 ($Size * 0.3) 0 ($Size * 1.1)
+  return $state.holder
 }
 
 function Format-Clock($Seconds) {
@@ -1698,14 +1834,21 @@ function New-ConceptChip($Concept) {
   $state = [string]$Concept.state
   $fill = if ($state -eq 'learned') { $greenSoft } else { $null }
   $chip = New-Chip ("{0} {1}" -f (Get-ConceptGlyph $state), [string]$Concept.name) $null ($state -eq 'learned') $fill
-  if ($state -eq 'seen') { Set-ChipBorder $chip $blueSoft }
+  $open = $state -eq 'learned' -or [bool]$Concept.passed
+  if (-not $open) { Set-ChipBorder $chip $faint; $chip.Child.Foreground = $dim }
+  elseif ($state -ne 'learned') { Set-ChipBorder $chip $green }
   $tip = [string]$Concept.definition
-  $tip += if ($state -eq 'learned') { "`n`nLearned. Click to unmark." } else { "`n`nClick to mark it learned." }
+  $tip += if ($state -eq 'learned') { "`n`nLearned. Click to unmark." } elseif ($open) { "`n`nYou passed its closing question. Click to mark it learned." } else { "`n`nLocked: answer its closing question to mark it learned." }
+  if ($Concept.recall) { $tip += "`nRecalled after $([int]$Concept.recall) $(if ([int]$Concept.recall -eq 1) { 'day' } else { 'days' })." }
   $chip.ToolTip = $tip.Trim()
   Set-Click $chip {
     param($Data, $Sender)
-    $makeLearned = [string]$Data.state -ne 'learned'
-    Set-ConceptLearned ([string]$Data.id) $makeLearned
+    if ([string]$Data.state -eq 'learned' -or $Data.passed) {
+      Set-ConceptLearned ([string]$Data.id) ([string]$Data.state -ne 'learned')
+    } else {
+      Show-PageSection 'closing questions'
+      Show-Toast 'Answer its closing question to unlock it'
+    }
   } $Concept
   return $chip
 }
@@ -2062,7 +2205,7 @@ function Show-Chat([string]$Key, $Messages, $Viewer) {
     if ($state.messages.Count -eq 0) {
       $empty = New-Paragraph ((Get-TextSize) * 0.9) $dim
       $empty.Padding = New-Gap $MESSAGE_INSET 0 $MESSAGE_INSET 0
-      $emptyText = if (Test-AdvisorKey $Key) { 'Ask what to learn next. Claude looks at what you have learned and read, and at the work folders you set in Settings, to suggest what would help you most.' } else { 'Ask about anything on this page, or answer one of its check questions. Claude knows the page and its sources.' }
+      $emptyText = if (Test-AdvisorKey $Key) { 'Ask what to learn next. Claude looks at what you have learned and read, and at the work folders you set in Settings, to suggest what would help you most.' } else { 'Ask about anything on this page, or answer one of its closing questions. Claude knows the page and its sources.' }
       [void]$empty.Inlines.Add((New-Object System.Windows.Documents.Run($emptyText)))
       [void]$state.doc.Blocks.Add($empty)
     }
@@ -2164,6 +2307,13 @@ function Complete-Chat([string]$Key, $Message) {
   Update-SendButton $Key
   Move-ChatToEnd $Key
   if (Test-AdvisorKey $Key) { Update-AdvisorList }
+  # Claude passed a closing question: its concepts open.
+  $offers = @($Message.offers | Where-Object { $_ })
+  if ($offers.Count -gt 0 -and $script:pageData -and $Key -eq (Get-PageKey)) {
+    foreach ($concept in @($script:pageData.concepts)) { if ($offers -contains [string]$concept.id) { $concept.passed = $true } }
+    $script:ui.conceptChips.Children.Clear()
+    foreach ($concept in @($script:pageData.concepts)) { [void]$script:ui.conceptChips.Children.Add((New-ConceptChip $concept)) }
+  }
 }
 
 function Stop-ChatWithError([string]$Key, [string]$Text) {
@@ -2193,6 +2343,112 @@ function Reset-Chat([string]$Key, $Fields, $Viewer) {
 # ===================================================================================================
 # Learned
 # ===================================================================================================
+
+# --- Review: quick checks coming back, one at a time ---------------------------------------------
+
+$script:review = @{ items = @(); at = 0; right = 0; seen = 0; next = $null }
+
+function Build-ReviewView {
+  $root = New-Object System.Windows.Controls.StackPanel
+  Set-ViewColumn $root
+  $root.MaxWidth = 720
+  $root.HorizontalAlignment = 'Left'
+  $head = New-Object System.Windows.Controls.StackPanel
+  $head.Orientation = 'Horizontal'
+  $title = New-Text 'Review' $ink
+  $title.FontSize = 20
+  $title.FontWeight = 'SemiBold'
+  $count = New-Text '' $dim
+  $count.Margin = New-Gap 12 0 0 0
+  $count.VerticalAlignment = 'Bottom'
+  [void]$head.Children.Add($title)
+  [void]$head.Children.Add($count)
+  [void]$root.Children.Add($head)
+  $body = New-Object System.Windows.Controls.StackPanel
+  $body.Margin = New-Gap 0 14 0 0
+  [void]$root.Children.Add($body)
+  $scroll = New-Object System.Windows.Controls.ScrollViewer
+  $scroll.VerticalScrollBarVisibility = 'Auto'
+  $scroll.Content = $root
+  $script:ui.reviewCount = $count
+  $script:ui.reviewBody = $body
+  $script:viewHosts['review'].Child = $scroll
+}
+
+function Update-Review {
+  Invoke-Helper 'review.list' $null {
+    param($Result, $Context)
+    $script:review = @{ items = @($Result.items | Where-Object { $_ }); at = 0; right = 0; seen = 0; next = $Result.next }
+    Show-Review
+  }
+}
+
+function Set-ReviewCount([int]$Count) {
+  $tabTexts['review'].Text = if ($Count -gt 0) { "Review $Count" } else { 'Review' }
+}
+
+function Add-ReviewLine([string]$Text, $Color) {
+  $line2 = New-Text $Text $Color
+  $line2.TextWrapping = 'Wrap'
+  $line2.Margin = New-Gap 0 0 0 8
+  [void]$script:ui.reviewBody.Children.Add($line2)
+}
+
+function Show-Review {
+  $body = $script:ui.reviewBody
+  $body.Children.Clear()
+  $review = $script:review
+  $items = @($review.items)
+  Set-ReviewCount ([Math]::Max(0, $items.Count - $review.at))
+  if ($review.at -ge $items.Count) {
+    $script:ui.reviewCount.Text = ''
+    if ($review.seen -gt 0) { Add-ReviewLine "$($review.right) of $($review.seen) right today." $ink }
+    Add-ReviewLine $(if ($review.seen -gt 0) { 'That is enough for today.' } else { 'Nothing to review right now.' }) $dim
+    $next = if ($review.next) { [DateTimeOffset]::FromUnixTimeMilliseconds([long]$review.next).LocalDateTime.ToString('d MMM') } else { '' }
+    Add-ReviewLine $(if ($next) { "The next one comes back on $next." } else { 'Quick checks you answer on a page come back here after a day, then after longer and longer gaps.' }) $dim
+    return
+  }
+  $item = $items[$review.at]
+  $script:ui.reviewCount.Text = "$($review.at + 1) of $($items.Count)"
+  $foot = New-Object System.Windows.Controls.DockPanel
+  $foot.Margin = New-Gap 0 10 0 0
+  $go = New-Button $(if ($review.at + 1 -lt $items.Count) { 'Next' } else { 'Finish' }) 'primary'
+  $go.Visibility = 'Hidden'
+  [System.Windows.Controls.DockPanel]::SetDock($go, 'Right')
+  Set-Click $go { param($Data, $Sender) $script:review.at++; Show-Review }
+  [void]$foot.Children.Add($go)
+  $from = New-Pressable ("{0} {1} {2}" -f (Get-Short ([string]$item.courseTitle) 40), $GLYPH_DOT, (Get-Short ([string]$item.pageTitle) 50)) $null $faint
+  $from.FontSize = 12
+  $from.VerticalAlignment = 'Center'
+  $from.ToolTip = 'Open this page'
+  Set-Click $from { param($Data, $Sender) Open-Course ([string]$Data.courseId) ([int]$Data.n) } $item
+  [void]$foot.Children.Add($from)
+  $hooks = @{
+    go = $go
+    item = $item
+    onAnswer = {
+      param($State, $Choice)
+      Invoke-Helper 'review.answer' @{ key = [string]$State.hooks.item.key; choice = $Choice } {
+        param($Result, $Context)
+        $script:review.seen++
+        if ($Result.right) { $script:review.right++ }
+        $Context.Visibility = 'Visible'
+      } $State.hooks.go
+    }
+    onWrong = {
+      param($State)
+      Invoke-Helper 'check.flag' @{ key = [string]$State.hooks.item.key } {
+        param($Result, $Context)
+        Show-Toast 'Removed from this page and from Review'
+        $script:review.at++
+        Show-Review
+      }
+    }
+  }
+  $state = New-QuickCheck $item.check (Get-TextSize) $null 'Remember this?' $hooks
+  [void]$body.Children.Add($state.box)
+  [void]$body.Children.Add($foot)
+}
 
 function Build-LearnedView {
   $root = New-Object System.Windows.Controls.DockPanel
@@ -2412,9 +2668,10 @@ function Get-CourseTitle([string]$Id) {
 function Get-ConceptWhere($Concept, $Now = $null) {
   if ($Concept.learned) {
     $text = 'learned ' + (Format-ShortDate ([string]$Concept.learned.at) $Now)
+    $recall = if ($Concept.recall) { "  $GLYPH_DOT  recalled after $([int]$Concept.recall) $(if ([int]$Concept.recall -eq 1) { 'day' } else { 'days' })" } else { '' }
     $tip = 'Learned ' + (Format-Date ([string]$Concept.learned.at))
     if ($Concept.learned.course) { $tip += ' in ' + (Get-CourseTitle ([string]$Concept.learned.course)) }
-    return @{ text = $text.Trim(); tip = $tip.Trim() }
+    return @{ text = $text.Trim() + $recall; tip = $tip.Trim() }
   }
   $courses = @(@($Concept.seen) | Where-Object { $_ } | ForEach-Object { [string]$_.course } | Select-Object -Unique)
   if ($courses.Count -gt 0) {
@@ -2442,7 +2699,7 @@ function New-ConceptRow($Concept, [int]$Depth) {
   $glyph.Width = $PAGE_GLYPH_WIDTH
   $glyph.VerticalAlignment = 'Top'
   $glyph.Cursor = [System.Windows.Input.Cursors]::Hand
-  $glyph.ToolTip = if ($state -eq 'learned') { 'Learned: click to unmark' } else { 'Click to mark learned' }
+  $glyph.ToolTip = if ($state -eq 'learned') { 'Learned: click to unmark' } elseif ($Concept.passed) { 'You passed its closing question: click to mark learned' } else { 'Locked: answer its closing question in its course, or type it above if you already know it' }
   Set-Click $glyph {
     param($Data, $Sender)
     Invoke-Helper 'concept.learn' @{ id = $Data.id; learned = ($Data.state -ne 'learned') } { param($Result, $Context) Update-Learned }
