@@ -16,7 +16,7 @@
 param(
   [int64]$OwnerHwnd = 0,
   [string]$SessionId = 'default',
-  # Where to open: -View library|course|learned|ask|settings and -CourseId <id>. A Learn that is
+  # Where to open: -View library|course|review|learned|ask|settings and -CourseId <id>. A Learn that is
   # already open gets the same through %LOCALAPPDATA%\ClaudePhases\learn-open.json.
   # (Named apart from $script:view and $script:courseId: PowerShell names ignore case.)
   [Alias('View')][string]$StartView = '',

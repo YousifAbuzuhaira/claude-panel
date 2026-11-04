@@ -11,6 +11,12 @@ const ADDED = /\(added\)/g;
 
 const tokens = text => String(text ?? '').toLowerCase().replace(CITE, ' ').replace(ADDED, ' ').match(/[\p{L}\p{N}]+/gu) || [];
 
+/** A term is a word or short phrase, not a mark on the page, a command or a value from an example. */
+export const isTerm = text => {
+  const word = String(text ?? '').trim();
+  return word.length > 0 && word.length <= 40 && tokens(word).length > 0 && !/["\\%{}]/.test(word) && !/^(0x|\d)/.test(word);
+};
+
 /** A question's id, the same as long as its words are. */
 export const checkId = text => `q${createHash('sha1').update(tokens(text).join(' ')).digest('hex').slice(0, 10)}`;
 
@@ -117,7 +123,7 @@ export function tidyAids(raw, { markdown, conceptIds, headings }, random = Math.
     const term = String(item?.term || '').trim().slice(0, 80);
     const def = String(item?.def || '').trim().slice(0, 500);
     const key = term.toLowerCase();
-    if (!term || !def || seen.has(key)) continue;
+    if (!isTerm(term) || !def || seen.has(key)) continue;
     seen.add(key);
     terms.push({ term, aka: (item.aka || []).map(other => String(other).trim()).filter(Boolean).slice(0, 5), def, key: Boolean(item.key) });
   }
@@ -147,7 +153,7 @@ export function applyReader(aids, reading, conceptIds) {
     quick,
     closing,
     failed,
-    unknown: [...new Set((reading?.unknown || []).map(word => String(word).trim()).filter(word => word && !named.has(word.toLowerCase())))],
+    unknown: [...new Set((reading?.unknown || []).map(word => String(word).trim()).filter(word => isTerm(word) && !named.has(word.toLowerCase())))],
     missing: (reading?.missing || []).map(String).filter(Boolean),
     untested: conceptIds.filter(id => !tested.has(id)),
   };

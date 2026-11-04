@@ -23,7 +23,7 @@ const DONE_SHOWN_MS = 60 * 60_000
 export const learnStatusPath = (home: string) => `${home}/.config/claude-learn/status.json`
 
 /** The views `/learn <view>` opens: Learn's own tabs. */
-export const LEARN_VIEWS = ['library', 'course', 'learned', 'ask', 'settings'] as const
+export const LEARN_VIEWS = ['library', 'course', 'review', 'learned', 'ask', 'settings'] as const
 
 export type LearnView = (typeof LEARN_VIEWS)[number]
 

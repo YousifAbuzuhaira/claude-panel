@@ -19,7 +19,7 @@ import { askNumbers, cleanAsks, picksCovering, uncovered } from '../coverage.mjs
 import { markdownToBlocks, parseInline } from '../markdown.mjs';
 import { DAILY_CAP, LADDER, answerInReview, answerOnPage, dropCourse, dueToday, emptyReview, flagItem, itemKey, nextDue, parseKey, recallDays, swapConcept } from '../review.mjs';
 import { markTerms, pageGlossary } from '../terms.mjs';
-import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, tidyAids } from '../teach.mjs';
+import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, tidyAids } from '../teach.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { normalizeSettings, toWslPath } from '../settings.mjs';
 import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
@@ -150,6 +150,10 @@ describe('questions must come from the page', () => {
     assert.equal(quoteState('So a repeated phrase feeds itself', map), 'added');
     assert.equal(quoteState('a phrase the page never says at all', map), 'missing');
     assert.equal(quoteState('too short', map), 'missing');
+  });
+  test('a term is a word or a phrase, not a mark, a command or a value', () => {
+    for (const word of ['logit', 'top-p', 'SFT', '+noall +answer', 'Host header']) assert.equal(isTerm(word), true, word);
+    for (const word of ['[1:05]', '(added)', '[sec: Intro]', '-s -o /dev/null -w "%{http_code}\\n"', '0x7ffd5c3a1e40 + 24', '', 'x'.repeat(41)]) assert.equal(isTerm(word), false, word);
   });
   test('a much longer right option gives itself away', () => {
     assert.equal(givesItselfAway([{ text: 'a'.repeat(90), right: true }, { text: 'b'.repeat(30) }, { text: 'c'.repeat(32) }]), true);

@@ -4,7 +4,7 @@ A Claude Code plugin that puts a small floating panel over your terminal, showin
 
 - **Phases.** For any job with 3 or more steps, Claude lists the phases and ticks them off (done / now / next).
 - **Tests.** A live count and bar while a test suite runs. The last few runs stay listed, with a total.
-- **Learn.** Type a topic and your own Claude finds free videos and docs, reads them, and writes you a course: full pages, each with a Claude chat beside it. It tracks what you've learned across courses and tells you what's new.
+- **Learn.** Type a topic and your own Claude finds free videos and docs, reads them, and writes you a course: full pages, each with a Claude chat beside it. Terms explain themselves on hover, every idea gets a worked example, quick checks sit between sections, and a Review tab brings questions back over days. A concept counts as learned once you've explained it to Claude. It tracks what you've learned across courses and tells you what's new.
 - **Games (▦).** Sudoku, 2048, a Monkeytype-style typing test, and chess puzzles explained move by move, for while Claude is busy.
 - **Releases.** What changed in each version, who made it, in a line or two.
 - **Your look.** Pick a colour scheme (Ember, Graphite, Moss, Serika, Paper, or your own three colours) and how see-through each window's background is. Every window follows at once.

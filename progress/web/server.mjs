@@ -86,7 +86,7 @@ const STOCKFISH = {
 
 export const WINDOW_TITLES = { learn: 'Learn', games: 'Games', 'games/sudoku': 'Sudoku', 'games/2048': '2048', 'games/typing': 'Typing', 'games/chess': 'Chess' };
 // Learn's views a link can ask for (web/public/learn/app.js reads ?view= and ?course=).
-const LEARN_VIEWS = new Set(['library', 'course', 'learned', 'ask', 'settings', 'overlap']);
+const LEARN_VIEWS = new Set(['library', 'course', 'review', 'learned', 'ask', 'settings', 'overlap']);
 const COURSE_ID = /^[\w.-]{1,160}$/;
 
 /**
@@ -152,7 +152,7 @@ export function cleanAppearance(value, saved = null) {
   return { v: 1, preset: preset || base.preset, colors, opacity };
 }
 
-const PREF_VIEWS = new Set(['library', 'course', 'learned', 'ask', 'settings']);
+const PREF_VIEWS = new Set(['library', 'course', 'review', 'learned', 'ask', 'settings']);
 
 /** What POST /api/prefs keeps: the fields web Learn remembers, each checked; the rest dropped. */
 export function cleanPrefs(value) {

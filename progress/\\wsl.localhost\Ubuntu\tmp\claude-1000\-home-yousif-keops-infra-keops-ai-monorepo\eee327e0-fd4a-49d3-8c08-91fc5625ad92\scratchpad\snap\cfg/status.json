@@ -1,0 +1,13 @@
+{
+ "v": 1,
+ "build": null,
+ "course": {
+  "id": "https-demo",
+  "title": "How HTTPS reaches a web app",
+  "page": 1,
+  "total": 3,
+  "next": "Routing"
+ },
+ "usage": null,
+ "at": "2026-11-04T07:50:32.475Z"
+}

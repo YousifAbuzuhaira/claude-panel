@@ -53,7 +53,7 @@ views_of() {
       echo "course|PhasesWidget.ps1 -StateFile $(fixture panel-course.json) -SnapshotTab learn -SnapshotLook open"
       ;;
     learn)
-      for view in library learned ask settings; do
+      for view in library review learned ask settings; do
         echo "$view|Learn.ps1 -SnapshotView $view -SnapshotLibrary $library -SnapshotConfig $config"
       done
       if [ -n "$course" ]; then
