@@ -32,6 +32,7 @@ import { readJson, withLock, writeJson } from './store.mjs';
 const LEARN_MJS = fileURLToPath(new URL('./learn.mjs', import.meta.url));
 const PAGES_AT_ONCE = 3;
 const MAX_PAGES = 40;
+const MAX_TOPIC = 3000; // room for Build all as one course: it joins several whole topics
 const OUTLINE_BUDGET = 240_000; // characters of source material for the outline
 const PAGE_BUDGET = 150_000; // characters of the main source for one page
 const SUPPORT_BUDGET = 50_000;
@@ -135,7 +136,7 @@ function checkDocument(file, name) {
 }
 
 export function createJob(lib, { topic, category, mode = 'auto', link = null, file = null, name = null, chat = null, focus = null }) {
-  const cleanTopic = String(topic || '').trim().slice(0, 600);
+  const cleanTopic = String(topic || '').trim().slice(0, MAX_TOPIC);
   const cleanLink = link ? String(link).trim() : null;
   const document = file ? checkDocument(file, name) : null;
   const chatId = chat ? String(chat).trim() : null;

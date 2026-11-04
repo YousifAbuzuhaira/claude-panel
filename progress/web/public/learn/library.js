@@ -218,7 +218,7 @@ export async function startBuild(topic, category, mode) {
   else fields.topic = topic;
   const job = await act('build.start', fields);
   if (!job) return null;
-  toast(`Building: ${job.topic}. It carries on if you close this page.`);
+  toast(`Building: ${short(job.topic, 80)}. It carries on if you close this page.`);
   refreshLibrary();
   return job;
 }
@@ -287,7 +287,7 @@ function jobRow(job) {
     default: break;
   }
   const row = h(`div.job.state-${job.state}`, null,
-    h('div.job-top', null, h('span.job-title', null, job.topic || job.courseTitle || 'A build'), actions),
+    h('div.job-top', null, h('span.job-title', { title: job.topic || '' }, short(job.courseTitle || job.topic || 'A build', 120)), actions),
     h('div.job-message', null, job.message || job.state));
   if (job.state === 'failed' && job.error) row.append(h('div.job-error', null, short(job.error, 300)));
   if (job.total > 0 && job.state !== 'done') {

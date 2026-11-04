@@ -633,7 +633,7 @@ function Start-Build([string]$Topic, [string]$Category, [string]$Mode) {
   if ($Topic -match '^https?://') { $fields.link = $Topic } else { $fields.topic = $Topic }
   Invoke-Helper 'build.start' $fields {
     param($Result, $Context)
-    Show-Toast "Building: $($Result.topic). It carries on if you close this window."
+    Show-Toast "Building: $(Get-Short ([string]$Result.topic) 80). It carries on if you close this window."
     Update-Library
   }
 }
@@ -692,7 +692,7 @@ function New-JobRow($Job) {
   $actions.Orientation = 'Horizontal'
   [System.Windows.Controls.DockPanel]::SetDock($actions, 'Right')
   $actions.VerticalAlignment = 'Center'
-  $title = New-Text ([string]$Job.topic) $ink
+  $title = New-Text (Get-Short ([string]$(if ($Job.courseTitle) { $Job.courseTitle } else { $Job.topic })) 120) $ink
   $title.FontSize = 14
   $title.FontWeight = 'SemiBold'
   $title.TextTrimming = 'CharacterEllipsis'

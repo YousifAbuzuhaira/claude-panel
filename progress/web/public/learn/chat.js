@@ -2,7 +2,7 @@
 // of Ask's).
 // Each key keeps its own DOM, so a reply keeps streaming while you look elsewhere.
 import { renderBlocks } from './blocks.js';
-import { GLYPH, S, act, call, h, nav, toast } from './core.js';
+import { GLYPH, S, act, call, h, nav, short, toast } from './core.js';
 import { startBuild } from './library.js';
 
 const chats = new Map(); // key -> { el, messages, busy, live, tool, liveSection }
@@ -75,10 +75,10 @@ function buildButton(build, label = null) {
       button.disabled = false;
       if (!job) return;
       started = true;
-      button.textContent = `Building: ${build.topic}. Follow it in the Library.`;
+      button.textContent = `Building: ${short(build.topic, 70)}. Follow it in the Library.`;
       button.classList.add('done');
     },
-  }, label || `Build: ${build.topic}  (${build.category || 'General'})`);
+  }, label || `Build: ${short(build.topic, 90)}  (${build.category || 'General'})`);
   return button;
 }
 

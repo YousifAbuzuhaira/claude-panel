@@ -106,7 +106,7 @@ export function readMarkers(text, allowedIds = null) {
     return '';
   });
   clean = clean.replace(BUILD, (whole, topic, category) => {
-    builds.push({ topic: topic.trim().slice(0, 200), category: (category || '').trim().slice(0, 60) || 'General' });
+    builds.push({ topic: topic.trim().slice(0, 600), category: (category || '').trim().slice(0, 60) || 'General' });
     return '';
   });
   return { text: clean.replace(/\n{3,}/g, '\n\n').trim(), offers, builds };

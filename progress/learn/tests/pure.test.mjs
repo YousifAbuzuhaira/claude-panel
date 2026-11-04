@@ -25,6 +25,10 @@ import { normalizeSettings, toWslPath } from '../settings.mjs';
 import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
 
 describe('what you asked for', () => {
+  test('a build line keeps a long request whole', () => {
+    const topic = 'everything you named '.repeat(20).trim();
+    assert.equal(readMarkers(`[[build: ${topic} | AI]]`).builds[0].topic, topic);
+  });
   test('asks are trimmed, once each, and only real numbers count', () => {
     assert.deepEqual(cleanAsks(['  Docker ', 'docker', '', null, 'Kubernetes\n basics']), ['Docker', 'Kubernetes basics']);
     assert.deepEqual(cleanAsks('nope'), []);
