@@ -626,6 +626,7 @@ function Receive-HelperEvent($Message) {
         param($Result, $Context)
         $script:settings = $Result.settings
         $script:status = $Result.status
+        Set-ReviewCount ([int]$Result.reviewDue)
         Update-BuildChip
         if (@($Result.resumed).Count -gt 0) { Show-Toast 'Carrying on with a build that was interrupted' }
         Start-FirstView

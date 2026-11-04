@@ -97,7 +97,7 @@ Start it with `bash learn/learn.sh serve`, which finds Node 22 and `claude` even
 
 | Area | Commands |
 |---|---|
-| start | `hello` → `{settings, status, ytDlp, resumed}` |
+| start | `hello` → `{settings, status, ytDlp, resumed, reviewDue}` |
 | settings | `settings.get`, `settings.set {change}` (`library`, `models.build`, `models.chat`, `workFolders`) |
 | library | `library.get` → `{categories, courses, jobs, status, reviewDue}` |
 | categories | `category.add {name}`, `category.rename {id, name}`, `category.remove {id, moveTo}` |

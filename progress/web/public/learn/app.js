@@ -110,6 +110,8 @@ async function hello() {
     S.helperReady = true;
     S.settings = result.settings;
     S.status = result.status;
+    S.reviewDue = result.reviewDue || 0;
+    showReviewCount();
     banner('');
     updateBuildChip();
     if ((result.resumed || []).length) toast('Carrying on with a build that was interrupted');

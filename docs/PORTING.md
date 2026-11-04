@@ -224,8 +224,9 @@ Rebuild the WPF window in `widget/Learn.ps1`, `LearnViews.ps1` and `LearnRender.
   - source links:
     - "▶ Watch m:ss–m:ss: title", with `&t=Ns` added to the URL when `from > 0`;
     - "↗ Read: title" for web pages;
-  - concept chips (✓, ◐ or ○). A click sends `concept.learn {id, learned, courseId, n}`;
-  - the page body from its `blocks` (below), then *Check yourself*: each question has an *answer →* link that fills the chat box with `Check k: <q>\nMy answer: `;
+  - concept chips (✓, ◐ or ○). A click sends `concept.learn {id, learned, courseId, n}`, unless the concept is locked (neither `passed` nor learned): then it goes to the closing questions;
+  - `outcomes` and the `key` terms, when the page has them;
+  - the page body from its `blocks` (below), with `glossary` for words and `answers` for checks already answered, then *Closing questions*: each has an *answer →* link that fills the chat box with `Question k: <q>\nMy answer: `, and *From: section*, which scrolls to that heading;
   - ← Previous / Next →, stepping over skipped pages; *Skip this page* (`page.skip`).
 - **Which page opens:** the one asked for; else the current page if it's the same course; else `course.progress.page`; else the first page not skipped.
   - Ignore answers that arrive for a page no longer in front.
@@ -272,7 +273,7 @@ Rebuild the WPF window in `widget/Learn.ps1`, `LearnViews.ps1` and `LearnRender.
   - `chat.error` shows the error, dim if it is "Stopped".
 - **Buttons inside a reply:**
   - `offers` (concept ids) becomes **Mark learned: names**, which sends `concept.learn` for each, then shows "✓ Learned";
-  - `builds` (`{topic, category}`) becomes **Build this**, which always sends `build.start` in `pick` mode.
+  - `builds` (`{topic, category}`) becomes **Build**, which sends `build.start` in `auto` mode. Two or more also get **Build all as one course**, with their topics joined by `; `.
 - **New thread / New conversation** sends `chat.clear`. It's refused while a reply is still coming.
 - **Opening a chat** sends `chat.get`.
 
@@ -290,9 +291,12 @@ Rebuild the WPF window in `widget/Learn.ps1`, `LearnViews.ps1` and `LearnRender.
   - merge into another (`concept.merge`);
   - an always-visible ✕ (`concept.remove`).
 
+**Review**
+- `review.list` gives today's questions, one at a time, drawn like a page's quick check. An option's `i` is what `review.answer {key, choice}` wants. *Next* appears once answered, and the page's name opens it. `library.get`'s `reviewDue` is the tab's count.
+
 **Ask**
 - The Advisor's chats (`advisor: true, chatId`), listed with `advisor.list`; a new one's id made by the page (`a` + letters and digits). Four suggestion chips.
-- Its *Build this* buttons as above.
+- Its *Build* buttons as above.
 - *+ New chat* shows an empty chat with a fresh id; it is saved with its first question. A delete (`advisor.remove {chatId}`) takes two clicks.
 
 **New course: what it is built from**
@@ -318,7 +322,7 @@ Rebuild the WPF window in `widget/Learn.ps1`, `LearnViews.ps1` and `LearnRender.
 
 **Keys:**
 - Ctrl+= / Ctrl+-: text size.
-- Ctrl+1 to Ctrl+5: the tabs.
+- Ctrl+1 to Ctrl+6: the tabs.
 - ← / →: the previous or next page, when not typing in a box.
 - Esc: closes the overlap screen and leaves Learned's modes.
 

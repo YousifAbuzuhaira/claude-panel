@@ -74,7 +74,7 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
 
   const handlers = {
     // A snapshot's copy of a library (LEARN_LIBRARY) never restarts its builds.
-    hello: () => ({ settings: lib.settings, status: readStatus(), ytDlp: installedYtDlp(), resumed: process.env.LEARN_LIBRARY ? [] : resumeStale(lib) }),
+    hello: () => ({ settings: lib.settings, status: readStatus(), ytDlp: installedYtDlp(), resumed: process.env.LEARN_LIBRARY ? [] : resumeStale(lib), reviewDue: dueToday(readReview()).due.length }),
 
     'settings.get': () => readSettings(),
     'settings.set': ({ change }) => {
@@ -172,10 +172,12 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
 
     'review.list': () => {
       const state = readReview();
-      const { due, waiting, done } = dueToday(state);
+      const { due, done } = dueToday(state, Date.now(), Infinity);
+      const room = Math.max(0, DAILY_CAP - done);
       const items = [];
       const gone = [];
       for (const key of due) {
+        if (items.length === room) break;
         const { courseId, n, id } = parseKey(key);
         const block = pageCheck(courseId, n, id);
         if (!block) {
@@ -186,7 +188,7 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
         items.push({ key, courseId, n, courseTitle: readCourse(lib, courseId)?.title || '', pageTitle: readPage(lib, courseId, n)?.title || '', check: { ...block, options: shuffled(block.options.map((option, i) => ({ ...option, i }))) } });
       }
       if (gone.length) updateReview(latest => { for (const key of gone) delete latest.items[key]; });
-      return { items, waiting, done, cap: DAILY_CAP, next: nextDue(state) };
+      return { items, waiting: Math.max(0, due.length - gone.length - items.length), done, cap: DAILY_CAP, next: nextDue(state) };
     },
     'review.answer': ({ key, choice }) => {
       const { courseId, n, id } = parseKey(key);
