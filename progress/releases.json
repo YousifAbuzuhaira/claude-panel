@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.6.0",
+      "date": "2026-11-04",
+      "by": "Yousif",
+      "notes": [
+        "Every page can have a narrated, animated video that asks its questions",
+        "Videos are made on your machine by a local voice, at low priority",
+        "A fact-check flags doubtful claims and holds back their questions"
+      ]
+    },
+    {
       "version": "0.5.0",
       "date": "2026-11-04",
       "by": "Yousif",

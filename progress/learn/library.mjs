@@ -244,6 +244,7 @@ export function recordUsage(info) {
 /** A job as the panel's one build line. */
 export const buildStatus = job => job && {
   id: job.id,
+  kind: job.kind || null,
   topic: job.topic,
   step: job.step,
   state: job.state,

@@ -584,7 +584,8 @@ html[data-see-through] :is(.ui-btn.green, .chat-button.learn:not(.done), .toast)
 .pick-cover.gap { color: var(--gold); }
 .pick-all { margin: 8px 0 2px; }
 
-/* The page's video, under its title */
+/* The page's video, under its title, and the course's in Contents */
+.course-videos { margin: 2px 0 0; font-size: 12px; }
 .video-row { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; margin: 2px 0 10px; }
 
 /* Reading: the words, the page's top, callouts and quick checks */

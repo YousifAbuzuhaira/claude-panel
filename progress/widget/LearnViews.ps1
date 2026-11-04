@@ -46,6 +46,8 @@ $script:lastLibraryAt = [DateTime]::MinValue
 $script:lastCourseAt = [DateTime]::MinValue
 $script:lastVideoAt = [DateTime]::MinValue
 $script:pageVideo = $null
+$script:courseVideos = $null
+$script:videosFor = $null
 $script:videoPanel = $null
 $script:scrollSeen = -1.0
 $script:scrollSavedAt = [DateTime]::MinValue
@@ -1087,6 +1089,29 @@ function Build-CourseView {
     }
   }
   [void]$contentsTop.Children.Add($updateLink)
+  $videosLink = New-Pressable '' $null $blue
+  $videosLink.FontSize = 11.5
+  $videosLink.Margin = New-Gap 0 5 0 0
+  $videosLink.HorizontalAlignment = 'Left'
+  $videosLink.TextWrapping = 'Wrap'
+  $videosLink.Visibility = 'Collapsed'
+  $videosLink.ToolTip = 'Records in the background at low priority. Your work comes first, so it takes longer while you use the machine.'
+  Set-Click $videosLink {
+    param($Data, $Sender)
+    $videos = $script:courseVideos
+    if (-not $videos -or @($videos.wanted).Count -eq 0 -or [int]$videos.waiting -gt 0) { return }
+    $setup = if ($videos.voice.needsSetup) { ", plus a $([int]$videos.voice.setupMb) MB one-time download" } else { '' }
+    $prompt = "About $(Format-VideoTime ([int]$videos.estimate.recordingMinutes)) and $([int]$videos.estimate.mb) MB$setup. Click to start"
+    if (-not (Test-ArmedHere $Sender "videos:$($script:courseId)" $prompt)) { return }
+    Invoke-Helper 'video.queue' @{ courseId = $script:courseId } {
+      param($Result, $Context)
+      $script:courseVideos = $Result
+      Show-CourseVideos
+      Update-PageVideo
+      Show-Toast 'Making the videos in the background, at low priority. You can keep working.'
+    }
+  }
+  [void]$contentsTop.Children.Add($videosLink)
   [void]$contentsTop.Children.Add($hideLink)
   [System.Windows.Controls.DockPanel]::SetDock($contentsTop, 'Top')
   $pageList = New-Object System.Windows.Controls.StackPanel
@@ -1245,6 +1270,7 @@ function Build-CourseView {
   $script:ui.courseMeta = $courseMeta
   $script:ui.courseGap = $courseGap
   $script:ui.updateLink = $updateLink
+  $script:ui.videosLink = $videosLink
   $script:ui.overlapLink = $overlapLink
   $script:ui.pageList = $pageList
   $script:ui.pageCount = $pageCount
@@ -1376,6 +1402,7 @@ function Show-Contents {
   $script:ui.courseGap.Visibility = if ($gaps.Count -gt 0) { 'Visible' } else { 'Collapsed' }
   # A course from before terms and quick checks.
   $script:ui.updateLink.Visibility = if ($null -eq $course.terms -and [string]$course.status -eq 'ready') { 'Visible' } else { 'Collapsed' }
+  if ($script:videosFor -ne $script:courseId) { Update-CourseVideos }
   $list = $script:ui.pageList
   $list.Children.Clear()
   $position = 0
@@ -1755,6 +1782,41 @@ function Show-VideoRow {
       $script:videoPanel.Children[0].ToolTip = "A video asks this page's quick questions, and this older page has none."
     }
     default { Add-VideoLink 'Make a video of this page' $make }
+  }
+}
+
+function Format-VideoTime([int]$Minutes) {
+  if ($Minutes -lt 60) { return "$Minutes min" }
+  return "$([Math]::Round($Minutes / 60.0, 1)) hours"
+}
+
+function Update-CourseVideos {
+  $script:videosFor = $script:courseId
+  Invoke-Helper 'video.course' @{ courseId = $script:courseId } {
+    param($Result, $Context)
+    if ($Context -ne $script:courseId) { return }
+    $script:courseVideos = $Result
+    Show-CourseVideos
+  } $script:courseId
+}
+
+# In Contents: how the course's videos stand, and the press that makes the rest. Nothing shows
+# where this machine can't record, or where every page needs the course updated first.
+function Show-CourseVideos {
+  $videos = $script:courseVideos
+  $link = $script:ui.videosLink
+  if (-not $videos -or $videos.voice.reason -or [int]$videos.old -ge [int]$videos.total) { $link.Visibility = 'Collapsed'; return }
+  $link.Visibility = 'Visible'
+  $left = @($videos.wanted).Count
+  if ([int]$videos.waiting -gt 0) {
+    $link.Text = "Making videos: $([int]$videos.ready) of $([int]$videos.total) ready"
+    $link.Foreground = $dim
+  } elseif ($left -gt 0) {
+    $link.Text = "Make videos ($left $(if ($left -eq 1) { 'page' } else { 'pages' }))"
+    $link.Foreground = $blue
+  } else {
+    $link.Text = "All $([int]$videos.total) videos ready"
+    $link.Foreground = $dim
   }
 }
 
@@ -3648,10 +3710,12 @@ function Update-TextSize {
 
 function Update-FromStatus {
   $build = if ($script:status) { $script:status.build } else { $null }
-  # A video being made for the page on screen: its row follows, at most every 3 s.
-  if ($script:view -eq 'course' -and $script:pageVideo -and @('making', 'queued') -contains [string]$script:pageVideo.state -and ([DateTime]::UtcNow - $script:lastVideoAt).TotalSeconds -gt 3) {
+  # The video job moved: the page's row and the course's line follow, at most every 3 s, and its
+  # last word always lands.
+  if ($script:view -eq 'course' -and $build -and [string]$build.kind -eq 'video' -and ([string]$build.state -ne 'running' -or ([DateTime]::UtcNow - $script:lastVideoAt).TotalSeconds -gt 3)) {
     $script:lastVideoAt = [DateTime]::UtcNow
     Update-PageVideo
+    Update-CourseVideos
   }
   if ($script:view -eq 'library' -and ([DateTime]::UtcNow - $script:lastLibraryAt).TotalSeconds -gt 2) { Update-Library }
   # While a build runs on the open course, its contents refresh at most every 3 s; its last word always lands.

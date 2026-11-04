@@ -31,11 +31,12 @@ export function buildCourseView(host) {
   const courseGap = h('div.course-gap', { hidden: true, title: 'You asked for this, but no source or page covers it. Add a page in Contents.' });
   const updateLink = action('Update this course', updateCourse, 'blue');
   updateLink.title = 'Builds a new copy from the same sources, with terms, quick checks and closing questions. This one stays until you remove it.';
+  const courseVideos = h('div.course-videos', { hidden: true });
   const hideLink = action('hide', () => setContentsShown(false), 'faint');
   hideLink.title = 'Hide the contents; the page takes the room';
   const pageList = h('ol.page-list');
   const contents = h('aside.contents', { 'aria-label': 'Contents' },
-    h('div.col-head', null, h('span.caption', null, 'Contents'), hideLink), courseTitle, courseMeta, courseGap, updateLink, pageList);
+    h('div.col-head', null, h('span.caption', null, 'Contents'), hideLink), courseTitle, courseMeta, courseGap, updateLink, courseVideos, pageList);
 
   const pageCount = h('span.page-count');
   // Beside PAGE x OF y, so it stays when the contents are hidden.
@@ -68,7 +69,7 @@ export function buildCourseView(host) {
   const chatColumn = h('aside.chat-column', { 'aria-label': 'Chat' }, chat.root);
   const grid = h('div.course-grid', null, contents, h('main.page-column', null, pageScroll), chatColumn);
   host.append(grid);
-  ui = { grid, contents, courseTitle, courseMeta, courseGap, updateLink, pageList, pageCount, showLink, pageTitle, sourceLine, videoRow: videoSlot, conceptChips, body, checks, prev, next, skip, article, overlap, pageScroll };
+  ui = { grid, contents, courseTitle, courseMeta, courseGap, updateLink, courseVideos, pageList, pageCount, showLink, pageTitle, sourceLine, videoRow: videoSlot, conceptChips, body, checks, prev, next, skip, article, overlap, pageScroll };
   setContentsShown(S.showContents, false);
 
   chatHooks.learn = setConceptLearned;
@@ -205,6 +206,7 @@ function showContents() {
   ui.courseGap.textContent = gaps.length ? `Not covered: ${gaps.join(', ')}` : '';
   // A course from before terms and quick checks.
   ui.updateLink.hidden = Boolean(course.terms) || course.status !== 'ready';
+  if (videosFor !== S.courseId) showCourseVideos();
 
   const items = course.pages.flatMap((page, index) => {
     const n = page.n;
@@ -509,14 +511,49 @@ async function refreshVideo() {
   showVideoRow();
 }
 
+const timeOf = minutes => (minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 6) / 10} hours`);
+let videosFor = null;
+
+async function makeCourseVideos(event, videos) {
+  const setup = videos.voice.needsSetup ? `, plus a ${videos.voice.setupMb} MB one-time download` : '';
+  const { recordingMinutes, mb } = videos.estimate;
+  if (!armed(`videos:${S.courseId}`, event.currentTarget, `About ${timeOf(recordingMinutes)} and ${mb} MB${setup}. Click to start`)) return;
+  if ((await act('video.queue', { courseId: S.courseId })) === undefined) return;
+  toast('Making the videos in the background, at low priority. You can keep working.');
+  showCourseVideos();
+  refreshVideo();
+}
+
+/** In Contents: how the course's videos stand, and the press that makes the rest. */
+async function showCourseVideos() {
+  const courseId = S.courseId;
+  videosFor = courseId;
+  const videos = await rpc('video.course', { courseId }).catch(() => null);
+  if (!ui || courseId !== S.courseId) return;
+  // Nothing to offer: this machine can't record, or every page needs the course updated first.
+  const shown = Boolean(videos) && !videos.voice.reason && videos.old < videos.total;
+  ui.courseVideos.hidden = !shown;
+  if (!shown) return;
+  const line = [];
+  if (videos.waiting) line.push(h('span.dim', null, `Making videos: ${videos.ready} of ${videos.total} ready`));
+  else if (videos.wanted.length) {
+    const link = action(`Make videos (${videos.wanted.length} ${videos.wanted.length === 1 ? 'page' : 'pages'})`, event => makeCourseVideos(event, videos), 'blue');
+    link.title = 'Records in the background at low priority. Your work comes first, so it takes longer while you use the machine.';
+    line.push(link);
+  } else line.push(h('span.dim', null, `All ${videos.total} videos ready`));
+  ui.courseVideos.replaceChildren(...line);
+}
+
 let videoShownAt = 0;
 
+/** The video job's progress reached the window. Its last word always lands. */
 export function videoProgress() {
-  const state = S.pageData?.video?.state;
-  if (state !== 'making' && state !== 'queued') return;
-  if (Date.now() - videoShownAt < 3000) return;
+  const build = S.status?.build;
+  if (build?.kind !== 'video' || S.view !== 'course') return;
+  if (build.state === 'running' && Date.now() - videoShownAt < 3000) return;
   videoShownAt = Date.now();
   refreshVideo();
+  showCourseVideos();
 }
 
 function showClosing() {
