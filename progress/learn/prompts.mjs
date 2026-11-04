@@ -1,7 +1,7 @@
 // What Claude is asked at each step, and the JSON shape each structured answer must take.
 // The builder's calls run with no tools except research (web search and fetch).
 
-const LEARNER = 'The learner is a working software engineer who studies in the minutes while their coding agent works. They want depth and real practice, not marketing or fluff.';
+const LEARNER = 'The learner is a strong software engineer, but assume they know nothing of THIS subject: its words, ideas and notation are new to them. They study in the minutes while their coding agent works. They want depth and real practice, not marketing or fluff.';
 
 // Diagrams: Mermaid that learn/diagram.mjs can lay out (anything else shows as code).
 export const DIAGRAM_RULE = [
@@ -23,6 +23,7 @@ export const RESEARCH_SCHEMA = {
   properties: {
     courseTitle: { type: 'string', description: 'A short course title, e.g. "Kubernetes deployments in practice"' },
     summary: { type: 'string', description: 'One or two sentences on what the course will cover' },
+    asks: { type: 'array', items: { type: 'string' }, description: 'Every separate thing the learner named, in their words' },
     candidates: {
       type: 'array',
       minItems: 1,
@@ -37,19 +38,26 @@ export const RESEARCH_SCHEMA = {
           lengthMin: { type: ['number', 'null'], description: 'Video length in minutes, or reading time for a page' },
           level: { type: 'string', enum: ['beginner', 'intermediate', 'advanced'] },
           why: { type: 'string', description: 'One sentence to the learner on why this source is worth it' },
-          recommended: { type: 'boolean', description: 'True for the 2-4 sources the course should be built from' },
+          covers: { type: 'array', items: { type: 'number' }, description: 'The numbers of the asks this source teaches well (0 is the first)' },
+          recommended: { type: 'boolean', description: 'True for the sources the course should be built from' },
         },
-        required: ['kind', 'url', 'title', 'channel', 'lengthMin', 'level', 'why', 'recommended'],
+        required: ['kind', 'url', 'title', 'channel', 'lengthMin', 'level', 'why', 'covers', 'recommended'],
       },
     },
   },
-  required: ['courseTitle', 'summary', 'candidates'],
+  required: ['courseTitle', 'summary', 'asks', 'candidates'],
 };
 
-export function researchPrompt({ topic, category, known, videos }) {
+export function researchPrompt({ topic, category, known, videos, asks = [], missing = [] }) {
   return [
     `Find the best FREE material to build a course on: ${topic}`,
     `It goes in the learner's "${category}" category. ${LEARNER}`,
+    '',
+    'The course must cover EVERYTHING they named, not a part of it. First list each separate thing they named in "asks", in their words: "Docker, Kubernetes and Terraform" is three.',
+    ...(missing.length ? [
+      `An earlier search found nothing good for: ${missing.join('; ')}. Search again for those only.`,
+      `Keep "asks" exactly as this list, so "covers" uses the same numbers: ${asks.map((ask, number) => `${number}: ${ask}`).join('; ')}.`,
+    ] : []),
     '',
     known.learned.length ? `Already learned (don't build around these): ${known.learned.join('; ')}` : 'Nothing marked learned yet in this area.',
     known.seen.length ? `Read about before but not yet learned: ${known.seen.join('; ')}` : '',
@@ -60,8 +68,8 @@ export function researchPrompt({ topic, category, known, videos }) {
     'Do this:',
     '1. Use WebSearch (and WebFetch to check) to find 2-4 strong open written sources: official documentation, freeCodeCamp, MIT Missing Semester, CS50 notes, well-known GitHub guides or engineering blogs. Nothing behind a login or paywall (no Udemy, Coursera, LinkedIn Learning, member-only Medium).',
     '2. You may search YouTube for better videos than the list above, but give normal watch URLs (https://www.youtube.com/watch?v=...).',
-    '3. Return 5-8 candidates mixing videos and pages. Prefer well-structured videos with chapters from reputable channels, recent enough to be current, and pages with real commands and code. Avoid clickbait, near-duplicates and shallow listicles.',
-    '4. Mark 2-4 as recommended: together they should cover the topic well, at most about 3 hours of video in total, and pair video explanations with a written source that has the real commands and code.',
+    '3. Return 5-8 candidates mixing videos and pages, more when they named many things. Prefer well-structured videos with chapters from reputable channels, recent enough to be current, and pages with real commands and code. Avoid clickbait, near-duplicates and shallow listicles. In "covers", give the number of each ask a source teaches well.',
+    '4. Mark as recommended the sources the course should be built from: together they must cover every ask, and pair video explanations with a written source that has the real commands and code. Use as many as that takes.',
   ].filter(line => line !== '').join('\n');
 }
 
@@ -75,12 +83,15 @@ export const OUTLINE_SCHEMA = {
     pages: {
       type: 'array',
       minItems: 3,
-      maxItems: 20,
+      maxItems: 40,
       items: {
         type: 'object',
         properties: {
           title: { type: 'string' },
-          subtopics: { type: 'array', items: { type: 'string' }, description: 'What the page covers, 2-6 short items' },
+          part: { type: 'string', description: 'The name of the part of the course this page belongs to' },
+          covers: { type: 'array', items: { type: 'number' }, description: 'The numbers of the asks this page teaches' },
+          outcomes: { type: 'array', items: { type: 'string' }, description: 'What the learner can do after this page, 1-3 items, each starting with a verb' },
+          subtopics: { type: 'array', items: { type: 'string' }, description: 'Everything the page covers, as short items' },
           sourceId: { type: 'string', description: 'The main source this page teaches from' },
           fromSec: { type: ['number', 'null'], description: 'For a video: where the part this page covers starts, in seconds' },
           toSec: { type: ['number', 'null'], description: 'For a video: where it ends, in seconds' },
@@ -118,19 +129,29 @@ export const OUTLINE_SCHEMA = {
             },
           },
         },
-        required: ['title', 'subtopics', 'sourceId', 'fromSec', 'toSec', 'sections', 'support', 'concepts'],
+        required: ['title', 'part', 'covers', 'outcomes', 'subtopics', 'sourceId', 'fromSec', 'toSec', 'sections', 'support', 'concepts'],
       },
     },
   },
   required: ['title', 'summary', 'pages'],
 };
 
-export function outlinePrompt({ topic, title, category, sources, catalogue }) {
+export function outlinePrompt({ topic, title, category, sources, catalogue, asks = [], missing = [] }) {
   return [
     `Plan a course on "${topic}" (working title: ${title}), from the sources below. ${LEARNER}`,
     '',
+    ...(asks.length ? [
+      'The learner asked for all of these, and every one must get its own pages. In "covers", give the numbers each page teaches:',
+      ...asks.map((ask, number) => `${number}: ${ask}`),
+      '',
+    ] : []),
+    ...(missing.length ? [`Your last plan had no page for: ${missing.join('; ')}. Plan those too.`, ''] : []),
     'Rules:',
-    '- One page per topic or subtopic, 6-16 pages, in the order that is best for learning (not necessarily source order).',
+    '- Cover everything the sources teach on what the learner asked. One main idea per page, as many pages as that takes, at most 40. Never leave something out to keep the course short; never add a page just to fill it out.',
+    '- Order the pages so that each one only needs what came before it (not necessarily source order). Start from what a software engineer already knows.',
+    '- Group the pages into 2-7 parts, each a short name in "part", with a part\'s pages next to each other. A short course may have one part.',
+    '- Give each page 1-3 outcomes: what the learner will be able to do after it, starting with a verb (trace, choose, explain why, spot, fix), never "understand" or "know". The page and its questions will be built from these.',
+    '- The last page is a practical task that uses the whole course on something real, so the learner pulls it together.',
     '- Each page teaches from one main source: a time window of a video (fromSec/toSec, using the chapters and timestamps) or named headings of a web page, document or brief (sections, copied exactly). Add support sources where they help, especially written docs that have the real commands for a video page.',
     '- Skip intros, outros, sponsor segments, channel promotion and off-topic tangents.',
     '- Tag each page with 1-6 concepts. A concept is one idea that can be explained and checked in a few minutes (e.g. "Docker named volumes", not "Docker"). Give a broader parent where one fits.',
@@ -259,7 +280,7 @@ export function pagePlanPrompt({ course, topic, titles, sources, catalogue }) {
     `The course's pages so far: ${titles.join('; ')}.`,
     '',
     'Plan that single page, the same way the course was planned:',
-    '- Give it a clear title and 2-6 subtopics. Do not repeat what the existing pages already teach.',
+    '- Give it a clear title, 1-3 outcomes (what the learner can do after it, starting with a verb) and its subtopics. Do not repeat what the existing pages already teach. Leave "part" empty and "covers" empty.',
     '- Bind it to the source that covers the topic best (a video time window or exact headings of a web page or document), with support sources where they help. If no source covers it well, pick the closest one; the writer will mark what it adds.',
     '- Tag it with 1-6 concepts, reusing catalogue ids for the same idea before making new ones, with a reason for each.',
     '',
@@ -355,10 +376,12 @@ export function advisorSystem({ categories, courses, learned, seen, workFolders 
   return [
     `You advise a software engineer on what to learn next. ${LEARNER}`,
     '',
-    'Ground your advice in what they actually build. You may read their work folders (read only) with Read, Glob and Grep: start with package.json files, Dockerfiles, compose files, CI config and the main source folders to see the real stack and practices. Look for gaps: things their work depends on that they have not learned.',
-    'Give 3-5 suggestions unless asked otherwise. For each: the topic, why it matters for them (point at what in their work), and what they already know that it builds on. End each suggestion with this line, which the app turns into a "Build this" button:',
-    '[[build: <topic to research> | <category name>]]',
-    'Use one of their category names when one fits, or a new short one.',
+    'First work out what they are asking.',
+    'When they NAME what they want to learn ("teach me X and Y"), do not give a menu. Say in two or three sentences what the course will cover, then give ONE build line that names everything they asked for, leaving nothing out. Only suggest splitting it if they ask.',
+    'When they ask what to learn next, ground your advice in what they actually build. You may read their work folders (read only) with Read, Glob and Grep: start with package.json files, Dockerfiles, compose files, CI config and the main source folders to see the real stack and practices. Look for gaps: things their work depends on that they have not learned. Give 3-5 suggestions; for each: the topic, why it matters for them (point at what in their work), and what they already know that it builds on, ending with a build line.',
+    'A build line is this, on a line of its own; the app turns it into a button that builds the course straight away:',
+    '[[build: <everything the course should cover> | <category name>]]',
+    'Use one of their category names when one fits, or a new short one. Never say you started a build; only the learner can.',
     CHAT_DIAGRAMS,
     '',
     `Their categories: ${categories.join(', ') || '(none yet)'}`,

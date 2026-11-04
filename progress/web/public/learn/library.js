@@ -3,7 +3,7 @@ import { upload } from '../shared/api.js';
 import { GLYPH, S, act, action, armed, categoryName, chip, formatDate, h, inlineEdit, isHttp, nav, onEnter, short, toast } from './core.js';
 
 const L = {
-  mode: 'pick',
+  mode: 'auto',
   source: 'topic', // what a new course is built from: topic, document or chat
   document: null, // the File picked for one
   pickingJob: null,
@@ -32,10 +32,10 @@ const sizeText = bytes => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} M
 export function buildLibraryView(host) {
   const topic = h('input.ui-input.grow', { type: 'text', placeholder: 'A topic to learn, or a YouTube video, playlist or docs link', 'aria-label': 'Topic or link' });
   const category = h('input.ui-input.category', { type: 'text', placeholder: 'Category', 'aria-label': 'Category' });
-  const pickChip = chip('Let me pick', true, () => setMode('pick'));
+  const autoChip = chip('Just build it', true, () => setMode('auto'));
+  autoChip.title = 'Claude picks sources that cover everything you named, and builds the course straight away';
+  const pickChip = chip('Let me pick', false, () => setMode('pick'));
   pickChip.title = 'Research first, then you tick which videos and pages the course is built from';
-  const autoChip = chip('Just build it', false, () => setMode('auto'));
-  autoChip.title = 'Claude picks the sources and builds the course straight away';
   const build = h('button.ui-btn.primary', { type: 'button', onclick: submitNewCourse }, 'Build');
   const categoryChips = h('div.chips.category-chips');
   const search = h('input.ui-input.search', { type: 'search', placeholder: 'Search your courses', 'aria-label': 'Search courses' });
@@ -62,7 +62,7 @@ export function buildLibraryView(host) {
   onEnter(chatFocus, submitNewCourse);
   chatSelect.addEventListener('change', () => { if (chatSelect.value) chatFocus.focus(); });
 
-  const modes = h('div.modes', null, pickChip, autoChip);
+  const modes = h('div.modes', null, autoChip, pickChip);
   const sourceChips = {};
   const fromRow = h('div.from-row', null, h('span.from-label', null, 'From'));
   for (const item of SOURCES) {
@@ -211,7 +211,7 @@ function submitNewCourse() {
   ui.topic.value = '';
 }
 
-/** Also what a chat's *Build this* does (always in pick mode). */
+/** Also what a chat's *Build this* does (straight away: you asked for it). */
 export async function startBuild(topic, category, mode) {
   const fields = { category, mode };
   if (/^https?:\/\//i.test(topic)) fields.link = topic;
@@ -311,6 +311,9 @@ function togglePicker(job) {
 function picker(job) {
   const panel = h('div.picker');
   if (job.summary) panel.append(h('p.dim', null, job.summary));
+  const asks = job.asks || [];
+  const gaps = asks.filter((ask, number) => !(job.candidates || []).some(candidate => L.picks.has(candidate.id) && (candidate.covers || []).includes(number)));
+  if (asks.length) panel.append(h(`p.pick-cover${gaps.length ? '.gap' : ''}`, null, gaps.length ? `Not covered by what's ticked: ${gaps.join(', ')}` : `Covers everything you named: ${asks.join(', ')}`));
   // The recommended ones first, already ticked.
   const candidates = [...(job.candidates || [])].sort((a, b) => Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)));
   for (const candidate of candidates) {
@@ -337,6 +340,10 @@ function picker(job) {
     open));
   }
   const count = L.picks.size;
+  panel.append(h('div.pick-all', null, action('Use all', () => {
+    L.picks = new Set((job.candidates || []).map(candidate => candidate.id));
+    showJobs();
+  }, 'blue')));
   panel.append(h('button.ui-btn.primary', {
     type: 'button',
     onclick: async () => {

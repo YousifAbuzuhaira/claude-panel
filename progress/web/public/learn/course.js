@@ -26,11 +26,12 @@ export function buildCourseView(host) {
   // Each column opens with a caption row of one height, so the three line up across the page.
   const courseTitle = h('h2.course-name');
   const courseMeta = h('div.course-meta');
+  const courseGap = h('div.course-gap', { hidden: true, title: 'You asked for this, but no source or page covers it. Add a page in Contents.' });
   const hideLink = action('hide', () => setContentsShown(false), 'faint');
   hideLink.title = 'Hide the contents; the page takes the room';
   const pageList = h('ol.page-list');
   const contents = h('aside.contents', { 'aria-label': 'Contents' },
-    h('div.col-head', null, h('span.caption', null, 'Contents'), hideLink), courseTitle, courseMeta, pageList);
+    h('div.col-head', null, h('span.caption', null, 'Contents'), hideLink), courseTitle, courseMeta, courseGap, pageList);
 
   const pageCount = h('span.page-count');
   // Beside PAGE x OF y, so it stays when the contents are hidden.
@@ -62,7 +63,7 @@ export function buildCourseView(host) {
   const chatColumn = h('aside.chat-column', { 'aria-label': 'Chat' }, chat.root);
   const grid = h('div.course-grid', null, contents, h('main.page-column', null, pageScroll), chatColumn);
   host.append(grid);
-  ui = { grid, contents, courseTitle, courseMeta, pageList, pageCount, showLink, pageTitle, sourceLine, conceptChips, body, checks, prev, next, skip, article, overlap, pageScroll };
+  ui = { grid, contents, courseTitle, courseMeta, courseGap, pageList, pageCount, showLink, pageTitle, sourceLine, conceptChips, body, checks, prev, next, skip, article, overlap, pageScroll };
   setContentsShown(S.showContents, false);
 
   chatHooks.learn = setConceptLearned;
@@ -193,8 +194,11 @@ function showContents() {
   const meta = [`${course.pages.length} pages`, `${read.size} read`, `${learned}/${concepts.length} concepts learned`];
   if (course.status !== 'ready') meta.push(`being written: ${course.pages.filter(page => page.status === 'written').length}/${course.pages.length}`);
   ui.courseMeta.textContent = meta.join(`  ${GLYPH.dot}  `);
+  const gaps = course.notCovered || [];
+  ui.courseGap.hidden = !gaps.length;
+  ui.courseGap.textContent = gaps.length ? `Not covered: ${gaps.join(', ')}` : '';
 
-  const items = course.pages.map((page, index) => {
+  const items = course.pages.flatMap((page, index) => {
     const n = page.n;
     const written = page.status === 'written';
     const isSkipped = skipped.has(n);
@@ -248,7 +252,8 @@ function showContents() {
         onCancel: () => { C.rewritingPage = null; showContents(); },
       }));
     }
-    return li;
+    const startsPart = page.part && page.part !== course.pages[index - 1]?.part;
+    return startsPart ? [h('li.part-head', null, page.part), li] : [li];
   });
   // A page of your own: Claude plans it from the course's sources, after the current page.
   const add = C.addingPage

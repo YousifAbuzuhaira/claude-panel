@@ -4,7 +4,7 @@
 
 $script:ui = @{}
 $script:library = $null
-$script:buildMode = 'pick'
+$script:buildMode = 'auto'
 $script:pickingJob = $null
 $script:picks = @{}
 $script:movingCourse = $null
@@ -341,14 +341,14 @@ function Build-LibraryView {
   $modes.Height = $INPUT_HEIGHT
   $modes.VerticalAlignment = 'Top'
   [System.Windows.Controls.Grid]::SetColumn($modes, 2)
-  $pickChip = New-Chip 'Let me pick' 'pick' $true
-  $autoChip = New-Chip 'Just build it' 'auto' $false
-  $pickChip.Margin = New-Gap 0 0 6 0
-  $autoChip.Margin = New-Gap 0 0 0 0
+  $autoChip = New-Chip 'Just build it' 'auto' $true
+  $pickChip = New-Chip 'Let me pick' 'pick' $false
+  $autoChip.Margin = New-Gap 0 0 6 0
+  $pickChip.Margin = New-Gap 0 0 0 0
+  $autoChip.ToolTip = 'Claude picks sources that cover everything you named, and builds the course straight away'
   $pickChip.ToolTip = 'Research first, then you tick which videos and pages the course is built from'
-  $autoChip.ToolTip = 'Claude picks the sources and builds the course straight away'
-  [void]$modes.Children.Add($pickChip)
   [void]$modes.Children.Add($autoChip)
+  [void]$modes.Children.Add($pickChip)
   $buildButton = New-Button 'Build' 'primary'
   $buildButton.Margin = New-Gap 8 0 0 0
   $buildButton.ToolTip = 'Start building the course (Enter)'
@@ -779,6 +779,23 @@ function New-Picker($Job) {
     $summary.Margin = New-Gap 0 0 0 6
     [void]$panel.Children.Add($summary)
   }
+  $asks = @($Job.asks | Where-Object { $_ })
+  if ($asks.Count -gt 0) {
+    $gaps = @()
+    for ($number = 0; $number -lt $asks.Count; $number++) {
+      $has = $false
+      foreach ($candidate in @($Job.candidates)) {
+        if ($script:picks[[string]$candidate.id] -and (@($candidate.covers) -contains $number)) { $has = $true }
+      }
+      if (-not $has) { $gaps += [string]$asks[$number] }
+    }
+    $coverText = if ($gaps.Count -gt 0) { "Not covered by what's ticked: $($gaps -join ', ')" } else { "Covers everything you named: $($asks -join ', ')" }
+    $cover = New-Text $coverText $(if ($gaps.Count -gt 0) { $gold } else { $green })
+    $cover.TextWrapping = 'Wrap'
+    $cover.FontSize = 12
+    $cover.Margin = New-Gap 0 0 0 6
+    [void]$panel.Children.Add($cover)
+  }
   foreach ($candidate in @($Job.candidates)) {
     $id = [string]$candidate.id
     # A rounded row whose hover fill reaches a little past the text on both sides.
@@ -826,6 +843,16 @@ function New-Picker($Job) {
     $item.Children.Insert(0, $link)
     [void]$panel.Children.Add($itemBox)
   }
+  $useAll = New-Pressable 'Use all' $null $blue
+  $useAll.FontSize = 12
+  $useAll.Margin = New-Gap 0 8 0 0
+  $useAll.HorizontalAlignment = 'Left'
+  Set-Click $useAll {
+    param($Data, $Sender)
+    foreach ($id in $Data) { $script:picks[[string]$id] = $true }
+    Show-Jobs
+  } @(@($Job.candidates) | ForEach-Object { [string]$_.id })
+  [void]$panel.Children.Add($useAll)
   $count = $script:picks.Count
   $go = New-Button $(if ($count -eq 1) { 'Build from 1 source' } else { "Build from $count sources" }) 'primary'
   $go.HorizontalAlignment = 'Left'
@@ -1032,6 +1059,13 @@ function Build-CourseView {
   $contentsTop = New-Object System.Windows.Controls.StackPanel
   [void]$contentsTop.Children.Add($courseTitle)
   [void]$contentsTop.Children.Add($courseMeta)
+  $courseGap = New-Text '' $gold
+  $courseGap.FontSize = 11.5
+  $courseGap.TextWrapping = 'Wrap'
+  $courseGap.Margin = New-Gap 0 5 0 0
+  $courseGap.Visibility = 'Collapsed'
+  $courseGap.ToolTip = 'You asked for this, but no source or page covers it. Add a page in Contents.'
+  [void]$contentsTop.Children.Add($courseGap)
   [void]$contentsTop.Children.Add($hideLink)
   [System.Windows.Controls.DockPanel]::SetDock($contentsTop, 'Top')
   $pageList = New-Object System.Windows.Controls.StackPanel
@@ -1188,6 +1222,7 @@ function Build-CourseView {
   $script:ui.contents = $contents
   $script:ui.courseTitle = $courseTitle
   $script:ui.courseMeta = $courseMeta
+  $script:ui.courseGap = $courseGap
   $script:ui.overlapLink = $overlapLink
   $script:ui.pageList = $pageList
   $script:ui.pageCount = $pageCount
@@ -1314,12 +1349,27 @@ function Show-Contents {
     $metaParts += "being written: $written/$($pages.Count)"
   }
   $script:ui.courseMeta.Text = $metaParts -join "  $GLYPH_DOT  "
+  $gaps = @($course.notCovered | Where-Object { $_ })
+  $script:ui.courseGap.Text = if ($gaps.Count -gt 0) { "Not covered: $($gaps -join ', ')" } else { '' }
+  $script:ui.courseGap.Visibility = if ($gaps.Count -gt 0) { 'Visible' } else { 'Collapsed' }
   $list = $script:ui.pageList
   $list.Children.Clear()
   $position = 0
+  $lastPart = ''
   foreach ($page in $pages) {
     $position++
     $n = [int]$page.n
+    # A part's name above its first page.
+    $part = [string]$page.part
+    if ($part -and $part -ne $lastPart) {
+      $partHead = New-Text $part $dim
+      $partHead.FontSize = 11.5
+      $partHead.FontWeight = 'SemiBold'
+      $partHead.TextWrapping = 'Wrap'
+      $partHead.Margin = New-Gap 0 $(if ($position -eq 1) { 0 } else { 12 }) 0 3
+      [void]$list.Children.Add($partHead)
+    }
+    $lastPart = $part
     $row = New-Object System.Windows.Controls.DockPanel
     $outer = New-Object System.Windows.Controls.StackPanel
     [void]$outer.Children.Add($row)
@@ -1930,7 +1980,9 @@ function Add-MessageSection($Doc, $Message, [string]$Key) {
   }
   $offers = @($Message.offers)
   if ($offers.Count -gt 0 -and -not (Test-AdvisorKey $Key)) { [void]$section.Blocks.Add((New-OfferButton $offers)) }
-  foreach ($build in @($Message.builds)) { if ($build) { [void]$section.Blocks.Add((New-BuildButton $build)) } }
+  $builds = @($Message.builds | Where-Object { $_ })
+  foreach ($build in $builds) { [void]$section.Blocks.Add((New-BuildButton $build)) }
+  if ($builds.Count -gt 1) { [void]$section.Blocks.Add((New-BuildAllButton $builds)) }
   [void]$Doc.Blocks.Add($section)
   return $section
 }
@@ -1976,23 +2028,30 @@ function New-OfferButton($Ids) {
 
 # A course the Advisor suggests: a quiet button with the topic trimmed (the whole of it, and its
 # category, in the tooltip). Once clicked it is a plain blue line that opens the Library.
-function New-BuildButton($Build) {
+function New-BuildButton($Build, [string]$Label = '') {
   $topic = [string]$Build.topic
   $category = [string]$Build.category
-  $button = New-DocButton ("Build: {0}" -f (Get-Short $topic 48)) $buttonFill $ink {
+  $text = if ($Label) { $Label } else { "Build: {0}" -f (Get-Short $topic 48) }
+  $button = New-DocButton $text $buttonFill $ink {
     param($Data, $Sender)
-    Start-Build ([string]$Data.topic) ([string]$Data.category) 'pick'
-    Set-DocButtonDone $Sender ("Building {0} pick its sources in the Library {1}" -f $GLYPH_DOT, $GLYPH_RIGHT) $noFill
+    Start-Build ([string]$Data.topic) ([string]$Data.category) 'auto'
+    Set-DocButtonDone $Sender ("Building {0} follow it in the Library {1}" -f $GLYPH_DOT, $GLYPH_RIGHT) $noFill
     $Sender.Content.Foreground = $blue
     $Sender.Padding = New-Gap 0 5 0 6
-    # A click now goes to the Library, where the build waits for your picks.
+    # A click now goes to the Library, where the build shows.
     $Sender.Cursor = [System.Windows.Input.Cursors]::Hand
-    $Sender.ToolTip = "Building '$([string]$Data.topic)': open the Library to pick its sources"
+    $Sender.ToolTip = "Building '$([string]$Data.topic)': follow it in the Library"
     $Sender.Tag = @{ action = { param($Data2, $Sender2) Show-View 'library' }; data = $null }
   } @{ topic = $topic; category = $category }
   $button.Content.FontWeight = 'Normal'
-  $button.ToolTip = if ($category) { "Build a course on '$topic' (in $category); you pick its sources in the Library" } else { "Build a course on '$topic'; you pick its sources in the Library" }
+  $button.ToolTip = if ($category) { "Build a course on '$topic' (in $category), straight away" } else { "Build a course on '$topic', straight away" }
   return (New-DocBlock $button 4 4)
+}
+
+# Several suggestions: everything in them, as one course.
+function New-BuildAllButton($Builds) {
+  $topics = @($Builds | ForEach-Object { [string]$_.topic }) -join '; '
+  return (New-BuildButton @{ topic = $topics; category = [string]@($Builds)[0].category } 'Build all as one course')
 }
 
 function Show-Chat([string]$Key, $Messages, $Viewer) {

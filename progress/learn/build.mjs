@@ -12,6 +12,7 @@ import { applyProposals, compactCatalogue, ensureCategory, findCategory, stateOf
 import { askStructured, describeTool, stopAll } from './claude.mjs';
 import { activeJobFor, buildStatus, newCourseId, readCatalogue, readCourse, readStatus, recordUsage, updateCatalogue, updateCourse, writeStatus } from './library.mjs';
 import { markdownToBlocks } from './markdown.mjs';
+import { askNumbers, cleanAsks, picksCovering, uncovered } from './coverage.mjs';
 import { overlapReport } from './overlap.mjs';
 import { BRIEF_SCHEMA, OUTLINE_SCHEMA, PAGE_PLAN_SCHEMA, PAGE_SCHEMA, RESEARCH_SCHEMA, chatBriefPrompt, outlinePrompt, pagePlanPrompt, pagePrompt, researchPrompt } from './prompts.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
@@ -26,6 +27,7 @@ import { readJson, withLock, writeJson } from './store.mjs';
 
 const LEARN_MJS = fileURLToPath(new URL('./learn.mjs', import.meta.url));
 const PAGES_AT_ONCE = 3;
+const MAX_PAGES = 40;
 const OUTLINE_BUDGET = 240_000; // characters of source material for the outline
 const PAGE_BUDGET = 150_000; // characters of the main source for one page
 const SUPPORT_BUDGET = 50_000;
@@ -97,8 +99,8 @@ function checkDocument(file, name) {
   return { path, fileName };
 }
 
-export function createJob(lib, { topic, category, mode = 'pick', link = null, file = null, name = null, chat = null, focus = null }) {
-  const cleanTopic = String(topic || '').trim().slice(0, 200);
+export function createJob(lib, { topic, category, mode = 'auto', link = null, file = null, name = null, chat = null, focus = null }) {
+  const cleanTopic = String(topic || '').trim().slice(0, 600);
   const cleanLink = link ? String(link).trim() : null;
   const document = file ? checkDocument(file, name) : null;
   const chatId = chat ? String(chat).trim() : null;
@@ -118,7 +120,7 @@ export function createJob(lib, { topic, category, mode = 'pick', link = null, fi
     chat: chatId,
     focus: chatId ? cleanFocus : null,
     category: String(category || '').trim().slice(0, 60) || 'General',
-    mode: chatId ? 'chat' : document ? 'document' : cleanLink ? 'link' : mode === 'auto' ? 'auto' : 'pick',
+    mode: chatId ? 'chat' : document ? 'document' : cleanLink ? 'link' : mode === 'pick' ? 'pick' : 'auto',
     courseId: null,
     courseTitle: null,
     summary: null,
@@ -287,7 +289,7 @@ function knownConcepts(lib, categoryName) {
 }
 
 /** Candidate urls tidied: YouTube links as plain watch urls, no duplicates, ids s1, s2... */
-export function tidyCandidates(candidates) {
+export function tidyCandidates(candidates, askCount = 0) {
   const seen = new Set();
   const out = [];
   for (const candidate of candidates) {
@@ -307,6 +309,7 @@ export function tidyCandidates(candidates) {
       lengthMin: Number.isFinite(candidate.lengthMin) ? Math.round(candidate.lengthMin) : null,
       level: candidate.level || null,
       why: String(candidate.why || '').slice(0, 400),
+      covers: askNumbers(candidate.covers, askCount),
       recommended: Boolean(candidate.recommended),
     });
   }
@@ -404,8 +407,9 @@ async function research(lib, job, save, io) {
   }
   const unique = [...new Map(videos.map(video => [video.url, video])).values()];
   save({ message: `Finding the best sources for ${job.topic}` });
-  const answer = await io.askStructured({
-    prompt: researchPrompt({ topic: job.topic, category: job.category, known: knownConcepts(lib, job.category), videos: unique }),
+  const known = knownConcepts(lib, job.category);
+  const search = (asks, missing) => io.askStructured({
+    prompt: researchPrompt({ topic: job.topic, category: job.category, known, videos: unique, asks, missing }),
     schema: RESEARCH_SCHEMA,
     tools: ['WebSearch', 'WebFetch'],
     model: lib.settings.models.build,
@@ -413,14 +417,26 @@ async function research(lib, job, save, io) {
     onRateLimit: recordUsage,
     onTool: tool => save({ message: describeTool(tool) }),
   });
-  const candidates = tidyCandidates(answer.candidates || []);
+  const answer = await search([], []);
+  const asks = cleanAsks(answer.asks);
+  let candidates = tidyCandidates(answer.candidates || [], asks.length);
+  // Something they named has no source: one more search, for that alone.
+  const gaps = uncovered(asks, candidates);
+  if (gaps.length) {
+    save({ message: `Looking for more on ${gaps.join(', ')}` });
+    const more = await search(asks, gaps);
+    candidates = tidyCandidates([...candidates, ...(more.candidates || [])], asks.length);
+  }
   if (!candidates.length) throw new Error('research found no usable sources');
   let picks = candidates.filter(candidate => candidate.recommended).map(candidate => candidate.id);
   if (!picks.length) picks = candidates.slice(0, 3).map(candidate => candidate.id);
+  picks = picksCovering(candidates, asks, picks);
+  const found = { asks, candidates, courseTitle: answer.courseTitle, summary: answer.summary };
   if (job.mode === 'pick') {
-    save({ candidates, courseTitle: answer.courseTitle, summary: answer.summary, step: 'picks', state: 'waiting-picks', message: `Pick the sources for ${job.topic}` });
+    // What Claude recommends starts ticked, with what covers every ask.
+    save({ ...found, candidates: candidates.map(candidate => ({ ...candidate, recommended: picks.includes(candidate.id) })), step: 'picks', state: 'waiting-picks', message: `Pick the sources for ${job.topic}` });
   } else {
-    save({ candidates, courseTitle: answer.courseTitle, summary: answer.summary, picks, step: 'fetch' });
+    save({ ...found, picks, step: 'fetch' });
   }
 }
 
@@ -540,17 +556,32 @@ async function outline(lib, job, save, io) {
   const course = readCourse(lib, job.courseId);
   const sources = sourceExcerpts(lib, course);
   const catalogue = readCatalogue(lib);
+  const asks = job.asks || [];
   save({ message: `Planning ${course.title}` });
-  const plan = await io.askStructured({
-    prompt: outlinePrompt({ topic: job.topic, title: course.title, category: job.category, sources, catalogue: compactCatalogue(catalogue) }),
+  const askForPlan = missing => io.askStructured({
+    prompt: outlinePrompt({ topic: job.topic, title: course.title, category: job.category, sources, catalogue: compactCatalogue(catalogue), asks, missing }),
     schema: OUTLINE_SCHEMA,
     tools: [],
     model: lib.settings.models.build,
     cwd: lib.root,
     onRateLimit: recordUsage,
   });
-  const pages = cleanOutline(plan.pages || [], sources);
+  let plan = await askForPlan([]);
+  let pages = cleanOutline(plan.pages || [], sources, asks.length);
   if (!pages.length) throw new Error('the plan had no pages');
+  // Something they named has no page: one more plan. What still has none shows on the course.
+  let notCovered = uncovered(asks, pages);
+  if (notCovered.length) {
+    save({ message: `Planning pages for ${notCovered.join(', ')}` });
+    const again = await askForPlan(notCovered);
+    const morePages = cleanOutline(again.pages || [], sources, asks.length);
+    const left = uncovered(asks, morePages);
+    if (morePages.length && left.length < notCovered.length) {
+      plan = again;
+      pages = morePages;
+      notCovered = left;
+    }
+  }
   // All proposals at once, so a parent can name a concept another page introduces.
   const proposals = pages.flatMap(page => page.proposals);
   const { ids, report } = updateCatalogue(lib, catalogue => applyProposals(catalogue, proposals, course.category));
@@ -567,6 +598,8 @@ async function outline(lib, job, save, io) {
     saved.title = String(plan.title || saved.title).slice(0, 120);
     saved.summary = String(plan.summary || saved.summary || '').slice(0, 600);
     saved.pages = finished;
+    saved.asks = asks;
+    saved.notCovered = notCovered;
     saved.matches = report;
     saved.overlap = { ...overlap, seen: false, at: now() };
   });
@@ -613,7 +646,7 @@ async function planPage(lib, job, save, io) {
 }
 
 /** The plan's pages made safe: real sources, times inside the video, headings that exist. */
-export function cleanOutline(pages, sources) {
+export function cleanOutline(pages, sources, askCount = 0) {
   const byId = new Map(sources.map(source => [source.id, source]));
   const first = sources[0];
   const headings = source => new Map((source.sections || []).map(section => [section.heading.toLowerCase().trim(), section.heading]));
@@ -629,7 +662,7 @@ export function cleanOutline(pages, sources) {
     const known = headings(source);
     return (names || []).map(name => known.get(String(name).toLowerCase().trim())).filter(Boolean);
   };
-  return pages.filter(page => page && page.title).slice(0, 20).map(page => {
+  return pages.filter(page => page && page.title).slice(0, MAX_PAGES).map(page => {
     const source = byId.get(page.sourceId) || first;
     const support = (page.support || [])
       .map(item => ({ item, source: byId.get(item.sourceId) }))
@@ -637,7 +670,10 @@ export function cleanOutline(pages, sources) {
       .map(({ item, source: other }) => ({ sourceId: other.id, ...window(other, item.fromSec, item.toSec), sections: pickSections(other, item.sections) }));
     return {
       title: String(page.title).slice(0, 120),
-      subtopics: (page.subtopics || []).map(String).slice(0, 8),
+      part: String(page.part || '').trim().slice(0, 80),
+      covers: askNumbers(page.covers, askCount),
+      outcomes: (page.outcomes || []).map(item => String(item).trim().slice(0, 200)).filter(Boolean).slice(0, 3),
+      subtopics: (page.subtopics || []).map(String).slice(0, 12),
       sourceId: source.id,
       ...window(source, page.fromSec, page.toSec),
       sections: pickSections(source, page.sections),

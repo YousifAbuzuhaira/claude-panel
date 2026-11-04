@@ -15,10 +15,28 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32, deflateRawSync } from 'node:zlib';
+import { askNumbers, cleanAsks, picksCovering, uncovered } from '../coverage.mjs';
 import { markdownToBlocks, parseInline } from '../markdown.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { normalizeSettings, toWslPath } from '../settings.mjs';
 import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
+
+describe('what you asked for', () => {
+  test('asks are trimmed, once each, and only real numbers count', () => {
+    assert.deepEqual(cleanAsks(['  Docker ', 'docker', '', null, 'Kubernetes\n basics']), ['Docker', 'Kubernetes basics']);
+    assert.deepEqual(cleanAsks('nope'), []);
+    assert.deepEqual(askNumbers([0, '1', 1, 7, -1, 'x'], 3), [0, 1]);
+  });
+  test('an ask with no source or page is named', () => {
+    assert.deepEqual(uncovered(['a', 'b', 'c'], [{ covers: [0] }, { covers: [2] }, {}]), ['b']);
+    assert.deepEqual(uncovered([], [{ covers: [] }]), []);
+  });
+  test('picks grow until every ask has a source, when one exists', () => {
+    const candidates = [{ id: 's1', covers: [0] }, { id: 's2', covers: [1] }, { id: 's3', covers: [1, 2] }];
+    assert.deepEqual(picksCovering(candidates, ['a', 'b', 'c'], ['s1']), ['s1', 's2', 's3']);
+    assert.deepEqual(picksCovering(candidates, ['a', 'b', 'c', 'nothing has this'], ['s1', 's3']), ['s1', 's3']);
+  });
+});
 
 describe('markdown', () => {
   test('headings, paragraphs, fenced code with its language, quotes, rules, tables', () => {

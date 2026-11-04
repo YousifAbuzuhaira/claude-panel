@@ -61,7 +61,7 @@ function offerButton(ids) {
   return button;
 }
 
-function buildButton(build) {
+function buildButton(build, label = null) {
   let started = false;
   const button = h('button.chat-button.build', {
     type: 'button',
@@ -71,16 +71,19 @@ function buildButton(build) {
         return;
       }
       button.disabled = true;
-      const job = await startBuild(build.topic, build.category || 'General', 'pick');
+      const job = await startBuild(build.topic, build.category || 'General', 'auto');
       button.disabled = false;
       if (!job) return;
       started = true;
-      button.textContent = `Building: ${build.topic}. Open the Library to pick its sources.`;
+      button.textContent = `Building: ${build.topic}. Follow it in the Library.`;
       button.classList.add('done');
     },
-  }, `Build this: ${build.topic}  (${build.category || 'General'})`);
+  }, label || `Build: ${build.topic}  (${build.category || 'General'})`);
   return button;
 }
+
+/** Several suggestions: everything in them, as one course. */
+const buildAllButton = builds => buildButton({ topic: builds.map(build => build.topic).join('; '), category: builds[0].category }, 'Build all as one course');
 
 function messageSection(message) {
   if (message.role === 'user') {
@@ -89,7 +92,9 @@ function messageSection(message) {
   const body = message.blocks ? renderBlocks(message.blocks) : [h('p', null, String(message.text || ''))];
   const buttons = [];
   if ((message.offers || []).length) buttons.push(offerButton(message.offers));
-  for (const build of message.builds || []) if (build && build.topic) buttons.push(buildButton(build));
+  const builds = (message.builds || []).filter(build => build && build.topic);
+  for (const build of builds) buttons.push(buildButton(build));
+  if (builds.length > 1) buttons.push(buildAllButton(builds));
   return h('section.msg.claude', null, h('div.who', null, 'Claude'), h('div.msg-body.prose', null, body), buttons.length ? h('div.msg-buttons', null, buttons) : null);
 }
 

@@ -92,6 +92,61 @@ function fakeIo({ pageFails = 0, brief = 'some' } = {}) {
   };
 }
 
+describe('everything you asked for', () => {
+  test('a named thing with no source gets a second search; one with no page, a second plan', async () => {
+    const lib = openLibrary();
+    const job = createJob(lib, { topic: 'Docker and Kubernetes', category: 'DevOps' });
+    assert.equal(job.mode, 'auto', 'a build goes straight through unless you ask to pick');
+    const { io } = fakeIo();
+    const prompts = { research: [], outline: [] };
+    const real = io.askStructured;
+    io.askStructured = async request => {
+      const answer = await real(request);
+      if (request.schema.properties.candidates) {
+        prompts.research.push(request.prompt);
+        const second = prompts.research.length > 1;
+        return {
+          ...answer,
+          asks: ['Docker', 'Kubernetes'],
+          candidates: second
+            ? [{ ...answer.candidates[1], url: 'https://docs.example/k8s', covers: [1], recommended: true }]
+            : answer.candidates.map(candidate => ({ ...candidate, covers: [0] })),
+        };
+      }
+      if (request.schema.properties.pages) {
+        prompts.outline.push(request.prompt);
+        return { ...answer, pages: answer.pages.map((page, index) => ({ ...page, part: 'Basics', outcomes: ['Trace it'], covers: prompts.outline.length > 1 && index === 2 ? [1] : [0] })) };
+      }
+      return answer;
+    };
+    await runJob(lib, job.id, io);
+    const done = readJob(lib, job.id);
+    assert.equal(prompts.research.length, 2);
+    assert.ok(prompts.research[1].includes('found nothing good for: Kubernetes'));
+    assert.equal(prompts.outline.length, 2);
+    assert.ok(prompts.outline[1].includes('no page for: Kubernetes'));
+    const course = readCourse(lib, done.courseId);
+    assert.deepEqual(course.asks, ['Docker', 'Kubernetes']);
+    assert.deepEqual(course.notCovered, []);
+    assert.equal(course.pages[0].part, 'Basics');
+    assert.deepEqual(course.pages[2].outcomes, ['Trace it']);
+  });
+  test('what still has no page shows on the course', async () => {
+    const lib = openLibrary();
+    const job = createJob(lib, { topic: 'Docker and Rust', category: 'DevOps' });
+    const { io } = fakeIo();
+    const real = io.askStructured;
+    io.askStructured = async request => {
+      const answer = await real(request);
+      if (request.schema.properties.candidates) return { ...answer, asks: ['Docker', 'Rust'], candidates: answer.candidates.map(candidate => ({ ...candidate, covers: [0, 1] })) };
+      if (request.schema.properties.pages) return { ...answer, pages: answer.pages.map(page => ({ ...page, covers: [0] })) };
+      return answer;
+    };
+    await runJob(lib, job.id, io);
+    assert.deepEqual(readCourse(lib, readJob(lib, job.id).courseId).notCovered, ['Rust']);
+  });
+});
+
 describe('a build, start to finish', () => {
   test('auto mode: research, fetch, outline, pages, with ids, links and checks in place', async () => {
     const lib = openLibrary();
