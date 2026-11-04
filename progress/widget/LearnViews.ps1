@@ -44,6 +44,9 @@ $script:tidy = $null
 $script:settings = $null
 $script:lastLibraryAt = [DateTime]::MinValue
 $script:lastCourseAt = [DateTime]::MinValue
+$script:lastVideoAt = [DateTime]::MinValue
+$script:pageVideo = $null
+$script:videoPanel = $null
 $script:scrollSeen = -1.0
 $script:scrollSavedAt = [DateTime]::MinValue
 $script:scrollSaved = -1.0
@@ -1662,6 +1665,7 @@ function Show-Page {
 
   $script:pageGlossary = @($result.glossary)
   $script:drawCheck = { param($Block, $Size) New-PageCheck $Block $Size }
+  Add-VideoRow $doc $result.video $size
   Add-PageIntro $doc $page $size
   Add-Blocks $doc.Blocks $page.blocks $size
   $script:drawCheck = $null
@@ -1677,6 +1681,93 @@ function Show-Page {
 }
 
 # What the page sets out to do, and the words to have before you start.
+# The page's video, above its text. This window has no web engine, so a video opens in a window
+# of its own beside this one.
+function Add-VideoRow($Doc, $Video, [double]$Size) {
+  $script:pageVideo = $Video
+  $script:videoPanel = $null
+  if (-not $Video) { return }
+  $script:videoPanel = New-Object System.Windows.Controls.WrapPanel
+  $holder = New-Object System.Windows.Documents.BlockUIContainer($script:videoPanel)
+  $holder.Margin = New-Gap 0 0 0 ($Size * 0.6)
+  [void]$Doc.Blocks.Add($holder)
+  Show-VideoRow
+}
+
+function Open-PageVideo {
+  $course = [string]$script:courseId
+  if ($course -notmatch '^[\w.-]{1,160}$') { return }
+  Open-InBrowser 'learn/video' "--course $course --page $([int]$script:pageNumber)" -AppWindow
+}
+
+function Add-VideoLink([string]$Text, [scriptblock]$Action) {
+  $press = New-Pressable $Text $null $blue
+  $press.Margin = New-Gap 0 0 10 0
+  Set-Click $press $Action
+  [void]$script:videoPanel.Children.Add($press)
+}
+
+function Add-VideoNote([string]$Text) {
+  $note = New-Text $Text $dim
+  $note.Padding = New-Gap 4 2 10 2
+  $note.TextWrapping = 'Wrap'
+  [void]$script:videoPanel.Children.Add($note)
+}
+
+function Show-VideoRow {
+  $video = $script:pageVideo
+  if (-not $script:videoPanel -or -not $video) { return }
+  $script:videoPanel.Children.Clear()
+  $state = [string]$video.state
+  $minutes = if ($video.minutes) { " $GLYPH_DOT $([Math]::Round([double]$video.minutes)) min" } else { '' }
+  $watch = "$GLYPH_PLAY Watch this page$minutes"
+  $make = {
+    param($Data, $Sender)
+    $video = $script:pageVideo
+    $setup = if ($video.voice.needsSetup) { ", plus a $([int]$video.voice.setupMb) MB one-time download" } else { '' }
+    if (-not (Test-ArmedHere $Sender "video:$($script:courseId):$($script:pageNumber)" "About $([int]$video.estimate.recordingMinutes) min to make$setup. Click to start")) { return }
+    Invoke-Helper 'video.queue' @{ courseId = $script:courseId; n = [int]$script:pageNumber } {
+      param($Result, $Context)
+      Show-Toast 'Making the video in the background. You can keep working.'
+      Update-PageVideo
+    }
+  }
+  if ($video.voice.reason -and $state -ne 'ready') { Add-VideoNote ([string]$video.voice.reason); return }
+  switch ($state) {
+    'ready' { Add-VideoLink $watch { Open-PageVideo } }
+    'stale' {
+      Add-VideoLink $watch { Open-PageVideo }
+      Add-VideoNote 'This page changed since the video was made.'
+      Add-VideoLink 'Update the video' $make
+    }
+    'making' { Add-VideoNote "Making this video: $(if ($video.message) { [string]$video.message } else { 'starting' })" }
+    'queued' { Add-VideoNote 'Waiting for its turn to be made' }
+    'old' {
+      Add-VideoLink 'Update this course first' {
+        param($Data, $Sender)
+        if (-not (Test-ArmedHere $Sender "update:$($script:courseId)" 'Build it again? click to confirm')) { return }
+        Invoke-Helper 'course.refresh' @{ id = $script:courseId } {
+          param($Result, $Context)
+          Show-Toast 'Building the new version. This one stays until you remove it.'
+          Show-View 'library'
+        }
+      }
+      $script:videoPanel.Children[0].ToolTip = "A video asks this page's quick questions, and this older page has none."
+    }
+    default { Add-VideoLink 'Make a video of this page' $make }
+  }
+}
+
+function Update-PageVideo {
+  if (-not $script:pageData -or -not $script:videoPanel) { return }
+  Invoke-Helper 'video.page' @{ courseId = $script:courseId; n = [int]$script:pageNumber } {
+    param($Result, $Context)
+    if (-not $Result -or $Context -ne $script:pageNumber) { return }
+    $script:pageVideo = $Result
+    Show-VideoRow
+  } $script:pageNumber
+}
+
 function Add-PageIntro($Doc, $Page, [double]$Size) {
   $outcomes = @($Page.outcomes | Where-Object { $_ })
   $terms = @($Page.terms | Where-Object { $_.key } | Select-Object -First 6)
@@ -3557,6 +3648,11 @@ function Update-TextSize {
 
 function Update-FromStatus {
   $build = if ($script:status) { $script:status.build } else { $null }
+  # A video being made for the page on screen: its row follows, at most every 3 s.
+  if ($script:view -eq 'course' -and $script:pageVideo -and @('making', 'queued') -contains [string]$script:pageVideo.state -and ([DateTime]::UtcNow - $script:lastVideoAt).TotalSeconds -gt 3) {
+    $script:lastVideoAt = [DateTime]::UtcNow
+    Update-PageVideo
+  }
   if ($script:view -eq 'library' -and ([DateTime]::UtcNow - $script:lastLibraryAt).TotalSeconds -gt 2) { Update-Library }
   # While a build runs on the open course, its contents refresh at most every 3 s; its last word always lands.
   $isDue = $build -and ([string]$build.state -ne 'running' -or ([DateTime]::UtcNow - $script:lastCourseAt).TotalSeconds -gt 3)

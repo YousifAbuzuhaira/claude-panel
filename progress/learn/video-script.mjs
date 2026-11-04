@@ -2,7 +2,7 @@
 // is tested as the player would draw it, repaired, or rebuilt from the page. Then someone who only
 // watches answers the questions, and a check compares the script with the page, both ways.
 import { READER_SCHEMA, readerPrompt } from './prompts.mjs';
-import { faultsBySection, flattenPage, hearing, plainScenes, testSection, tidyPronounce } from './video-check.mjs';
+import { faultsBySection, flattenPage, hearing, plainScenes, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
 
 const SECTIONS_AT_ONCE = 4;
 const REPAIRS = 2;
@@ -114,7 +114,7 @@ function claimRequest(page, { blocks }, heard) {
   return [
     'Below are a page of a course and the script of a video made from it. Compare them, both ways. Use no outside knowledge to correct either text: only compare them.',
     '',
-    '1. In "added", list every claim in the script that the page does not support: a fact, number, example or comparison missing from the page or saying something different. Do not list rewording, plain-language restatements, or values that follow directly from the page (such as the bits of a byte). Plain meanings of words taken from the glossary are fine. Give the section named in [brackets] in the heading it sits under.',
+    '1. In "added", list every claim in the script that the page does not support: a fact, number, example or comparison missing from the page or saying something different. Do not list rewording, plain-language restatements, or values that follow directly from the page (such as the bits of a byte). The plain meaning of a word the page uses, such as what a tokenizer does, is not a claim. Give the section named in [brackets] in the heading it sits under.',
     '2. In "dropped", list every fact, step, number, warning or example on the page that someone who only watched would not learn. Give its block number. Do not list source marks or differences of wording. A code block, table or diagram shown in full on screen counts as taught.',
     'A block marked "disputed" corrects the one before it: the script should follow the correction.',
     '',
@@ -157,6 +157,7 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
   const rebuilt = new Set();
   const firstProblems = {};
   const whyRebuilt = {};
+  const readOut = [];
   const rebuild = (section, problems) => {
     rebuilt.add(section);
     whyRebuilt[section] = problems.slice(0, 8);
@@ -201,7 +202,15 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
     onStep('checking it against the page again');
     checked = await review();
     // A second miss isn't worth a third try: the page's own words can't be wrong about the page.
-    for (const [section, problems] of checked.faults) rebuild(section, problems);
+    // Something wrong takes the section's scenes with it. Something only left out doesn't: that
+    // block is read out where it belongs, so one small gap costs a section none of its motion.
+    const { added = [], dropped = [] } = checked.claims;
+    for (const [section, problems] of faultsBySection({ claims: { added }, reading: checked.reading, blocks, quiz, sections }, rebuilt)) rebuild(section, problems);
+    for (const block of dropped.map(item => blocks.find(other => other.n === item.block)).filter(block => block && !rebuilt.has(block.section))) {
+      const kept = written.get(block.section);
+      written.set(block.section, { ...kept, scenes: withBlockRead(kept.scenes, block) });
+      readOut.push(block.n);
+    }
   }
   const scenes = allScenes();
   const teaching = scenes.filter(scene => !scene.check);
@@ -227,6 +236,7 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
       sections: sections.length,
       rebuilt: [...rebuilt],
       whyRebuilt,
+      readOut,
       firstProblems,
       firstClaims,
       claimsLeft: { added: checked.claims.added || [], dropped: checked.claims.dropped || [] },

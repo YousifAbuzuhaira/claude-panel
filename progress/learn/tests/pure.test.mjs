@@ -22,7 +22,7 @@ import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
 import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, tidyDisputes } from '../verify.mjs';
 import { voicePlatform } from '../voice.mjs';
-import { estimate, faultsBySection, flattenPage, hearing, isOldPage, plainScenes, simulate, testSection, tidyPronounce, videoStamp } from '../video-check.mjs';
+import { estimate, faultsBySection, flattenPage, hearing, isOldPage, plainScenes, simulate, testSection, tidyPronounce, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
@@ -1031,6 +1031,16 @@ describe('a page as a video', () => {
     const wrong = material.quiz[0].options.findIndex(option => !option.right);
     const faults = faultsBySection({ ...material, claims: {}, reading: { answers: [{ id: 'q1', choice: wrong }] } });
     assert.match(faults.get('Greedy (2)')[0], /could not answer/);
+  });
+
+  test('a block the scenes dropped is read out right after what came before it', () => {
+    const material = flattenPage(page);
+    const block = material.blocks[1];
+    const scenes = [{ title: 'Before', covers: [0] }, { title: 'After', covers: [5] }];
+    const read = withBlockRead(scenes, block);
+    assert.deepEqual(read.map(scene => scene.title), ['Before', 'Before', 'After']);
+    assert.deepEqual(read[1].covers, [block.n]);
+    assert.equal(scenes.length, 2);
   });
 
   test('a pronunciation stays only for a word really said', () => {

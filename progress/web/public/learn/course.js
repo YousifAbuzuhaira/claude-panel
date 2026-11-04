@@ -1,5 +1,6 @@
 // Course: contents (left), the page (middle), its chat (right), and the overlap screen.
-import { token } from '../shared/api.js';
+import { openWindow, rpc, token, withToken } from '../shared/api.js';
+import { isNative } from '../shared/look.js';
 import { renderBlocks } from './blocks.js';
 import { doneListeners, chatHooks, chatPanel, fillInput, forgetChat, pageKey, redrawIdle, showChat } from './chat.js';
 import { renderCheck } from './checks.js';
@@ -44,6 +45,7 @@ export function buildCourseView(host) {
   const pageTitle = h('h1.page-title');
   const sourceLine = h('div.source-line');
   const conceptChips = h('div.chips.concept-chips');
+  const videoSlot = h('div.video-slot');
   const body = h('div.page-body.prose');
   const checks = h('div.checks');
   const prev = action(`${GLYPH.left} Previous`, () => stepPage(-1), 'dim');
@@ -52,7 +54,7 @@ export function buildCourseView(host) {
   next.title = 'The next page (Right arrow)';
   const skip = action('Skip this page', toggleSkip, 'faint');
   const pageNav = h('nav.page-nav', null, prev, skip, next);
-  const article = h('article.page', null, h('div.col-head', null, pageCount, h('span.col-tools', null, overlapLink, showLink)), pageTitle, sourceLine, conceptChips, body, checks, pageNav);
+  const article = h('article.page', null, h('div.col-head', null, pageCount, h('span.col-tools', null, overlapLink, showLink)), pageTitle, sourceLine, videoSlot, conceptChips, body, checks, pageNav);
   const overlap = h('section.overlap', { hidden: true });
   const pageScroll = h('div.page-scroll', null, article, overlap);
   pageScroll.addEventListener('scroll', onScroll, { passive: true });
@@ -66,7 +68,7 @@ export function buildCourseView(host) {
   const chatColumn = h('aside.chat-column', { 'aria-label': 'Chat' }, chat.root);
   const grid = h('div.course-grid', null, contents, h('main.page-column', null, pageScroll), chatColumn);
   host.append(grid);
-  ui = { grid, contents, courseTitle, courseMeta, courseGap, updateLink, pageList, pageCount, showLink, pageTitle, sourceLine, conceptChips, body, checks, prev, next, skip, article, overlap, pageScroll };
+  ui = { grid, contents, courseTitle, courseMeta, courseGap, updateLink, pageList, pageCount, showLink, pageTitle, sourceLine, videoRow: videoSlot, conceptChips, body, checks, prev, next, skip, article, overlap, pageScroll };
   setContentsShown(S.showContents, false);
 
   chatHooks.learn = setConceptLearned;
@@ -455,6 +457,68 @@ function pageIntro(page) {
     terms.length ? [h('h2.intro-title', null, 'Key terms'), h('dl.intro-terms', null, terms.flatMap(item => [h('dt', null, item.term), h('dd', null, item.def)]))] : null)];
 }
 
+// --- The page's video -----------------------------------------------------------------------
+
+async function openVideo() {
+  if (isNative() && await openWindow('learn/video', { course: S.courseId, n: S.pageN })) return;
+  window.open(withToken(`video/?course=${encodeURIComponent(S.courseId)}&page=${S.pageN}`), 'learn-video', 'popup,width=1180,height=760');
+}
+
+async function makeVideo(event, video) {
+  const setup = video.voice?.needsSetup ? `, plus a ${video.voice.setupMb} MB one-time download` : '';
+  if (!armed(`video:${S.courseId}:${S.pageN}`, event.currentTarget, `About ${video.estimate.recordingMinutes} min to make${setup}. Click to start`)) return;
+  if ((await act('video.queue', { courseId: S.courseId, n: S.pageN })) === undefined) return;
+  toast('Making the video in the background. You can keep working.');
+  refreshVideo();
+}
+
+/** Under the page's title: watch it, make it, or what it's waiting for. */
+function videoRow(video) {
+  if (!video) return null;
+  const row = h('div.video-row');
+  const minutes = video.minutes ? ` ${GLYPH.dot} ${Math.round(video.minutes)} min` : '';
+  const watch = () => action(`${GLYPH.play} Watch this page${minutes}`, openVideo, 'blue');
+  const make = text => action(text, event => makeVideo(event, video), 'blue');
+  if (video.voice?.reason && video.state !== 'ready') row.append(h('span.dim', null, video.voice.reason));
+  else if (video.state === 'ready') row.append(watch());
+  else if (video.state === 'stale') row.append(watch(), h('span.dim', null, 'This page changed since the video was made.'), make('Update the video'));
+  else if (video.state === 'making') row.append(h('span.dim', null, `Making this video: ${video.message || 'starting'}`));
+  else if (video.state === 'queued') row.append(h('span.dim', null, 'Waiting for its turn to be made'));
+  else if (video.state === 'old') {
+    const update = action('Update this course first', updateCourse, 'blue');
+    update.title = 'A video asks this page\'s quick questions, and this older page has none.';
+    row.append(update);
+  } else row.append(make('Make a video of this page'));
+  return row;
+}
+
+function showVideoRow() {
+  ui.videoRow.replaceChildren(...[videoRow(S.pageData?.video)].filter(Boolean));
+}
+
+let videoAsked = 0;
+
+/** The job's progress reached the page: this page's row follows it. */
+async function refreshVideo() {
+  if (!S.pageData?.page) return;
+  const asked = ++videoAsked;
+  const [courseId, n] = [S.courseId, S.pageN];
+  const video = await rpc('video.page', { courseId, n }).catch(() => null);
+  if (asked !== videoAsked || !video || courseId !== S.courseId || n !== S.pageN || !S.pageData) return;
+  S.pageData.video = video;
+  showVideoRow();
+}
+
+let videoShownAt = 0;
+
+export function videoProgress() {
+  const state = S.pageData?.video?.state;
+  if (state !== 'making' && state !== 'queued') return;
+  if (Date.now() - videoShownAt < 3000) return;
+  videoShownAt = Date.now();
+  refreshVideo();
+}
+
 function showClosing() {
   ui.checks.replaceChildren();
   const page = S.pageData?.page;
@@ -496,6 +560,7 @@ function showPage() {
   ui.sourceLine.replaceChildren();
   ui.conceptChips.replaceChildren();
   ui.checks.replaceChildren();
+  showVideoRow();
   const key = pageKey(S.courseId, S.pageN);
   if (!result.page) {
     ui.body.replaceChildren(h('p.dim.waiting', null, 'This page is still being written. The build carries on in the background; it shows here when it is done.'));

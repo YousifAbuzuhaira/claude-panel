@@ -257,6 +257,14 @@ export function plainScenes(section, { blocks, assets, quiz }) {
   return scenes;
 }
 
+/** One block the scenes dropped, read out word for word right after what they did teach. */
+export function withBlockRead(scenes, block) {
+  const out = [...scenes];
+  const last = out.findLastIndex(scene => (scene.covers || []).some(n => n <= block.n));
+  out.splice(last + 1, 0, proseScene(block, scenes[last]?.title || block.section));
+  return out;
+}
+
 // --- What someone watching takes in ----------------------------------------------------------
 
 function onScreen(o, assets) {

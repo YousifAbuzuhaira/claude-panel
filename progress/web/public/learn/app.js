@@ -5,7 +5,7 @@ import { isNative, watchAppearance } from '../shared/look.js';
 import { buildAskView, openAdvisor } from './ask.js';
 import { chatEvent, forgetChats } from './chat.js';
 import { GLYPH, MAX_SCALE, MIN_SCALE, S, VIEW_NAMES, banner, call, loadPrefs, nav, savePrefs, short, toast } from './core.js';
-import { buildCourseView, courseStatus, openCourse, openOverlap, overlapOpen, saveProgress, showOverlap, stepPage } from './course.js';
+import { buildCourseView, courseStatus, openCourse, openOverlap, overlapOpen, saveProgress, showOverlap, stepPage, videoProgress } from './course.js';
 import { buildLearnedView, leaveLearnedModes, refreshLearned, resetLearned } from './learned.js';
 import { buildLibraryView, libraryDue, refreshLibrary, resetLibraryModes } from './library.js';
 import { buildReviewView, refreshReview } from './review.js';
@@ -134,6 +134,7 @@ function onEvent(event) {
       if (S.view === 'library' && libraryDue()) refreshLibrary();
       if (S.view === 'settings') settingsStatus();
       courseStatus(event.status?.build);
+      videoProgress();
       break;
     case 'chat.delta':
     case 'chat.tool':

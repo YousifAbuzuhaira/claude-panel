@@ -584,7 +584,23 @@ function Open-Sibling([string]$Id, [int64]$OwnerHwnd, [string]$SessionId, [strin
 # start the browser fails when the wsl.exe it ran in ends at once, as it does here.) A timer waits
 # for the answer, so the window never blocks. These windows run from \\wsl.localhost\<distro>\...
 # \widget, which names the distro and the path. Each attempt is noted in %TEMP%\claude-panel-browser.log.
-function Open-InBrowser([string]$Page = 'learn') {
+# A one-time link for this machine's browser. An app window is Edge with no tabs or address bar:
+# every Windows has it, and it sits beside the Learn window. Any other way, the default browser.
+function Start-LaunchLink([string]$Link, [bool]$AppWindow) {
+  if ($AppWindow) {
+    foreach ($root in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+      if (-not $root) { continue }
+      $edge = Join-Path $root 'Microsoft\Edge\Application\msedge.exe'
+      if (Test-Path -LiteralPath $edge) {
+        [void][System.Diagnostics.Process]::Start($edge, "--app=$Link")
+        return
+      }
+    }
+  }
+  [void][System.Diagnostics.Process]::Start($Link)
+}
+
+function Open-InBrowser([string]$Page = 'learn', [string]$Extra = '', [switch]$AppWindow) {
   try {
     $match = [regex]::Match([string]$PSScriptRoot, '^\\\\wsl(?:\.localhost|\$)\\([^\\]+)(\\.*)$', 'IgnoreCase')
     if (-not $match.Success) { Write-UiBrowserLog "not run from WSL ($PSScriptRoot)"; return }
@@ -592,7 +608,7 @@ function Open-InBrowser([string]$Page = 'learn') {
     $webScript = ($match.Groups[2].Value -replace '\\', '/') -replace '/widget$', '/web/web.sh'
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = 'wsl.exe'
-    $start.Arguments = "-d $distro -e env CLAUDE_PANEL_LAUNCH=1 bash `"$webScript`" open $Page"
+    $start.Arguments = "-d $distro -e env CLAUDE_PANEL_LAUNCH=1 bash `"$webScript`" open $Page $Extra"
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
@@ -601,7 +617,7 @@ function Open-InBrowser([string]$Page = 'learn') {
     Write-UiBrowserLog "asked WSL for $Page (pid $($child.Id))"
     $wait = New-Object System.Windows.Threading.DispatcherTimer
     $wait.Interval = [TimeSpan]::FromMilliseconds(200)
-    $wait.Tag = @{ child = $child; until = [DateTime]::UtcNow.AddSeconds(30) }
+    $wait.Tag = @{ child = $child; until = [DateTime]::UtcNow.AddSeconds(30); app = [bool]$AppWindow }
     $wait.Add_Tick({
       param($sender, $e)
       $state = $sender.Tag
@@ -612,7 +628,7 @@ function Open-InBrowser([string]$Page = 'learn') {
         $lines = @($state.child.StandardOutput.ReadToEnd() -split "`n" | Where-Object { $_.Trim() })
         $answer = if ($lines.Count) { $lines[$lines.Count - 1] | ConvertFrom-Json } else { $null }
         if ($answer -and $answer.ok -and $answer.launch -match '^http://127\.0\.0\.1:\d+/launch/[0-9a-f]+$') {
-          [void][System.Diagnostics.Process]::Start([string]$answer.launch)
+          Start-LaunchLink ([string]$answer.launch) ([bool]$state.app)
           Write-UiBrowserLog "opened $($answer.url)"
         } else {
           Write-UiBrowserLog ("no link from WSL: " + ($lines -join ' | '))

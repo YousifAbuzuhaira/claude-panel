@@ -17,12 +17,13 @@ const { listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCo
 const { addConcept, ensureCategory, setPassed } = await import('../catalogue.mjs');
 const { createServer } = await import('../serve.mjs');
 const { withLock, writeJson, readJson } = await import('../store.mjs');
+const { clearQueue, courseVideos, makeVideos, queueVideos, readQueue, videoInfo } = await import('../video.mjs');
 const { readDocument } = await import('../documents.mjs');
 
 const CHUNKS = Array.from({ length: 60 }, (_, i) => ({ t: i * 30, text: `part ${i} about volumes` }));
 
 /** Stand-ins for everything a build reaches out to. `answers` maps a schema to Claude's answer. */
-function fakeIo({ pageFails = 0, brief = 'some' } = {}) {
+function fakeIo({ pageFails = 0, brief = 'some', disputes = [] } = {}) {
   const calls = { pages: 0, prompts: [] };
   let failuresLeft = pageFails;
   return {
@@ -42,6 +43,7 @@ function fakeIo({ pageFails = 0, brief = 'some' } = {}) {
       askStructured: async ({ prompt, schema, tools }) => {
         calls.prompts.push(prompt);
         calls.tools = [...(calls.tools || []), tools];
+        if (schema.properties.disputes) return { disputes };
         if (schema.properties.found) {
           if (brief === 'nothing') return { found: false, courseTitle: 'x', summary: 'The chat is about something else.', category: 'x', sections: [] };
           return {
@@ -590,5 +592,139 @@ describe('a course from a Claude chat', () => {
     const lib = openLibrary();
     assert.throws(() => createJob(lib, { chat: '../etc', focus: 'x' }), /not a chat id/);
     assert.throws(() => createJob(lib, { chat: chatId, focus: '  ' }), /what the course should cover/);
+  });
+});
+
+describe('videos', () => {
+  const quiet = { state: 'running' };
+  const videoAsk = { askStructured: async ({ schema }) => (schema.properties.scenes ? { scenes: [], pronounce: [] } : schema.properties.answers ? { answers: [], closing: [], unknown: [], missing: [] } : { added: [], dropped: [] }) };
+  /** A recording that writes what narrate.py writes. */
+  const recording = (during = () => {}) => async ({ scriptFile, out }) => {
+    during();
+    const script = readJson(scriptFile);
+    writeFileSync(`${out}.mp3`, 'sound');
+    writeJson(`${out}.json`, { ...script, audio: { mainEnd: 120, extras: {}, voice: 'v', seconds: 130 }, words: [] });
+    return { done: true };
+  };
+  const pageOf = (n, extra = {}) => ({ v: 1, n, title: `Page ${n}`, concepts: [], source: {}, support: [], markdown: `Words of page ${n}.`, blocks: [{ t: 'p', inlines: [{ s: `Words of page ${n}.` }] }], terms: [], checks: [], outcomes: [], stats: {}, ...extra });
+  function courseWith(name, pages) {
+    const lib = openLibrary();
+    writeJson(lib.paths.course(name), { v: 1, id: name, title: name, category: 'general', status: 'ready', sources: [], pages: pages.map(n => ({ n, title: `Page ${n}`, status: 'written', concepts: [] })), read: [], skipped: [] });
+    for (const n of pages) writeJson(lib.paths.page(name, n), pageOf(n));
+    return lib;
+  }
+  const run = (lib, record) => makeVideos({ lib, io: { ...videoAsk, record }, save: () => {}, isStopping: () => false });
+
+  test('a page asked for goes first, and a page already waiting moves rather than repeats', () => {
+    const lib = courseWith('queue-a', [1, 2, 3]);
+    queueVideos(lib, 'queue-a', [1, 2, 3]);
+    const queue = queueVideos(lib, 'queue-a', [3], { first: true });
+    assert.deepEqual(queue.map(item => item.n), [3, 1, 2]);
+    clearQueue(lib);
+  });
+
+  test('videos are made down the queue, and their files appear together', async () => {
+    const lib = courseWith('queue-b', [1, 2]);
+    queueVideos(lib, 'queue-b', [1, 2]);
+    assert.equal(await run(lib, recording()), 2);
+    assert.deepEqual(readQueue(lib), []);
+    const base = lib.paths.videoBase('queue-b', 2);
+    assert.ok(existsSync(`${base}.mp3`) && existsSync(`${base}.json`) && existsSync(`${base}.meta.json`));
+    assert.ok(!existsSync(`${base}.script.json`));
+    assert.equal(videoInfo(lib, 'queue-b', pageOf(2)).state, 'ready');
+    assert.equal(videoInfo(lib, 'queue-b', pageOf(2)).minutes, 2);
+  });
+
+  test('a page that changes keeps its video, marked out of date, and nothing remakes it', async () => {
+    const lib = courseWith('queue-c', [1]);
+    queueVideos(lib, 'queue-c', [1]);
+    await run(lib, recording());
+    const changed = pageOf(1, { markdown: 'New words.' });
+    writeJson(lib.paths.page('queue-c', 1), changed);
+    assert.equal(videoInfo(lib, 'queue-c', changed).state, 'stale');
+    assert.deepEqual(readQueue(lib), []);
+  });
+
+  test('a page changed during its recording is not saved as its video', async () => {
+    const lib = courseWith('queue-d', [1]);
+    queueVideos(lib, 'queue-d', [1]);
+    const made = await run(lib, recording(() => writeJson(lib.paths.page('queue-d', 1), pageOf(1, { markdown: 'Changed meanwhile.' }))));
+    assert.equal(made, 0);
+    assert.ok(!existsSync(`${lib.paths.videoBase('queue-d', 1)}.mp3`));
+    assert.deepEqual(readQueue(lib), []);
+  });
+
+  test('a stop keeps the script, so going on asks Claude nothing again', async () => {
+    const lib = courseWith('queue-e', [1]);
+    queueVideos(lib, 'queue-e', [1]);
+    await assert.rejects(run(lib, async () => { throw new Error('stopped'); }), /stopped/);
+    assert.ok(existsSync(`${lib.paths.videoBase('queue-e', 1)}.script.json`));
+    let asked = 0;
+    const counting = { askStructured: async options => { asked++; return videoAsk.askStructured(options); } };
+    await makeVideos({ lib, io: { ...counting, record: recording() }, save: () => {}, isStopping: () => false });
+    assert.equal(asked, 0);
+  });
+
+  test('a page or course gone from the queue is passed over', async () => {
+    const lib = courseWith('queue-f', [1]);
+    queueVideos(lib, 'queue-f', [1, 9]);
+    queueVideos(lib, 'queue-nowhere', [1]);
+    assert.equal(await run(lib, recording()), 1);
+    assert.deepEqual(readQueue(lib), []);
+  });
+
+  test('a page says what state its video is in', () => {
+    const lib = courseWith('queue-g', [1, 2, 3]);
+    assert.equal(videoInfo(lib, 'queue-g', pageOf(1)).state, 'none');
+    assert.equal(videoInfo(lib, 'queue-g', pageOf(2, { stats: undefined })).state, 'old');
+    queueVideos(lib, 'queue-g', [3]);
+    assert.equal(videoInfo(lib, 'queue-g', pageOf(3)).state, 'queued');
+    assert.equal(videoInfo(lib, 'queue-g', pageOf(3), { job: { ...quiet, current: { courseId: 'queue-g', n: 3 }, message: 'recording' } }).state, 'making');
+    clearQueue(lib);
+  });
+
+  test('a course counts what a press would make, and leaves old pages out', () => {
+    const lib = courseWith('queue-h', [1, 2]);
+    writeJson(lib.paths.page('queue-h', 2), pageOf(2, { stats: undefined }));
+    const videos = courseVideos(lib, readCourse(lib, 'queue-h'));
+    assert.deepEqual(videos.wanted, [1]);
+    assert.equal(videos.old, 1);
+    assert.equal(videos.total, 2);
+  });
+
+  test('removing a page removes its video', async () => {
+    const lib = courseWith('queue-i', [1, 2]);
+    queueVideos(lib, 'queue-i', [1]);
+    await run(lib, recording());
+    removePage(lib, 'queue-i', 1);
+    assert.ok(!existsSync(`${lib.paths.videoBase('queue-i', 1)}.mp3`));
+  });
+
+  test('a video job never locks a course: it has none', () => {
+    const lib = courseWith('queue-j', [1]);
+    writeJson(lib.paths.job('jvideo'), { id: 'jvideo', kind: 'video', courseId: null, state: 'running' });
+    assert.ok(createPageJob(lib, { courseId: 'queue-j', kind: 'page-rewrite', n: 1 }));
+    rmSync(lib.paths.job('jvideo'), { force: true });
+  });
+});
+
+describe('the fact-check in a build', () => {
+  test('a flag on a real passage draws its box and keeps the page\'s questions honest', async () => {
+    const { io } = fakeIo({ disputes: [{ quote: 'Volumes keep your data safe when a container is removed', problem: 'Not always.', correction: 'Only named ones.', evidence: 'https://elsewhere.example/x', checks: [] }] });
+    const lib = openLibrary();
+    const job = createJob(lib, { topic: 'Disputed volumes', category: 'Docker' });
+    await runJob(lib, job.id, io);
+    const saved = readJob(lib, job.id);
+    if (saved.state === 'waiting-picks') return;
+    const page = readPage(lib, saved.courseId, 1);
+    assert.ok(Array.isArray(page.disputes));
+  });
+
+  test('the check gets the web and nothing else', async () => {
+    const { io, calls } = fakeIo();
+    const lib = openLibrary();
+    const job = createJob(lib, { topic: 'Checked volumes', category: 'Docker', mode: 'auto' });
+    await runJob(lib, job.id, io);
+    assert.ok(calls.tools.some(tools => tools.join() === 'WebSearch,WebFetch'));
   });
 });

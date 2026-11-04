@@ -170,6 +170,8 @@ export function removePage(lib, courseId, n) {
     if (index < 0) throw new Error('no such page');
     if (course.pages.length === 1) throw new Error('this is the only page: remove the course instead');
     course.pages.splice(index, 1);
+    // Its video goes with it (learn/video.mjs names these files).
+    for (const end of ['.mp3', '.json', '.meta.json', '.script.json', '.new.mp3', '.new.json']) rmSync(`${lib.paths.videoBase(courseId, n)}${end}`, { force: true });
     course.read = (course.read || []).filter(other => other !== n);
     course.skipped = (course.skipped || []).filter(other => other !== n);
     if (course.overlap?.skippablePages) course.overlap.skippablePages = course.overlap.skippablePages.filter(other => other !== n);

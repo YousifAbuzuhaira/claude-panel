@@ -2,7 +2,7 @@
 // stdout. A request is `{ rid, cmd, ...args }`; the answer `{ rid, ok, result | error }`.
 // Events (`{ event, ... }`) carry chat text as it streams and the status as it changes.
 // Output is ASCII (everything else \u-escaped), so nothing is lost crossing to Windows.
-import { statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import {
   addConcept, compactCatalogue, conceptById, ensureCategory, findConcept, markSeen, mergeConcepts, moveConcept,
@@ -15,7 +15,10 @@ import { markTerms, pageGlossary } from './terms.mjs';
 import { shuffled } from './teach.mjs';
 import { askStructured, describeTool } from './claude.mjs';
 import { chatKey, clearChat, listAdvisorChats, readChat, removeAdvisorChat, sendChat } from './chat.mjs';
-import { cancelJob, createJob, createPageJob, createRefreshJob, dropJobFiles, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon } from './build.mjs';
+import { cancelJob, createJob, createPageJob, createRefreshJob, dropJobFiles, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon, startVideos, videoJob } from './build.mjs';
+import { videoStamp } from './video-check.mjs';
+import { clearQueue, courseVideos, queueVideos, videoInfo } from './video.mjs';
+import { voiceStatus } from './voice.mjs';
 import { ensureYtDlp, installedYtDlp } from './deps.mjs';
 import {
   courseSummary, listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCourse, readPage, readStatus, recordUsage,
@@ -154,7 +157,43 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
         const item = block.t === 'check' ? review.items[itemKey(courseId, Number(n), block.id)] : null;
         if (item && item.choice !== null) answers[block.id] = item.choice;
       }
-      return { page: { ...page, blocks }, glossary: used, answers, concepts, chat: chatView(readChat(lib, { courseId, n: Number(n) })), progress: saved.progress, total: course.pages.length, skipped: saved.skipped || [] };
+      return { page: { ...page, blocks }, video: videoInfo(lib, courseId, page, { job: videoJob(lib) }), glossary: used, answers, concepts, chat: chatView(readChat(lib, { courseId, n: Number(n) })), progress: saved.progress, total: course.pages.length, skipped: saved.skipped || [] };
+    },
+
+    // Videos. `n` given: that page goes next; left out: every page that needs one, in order.
+    'video.page': ({ courseId, n }) => {
+      const page = readPage(lib, courseId, Number(n));
+      return page ? videoInfo(lib, courseId, page, { job: videoJob(lib) }) : null;
+    },
+    'video.course': ({ courseId }) => {
+      const course = readCourse(lib, courseId);
+      if (!course) throw new Error('no such course');
+      return courseVideos(lib, course, { job: videoJob(lib) });
+    },
+    'video.queue': ({ courseId, n }) => {
+      const course = readCourse(lib, courseId);
+      if (!course) throw new Error('no such course');
+      const voice = voiceStatus();
+      const wanted = n === undefined ? courseVideos(lib, course).wanted : [Number(n)];
+      if (voice.reason) throw new Error(voice.reason);
+      if (!wanted.length) throw new Error('every page that can have a video has one');
+      queueVideos(lib, courseId, wanted, { first: n !== undefined });
+      startVideos(lib);
+      return courseVideos(lib, course, { job: videoJob(lib) });
+    },
+    'video.get': ({ courseId, n }) => {
+      const course = readCourse(lib, courseId);
+      const number = Number(n);
+      const video = readJson(`${lib.paths.videoBase(courseId, number)}.json`);
+      if (!course || !video) throw new Error('it has not been made');
+      const page = readPage(lib, courseId, number);
+      const review = readReview();
+      return { ...video, stats: undefined, courseTitle: course.title, stale: !page || video.stamp !== videoStamp(page), quiz: video.quiz.filter(q => !isFlagged(review, itemKey(courseId, number, q.id))) };
+    },
+    'video.audio': ({ courseId, n }) => {
+      const path = `${lib.paths.videoBase(courseId, Number(n))}.mp3`;
+      if (!existsSync(path)) throw new Error('it has not been made');
+      return { path };
     },
 
     'check.answer': ({ courseId, n, id, choice }) => {
@@ -332,6 +371,7 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       if (job) {
         saveJob(lib, { ...job, dismissed: true });
         if (job.state !== 'running') dropJobFiles(lib, job);
+        if (job.kind === 'video') clearQueue(lib);
       }
       if (readStatus().build?.id === jobId) writeStatus({ build: null });
       return true;

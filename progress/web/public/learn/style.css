@@ -584,6 +584,9 @@ html[data-see-through] :is(.ui-btn.green, .chat-button.learn:not(.done), .toast)
 .pick-cover.gap { color: var(--gold); }
 .pick-all { margin: 8px 0 2px; }
 
+/* The page's video, under its title */
+.video-row { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; margin: 2px 0 10px; }
+
 /* Reading: the words, the page's top, callouts and quick checks */
 .term { border-bottom: 1px dotted var(--faint); cursor: help; }
 .term:hover, .term:focus { border-bottom-color: var(--accent); outline: none; }

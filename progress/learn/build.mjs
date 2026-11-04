@@ -19,7 +19,9 @@ import {
   chatBriefPrompt, outlinePrompt, pagePlanPrompt, pagePrompt, readerPrompt, researchPrompt, teachPrompt, verifyPrompt,
 } from './prompts.mjs';
 import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, placeChecks, tidyAids } from './teach.mjs';
+import { makeVideos, readQueue } from './video.mjs';
 import { holdBack, placeDisputes, tidyDisputes } from './verify.mjs';
+import { ensureVoice, record } from './voice.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
 import {
   condenseTranscript, fetchPage, formatTime, isExtractorError, isPlaylist, isYouTube, sectionsOutline, sectionsText,
@@ -59,6 +61,25 @@ export function listJobs(lib) {
     return [];
   }
   return names.map(name => readJson(`${lib.paths.jobs}/${name}`)).filter(Boolean).sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+}
+
+/** The job making videos, if there is one: one for the whole library, and it has no course. */
+export const videoJob = lib => listJobs(lib).find(job => job.kind === 'video' && job.state !== 'done' && !job.dismissed) || null;
+
+/** Starts the video job, or wakes it if it stopped. It finds its work in the queue. */
+export function startVideos(lib) {
+  const found = videoJob(lib);
+  if (found) {
+    resumeJob(lib, found.id);
+    return found;
+  }
+  const stamp = now().replace(/[-:T]/g, '').slice(0, 12);
+  const job = saveJob(lib, {
+    v: 1, id: `j${stamp}${randomBytes(2).toString('hex')}`, kind: 'video', topic: 'Videos', courseTitle: 'Videos', link: null, category: null, mode: 'page', courseId: null, summary: null,
+    step: 'voice', state: 'running', message: 'Getting ready', done: 0, total: 0, current: null, candidates: null, picks: null, pid: null, error: null, startedAt: now(),
+  });
+  startDaemon(lib, job.id);
+  return job;
 }
 
 /** Rewrite one page (`n`, with an optional note), or add one on `topic` after page `after`. */
@@ -270,7 +291,7 @@ export function cancelJob(lib, id) {
 // --- Running a job ------------------------------------------------------------------------
 
 /** `io` is what the steps reach out to; the tests swap it. */
-export const defaultIo = { askStructured, ytSearch, ytInfo, ytCaptions, ytPlaylist, fetchPage, ensureYtDlp, readDocument, readClaudeChat };
+export const defaultIo = { askStructured, ytSearch, ytInfo, ytCaptions, ytPlaylist, fetchPage, ensureYtDlp, readDocument, readClaudeChat, ensureVoice, record };
 
 export async function runJob(lib, id, io = defaultIo) {
   let job = readJob(lib, id);
@@ -287,6 +308,17 @@ export async function runJob(lib, id, io = defaultIo) {
   process.once('SIGTERM', onStop);
   save({ pid: process.pid, state: 'running', error: null });
   try {
+    if (job.kind === 'video') {
+      if (job.step === 'voice') {
+        await io.ensureVoice({ onProgress: message => save({ message }) });
+        save({ step: 'videos' });
+      }
+      const made = await makeVideos({ lib, io, save, isStopping: () => stopping });
+      save({ step: 'done', state: 'done', current: null, message: made === 1 ? 'Your video is ready' : `${made} videos ready`, done: made, total: made });
+      // Something asked for in the moment this one finished.
+      if (readQueue(lib).length) startVideos(lib);
+      return job;
+    }
     if (job.step === 'research') await research(lib, job, save, io);
     if (job.step === 'picks') {
       if (!job.picks || !job.picks.length) {
