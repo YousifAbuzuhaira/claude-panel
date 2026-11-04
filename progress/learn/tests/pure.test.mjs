@@ -22,6 +22,8 @@ import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
 import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, tidyDisputes } from '../verify.mjs';
 import { voicePlatform } from '../voice.mjs';
+import { estimate, faultsBySection, flattenPage, hearing, isOldPage, plainScenes, simulate, testSection, tidyPronounce, videoStamp } from '../video-check.mjs';
+import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { normalizeSettings, toWslPath } from '../settings.mjs';
@@ -868,5 +870,224 @@ describe('the voice lock', () => {
 
   test('leaves out other Pythons and platforms', () => {
     for (const name of ['numpy-2.5.4-cp313-cp313-manylinux_2_28_x86_64.whl', 'x-1-cp312-cp312-win_amd64.whl', 'x-1-cp312-cp312-macosx_10_12_x86_64.whl', 'x-1-cp313-abi3-macosx_11_0_arm64.whl']) assert.equal(wheelFits(name), false, name);
+  });
+});
+
+describe('a page as a video', () => {
+  const longCode = Array.from({ length: 40 }, (_, k) => `line_${k} = ${'x'.repeat(k === 3 ? 200 : 10)}`).join('\n');
+  const page = {
+    title: 'Beam search',
+    markdown: 'text',
+    stats: {},
+    blocks: [
+      ...markdownToBlocks([
+        'Before any heading [12:34] there is a sentence (added). And a second one.',
+        '',
+        '## Greedy',
+        '',
+        'Greedy takes the top token at each step of the way.',
+        '',
+        '- First point here.',
+        '- Second point here.',
+        '',
+        '```python',
+        longCode,
+        '```',
+        '',
+        '| a | b |',
+        '|---|---|',
+        ...Array.from({ length: 9 }, (_, k) => `| ${k} | v${k} |`),
+        '',
+        '## Greedy',
+        '',
+        'The same heading comes up again in this page.',
+      ].join('\n')),
+      { t: 'check', id: 'q1', q: parseInline('What does greedy take?'), concepts: [], options: [{ inlines: parseInline('The top token'), why: parseInline('It keeps the best.'), right: 1 }, { inlines: parseInline('All tokens'), why: parseInline('No.') }] },
+    ],
+  };
+
+  test('source marks are left out of what is said', () => {
+    const { blocks } = flattenPage(page);
+    assert.equal(blocks[0].text, 'Before any heading there is a sentence. And a second one.');
+  });
+
+  test('every block is numbered in order, and a repeated heading stays its own section', () => {
+    const { blocks, sections } = flattenPage(page);
+    assert.deepEqual(blocks.map(block => block.n), blocks.map((_, k) => k));
+    assert.deepEqual(sections, ['Introduction', 'Greedy', 'Greedy (2)']);
+  });
+
+  test('a question stays after the block before it', () => {
+    const { quiz, blocks } = flattenPage(page);
+    assert.equal(quiz[0].after, blocks.length - 1);
+    assert.equal(quiz[0].section, 'Greedy (2)');
+    assert.equal(quiz[0].options[0].right, true);
+  });
+
+  test('a disputed box is a block to cover, marked as a correction', () => {
+    const { blocks } = flattenPage({ blocks: [{ t: 'callout', kind: 'disputed', title: [], blocks: markdownToBlocks('Not always true.') }] });
+    assert.equal(blocks[0].callout, 'disputed');
+  });
+
+  test('a page without its first-pass stats is an old one', () => {
+    assert.equal(isOldPage({ blocks: [] }), true);
+    assert.equal(isOldPage(page), false);
+  });
+
+  test('a stamp changes with the words, the questions and the flags, and only those', () => {
+    const stamp = videoStamp(page);
+    assert.equal(videoStamp({ ...page, title: 'Renamed' }), stamp);
+    assert.notEqual(videoStamp({ ...page, markdown: 'other' }), stamp);
+    assert.notEqual(videoStamp({ ...page, blocks: page.blocks.slice(0, -1) }), stamp);
+    assert.notEqual(videoStamp({ ...page, disputes: [{ quote: 'a' }] }), stamp);
+  });
+
+  test('the plain fallback covers every block of a section and asks its questions', () => {
+    const material = flattenPage(page);
+    for (const section of material.sections) {
+      const scenes = plainScenes(section, material);
+      const covered = new Set(scenes.flatMap(scene => scene.covers));
+      for (const block of material.blocks.filter(item => item.section === section)) assert.ok(covered.has(block.n), `block ${block.n}`);
+    }
+    assert.equal(plainScenes('Greedy (2)', material).filter(scene => scene.check === 'q1').length, 1);
+  });
+
+  test('the plain fallback passes the checks it stands in for', () => {
+    const material = flattenPage(page);
+    for (const section of material.sections) {
+      for (const scene of plainScenes(section, material).filter(item => !item.check)) {
+        const problems = [];
+        simulate(scene, scene.title, material.assets, problems);
+        assert.deepEqual(problems, []);
+      }
+    }
+  });
+
+  test('long code and tables are paged so each page stays readable', () => {
+    const material = flattenPage(page);
+    const scenes = plainScenes('Greedy', material);
+    const code = scenes.filter(scene => scene.objects[0]?.shape === 'code');
+    const tables = scenes.filter(scene => scene.objects[0]?.shape === 'table');
+    assert.ok(code.length >= 3);
+    assert.equal(tables.length, 2);
+    assert.ok(code.every(scene => scene.beats[0].hold > 0));
+  });
+
+  test('a section is told what it left out', () => {
+    const material = flattenPage(page);
+    const problems = testSection('Greedy', { scenes: [] }, material);
+    assert.ok(problems.some(problem => /is not covered/.test(problem)));
+  });
+
+  test('a question must appear exactly once', () => {
+    const material = flattenPage(page);
+    const asked = { title: 'Quick check', covers: [], quote: null, check: 'q1', objects: [], beats: [] };
+    assert.ok(testSection('Greedy (2)', { scenes: [asked, asked] }, material).some(problem => /appears 2 times/.test(problem)));
+  });
+
+  test('a scene is played through: off stage, an unknown object, a word not said', () => {
+    const scene = {
+      objects: [{ id: 'a', shape: 'box', x: 1000, y: 200, w: 200, h: 100, text: 'hi' }],
+      beats: [{ say: 'Here it comes.', do: [{ on: 'gone', show: ['a', 'b'] }] }],
+    };
+    const problems = [];
+    simulate(scene, 'S', { code: [], table: [], diagram: [] }, problems);
+    assert.ok(problems.some(problem => /leaves the stage/.test(problem)));
+    assert.ok(problems.some(problem => /unknown object b/.test(problem)));
+    assert.ok(problems.some(problem => /"on" word "gone"/.test(problem)));
+  });
+
+  test('an object never shown is caught', () => {
+    const problems = [];
+    simulate({ objects: [{ id: 'a', shape: 'box', x: 100, y: 200, w: 200, h: 100 }], beats: [{ say: 'Hello.', do: [] }] }, 'S', { code: [], table: [], diagram: [] }, problems);
+    assert.ok(problems.some(problem => /never shown/.test(problem)));
+  });
+
+  test('two objects on top of each other are caught, but a label in a box is fine', () => {
+    const scene = extra => ({ objects: [{ id: 'a', shape: 'box', x: 100, y: 200, w: 300, h: 200, show: true }, { show: true, ...extra }], beats: [] });
+    const run = extra => {
+      const problems = [];
+      simulate(scene(extra), 'S', { code: [], table: [], diagram: [] }, problems);
+      return problems;
+    };
+    assert.ok(run({ id: 'b', shape: 'box', x: 200, y: 250, w: 300, h: 100 }).some(problem => /overlaps/.test(problem)));
+    assert.deepEqual(run({ id: 'b', shape: 'label', x: 120, y: 220, w: 200, text: 'in' }), []);
+  });
+
+  test('faults go to the section they belong to, and never to a rebuilt one', () => {
+    const material = flattenPage(page);
+    const faults = faultsBySection({ ...material, claims: { added: [{ said: 'x', why: 'y', section: 'Greedy' }], dropped: [{ fact: 'z', block: 0 }] }, reading: { answers: [{ id: 'q1', choice: 0 }] } }, new Set(['Introduction']));
+    assert.deepEqual([...faults.keys()], ['Greedy']);
+  });
+
+  test('a claim with no known section is sent to all of them', () => {
+    const material = flattenPage({ ...page, blocks: page.blocks.slice(0, -1) });
+    const faults = faultsBySection({ ...material, claims: { added: [{ said: 'x', why: 'y', section: 'Nowhere' }], dropped: [] }, reading: {} });
+    assert.equal(faults.size, material.sections.length);
+  });
+
+  test('a question the watcher got wrong is a fault', () => {
+    const material = flattenPage(page);
+    const wrong = material.quiz[0].options.findIndex(option => !option.right);
+    const faults = faultsBySection({ ...material, claims: {}, reading: { answers: [{ id: 'q1', choice: wrong }] } });
+    assert.match(faults.get('Greedy (2)')[0], /could not answer/);
+  });
+
+  test('a pronunciation stays only for a word really said', () => {
+    const scenes = [{ beats: [{ say: 'Token 1917 here.' }] }];
+    assert.deepEqual(tidyPronounce([{ written: '1917', spoken: 'nineteen' }, { written: '2000', spoken: 'x' }, { written: 'Token', spoken: 'Token' }], scenes), [{ written: '1917', spoken: 'nineteen' }]);
+  });
+
+  test('what a watcher hears carries the section heading', () => {
+    const material = flattenPage(page);
+    const scenes = plainScenes('Introduction', material).map(scene => ({ ...scene, section: 'Introduction' }));
+    assert.match(hearing(scenes, material.assets), /## \[Introduction\]/);
+  });
+
+  test('an estimate grows with the words', () => {
+    assert.ok(estimate(2000).minutes > estimate(1000).minutes);
+    assert.ok(estimate(1822).minutes > 12 && estimate(1822).minutes < 15);
+  });
+});
+
+describe('the stage', () => {
+  const assets = { code: [], table: [], diagram: [] };
+  const scene = {
+    objects: [{ id: 'a', shape: 'box', x: 100, y: 200, w: 200, h: 100 }, { id: 'b', shape: 'box', x: 400, y: 200, w: 200, h: 100 }],
+    cues: [{ show: ['a'] }, { show: ['b'], set: { a: { fade: true } } }, { hide: ['a'] }],
+  };
+
+  test('there is one state per cue, and each is complete on its own', () => {
+    const states = buildStates(scene);
+    assert.equal(states.length, 4);
+    assert.equal(states[0].get('a').visible, false);
+    assert.equal(states[2].get('a').fade, true);
+    assert.equal(states[3].get('a').visible, false);
+    assert.equal(states[3].get('b').visible, true);
+  });
+
+  test('a state never changes an earlier one', () => {
+    const states = buildStates(scene);
+    assert.equal(states[1].get('a').fade, undefined);
+  });
+
+  test('there is a camera for every state', () => {
+    const states = buildStates(scene);
+    const cameras = buildCameras(scene, states, assets);
+    assert.equal(cameras.length, states.length);
+    assert.ok(cameras.every(camera => camera.zoom >= 1 && camera.zoom <= 1.5));
+  });
+
+  test('a camera told where to go goes there', () => {
+    const told = { ...scene, cues: [{ show: ['a'], camera: { x: 300, y: 250, zoom: 2 } }] };
+    const states = buildStates(told);
+    assert.equal(buildCameras(told, states, assets)[1].zoom, 2);
+  });
+
+  test('the scene at a time is the last one started', () => {
+    const scenes = [{ start: 0 }, { start: 10 }, { start: 20 }];
+    assert.equal(sceneAt(scenes, 0), 0);
+    assert.equal(sceneAt(scenes, 15), 1);
+    assert.equal(sceneAt(scenes, 99), 2);
   });
 });

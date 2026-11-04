@@ -131,7 +131,8 @@ def main():
                 cue = {key: action[key] for key in ('show', 'hide', 'set', 'camera') if action.get(key)}
                 cue['t'] = round(max(beat_start, t - 0.1), 3)
                 scene['cues'].append(cue)
-            speaker.silence(BEAT_GAP)
+            # A plain scene's code or table stays up long enough to be read.
+            speaker.silence(BEAT_GAP + float(beat.get('hold') or 0))
         scene['cues'].sort(key=lambda cue: cue['t'])
         scene['end'] = round(speaker.at, 3)
         speaker.silence(SCENE_GAP - BEAT_GAP)
