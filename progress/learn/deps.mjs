@@ -29,7 +29,7 @@ export function installedYtDlp() {
   return info && existsSync(info.path) ? info : null;
 }
 
-async function download(url) {
+export async function download(url) {
   const response = await fetch(url, { headers: { 'User-Agent': 'claude-learn' } });
   if (!response.ok) throw new Error(`${url}: ${response.status}`);
   return Buffer.from(await response.arrayBuffer());

@@ -21,6 +21,8 @@ import { DAILY_CAP, LADDER, answerInReview, answerOnPage, dropCourse, dueToday, 
 import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
 import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, tidyDisputes } from '../verify.mjs';
+import { voicePlatform } from '../voice.mjs';
+import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { normalizeSettings, toWslPath } from '../settings.mjs';
 import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
@@ -842,5 +844,29 @@ describe('the fact-check', () => {
     const map = pageMap('One two three four five six seven.');
     assert.deepEqual(spanOf('three four five six seven', map), { start: 2, end: 7 });
     assert.equal(spanOf('eight nine ten eleven twelve', map), null);
+  });
+});
+
+describe('where the voice runs', () => {
+  test('Linux, WSL and Apple Silicon on macOS 14 have a build', () => {
+    assert.match(voicePlatform('linux', 'x64', '6.6.0').target, /x86_64-unknown-linux/);
+    assert.match(voicePlatform('linux', 'arm64', '6.6.0').target, /aarch64-unknown-linux/);
+    assert.match(voicePlatform('darwin', 'arm64', '23.1.0').target, /aarch64-apple-darwin/);
+  });
+
+  test('an Intel Mac or an old macOS is told why', () => {
+    assert.match(voicePlatform('darwin', 'x64', '23.1.0').reason, /Apple Silicon/);
+    assert.match(voicePlatform('darwin', 'arm64', '22.6.0').reason, /macOS 14/);
+    assert.match(voicePlatform('win32', 'x64', '10').reason, /no build/);
+  });
+});
+
+describe('the voice lock', () => {
+  test('keeps wheels Python 3.12 can use on Linux and Apple Silicon', () => {
+    for (const name of ['numpy-2.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl', 'attrs-26.1.0-py3-none-any.whl', 'x-1-cp39-abi3-macosx_11_0_arm64.whl', 'onnxruntime-1.31.1-cp312-cp312-macosx_14_0_arm64.whl']) assert.equal(wheelFits(name), true, name);
+  });
+
+  test('leaves out other Pythons and platforms', () => {
+    for (const name of ['numpy-2.5.4-cp313-cp313-manylinux_2_28_x86_64.whl', 'x-1-cp312-cp312-win_amd64.whl', 'x-1-cp312-cp312-macosx_10_12_x86_64.whl', 'x-1-cp313-abi3-macosx_11_0_arm64.whl']) assert.equal(wheelFits(name), false, name);
   });
 });
