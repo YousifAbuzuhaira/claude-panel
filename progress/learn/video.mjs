@@ -10,6 +10,9 @@ import { readJson, withLock, writeJson } from './store.mjs';
 
 export const readQueue = lib => readJson(lib.paths.videoQueue) || [];
 
+/** How hard the model thinks about a script. Opus at low effort kept its detail at half the usage. */
+export const videoEffort = model => (/opus/.test(model) ? 'low' : 'high');
+
 const inQueue = (queue, courseId, n) => queue.some(item => item.courseId === courseId && item.n === n);
 
 /** Adds pages. `first` puts them next in line; a page already waiting moves rather than repeats. */
@@ -93,8 +96,10 @@ function dropNew(lib, courseId, n) {
 
 /** Works down the queue until it's empty; returns how many videos it made. */
 export async function makeVideos({ lib, io, save, isStopping }) {
+  const model = lib.settings.models.video;
+  const effort = videoEffort(model);
   const ask = async (prompt, schema) => {
-    const call = () => io.askStructured({ prompt, schema, tools: [], model: lib.settings.models.build, cwd: lib.root, onRateLimit: recordUsage });
+    const call = () => io.askStructured({ prompt, schema, tools: [], model, effort, cwd: lib.root, onRateLimit: recordUsage });
     try {
       return await call();
     } catch (error) {

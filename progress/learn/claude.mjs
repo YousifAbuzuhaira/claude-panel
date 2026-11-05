@@ -7,8 +7,9 @@ import { claudeBinary, readSettings } from './settings.mjs';
 
 const BASE = ['-p', '--safe-mode', '--restricted', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--output-format', 'stream-json', '--verbose'];
 
-export function claudeArgs({ model, tools = [], schema = null, resume = null, systemFile = null, addDirs = [], stream = false, persist = false }) {
+export function claudeArgs({ model, effort = null, tools = [], schema = null, resume = null, systemFile = null, addDirs = [], stream = false, persist = false }) {
   const args = [...BASE, '--model', model];
+  if (effort) args.push('--effort', effort);
   for (const dir of addDirs) args.push('--add-dir', dir);
   // Named in --tools to exist, in --allowedTools to run without asking.
   args.push('--tools', tools.join(','));
@@ -81,9 +82,9 @@ export function runClaude(options) {
   return run;
 }
 
-function startClaude({ prompt, model, tools, schema, resume, systemFile, addDirs, cwd, stream, persist, timeoutMs = 20 * 60_000, onDelta, onTool, onRateLimit }) {
+function startClaude({ prompt, model, effort, tools, schema, resume, systemFile, addDirs, cwd, stream, persist, timeoutMs = 20 * 60_000, onDelta, onTool, onRateLimit }) {
   const settings = readSettings();
-  const args = claudeArgs({ model: model || settings.models.build, tools, schema, resume, systemFile, addDirs, stream, persist });
+  const args = claudeArgs({ model: model || settings.models.build, effort, tools, schema, resume, systemFile, addDirs, stream, persist });
   const child = spawn(claudeBinary(settings), args, {
     cwd: cwd || process.cwd(),
     env: { ...process.env, CLAUDE_PROGRESS_OFF: '1' },

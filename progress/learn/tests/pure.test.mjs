@@ -22,7 +22,7 @@ import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
 import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, tidyDisputes } from '../verify.mjs';
 import { voicePlatform } from '../voice.mjs';
-import { estimate, faultsBySection, flattenPage, hearing, isOldPage, plainScenes, simulate, testSection, tidyPronounce, videoStamp, withBlockRead } from '../video-check.mjs';
+import { estimate, faultsBySection, flattenPage, hearing, isOldPage, plainScenes, settleScenes, simulate, testSection, tidyPronounce, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
@@ -483,6 +483,12 @@ describe('claude', () => {
     assert.ok(resumed.includes('--resume') && !resumed.includes('--append-system-prompt-file'));
   });
 
+  test('effort is passed only when asked for', () => {
+    const args = claudeArgs({ model: 'opus', effort: 'low', tools: [] });
+    assert.equal(args[args.indexOf('--effort') + 1], 'low');
+    assert.ok(!claudeArgs({ model: 'opus', tools: [] }).includes('--effort'));
+  });
+
   test('stream lines: text deltas, the session, tool uses, the result, and junk ignored', () => {
     assert.deepEqual(readStreamLine('{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}}'), { delta: 'hi' });
     assert.deepEqual(readStreamLine('{"type":"system","subtype":"init","session_id":"s1","model":"m"}'), { sessionId: 's1', model: 'm' });
@@ -510,6 +516,12 @@ describe('settings', () => {
     assert.equal(settings.models.build, 'sonnet');
     assert.equal(settings.models.chat, 'opus');
     assert.deepEqual(settings.workFolders, ['/a']);
+  });
+
+  test('videos have their own model, Opus unless a good one is chosen', () => {
+    assert.equal(normalizeSettings({}).models.video, 'opus');
+    assert.equal(normalizeSettings({ models: { video: 'sonnet' } }).models.video, 'sonnet');
+    assert.equal(normalizeSettings({ models: { video: 'gpt-9' } }).models.video, 'opus');
   });
 });
 
@@ -1052,6 +1064,41 @@ describe('a page as a video', () => {
     const material = flattenPage(page);
     const scenes = plainScenes('Introduction', material).map(scene => ({ ...scene, section: 'Introduction' }));
     assert.match(hearing(scenes, material.assets), /## \[Introduction\]/);
+  });
+
+  describe('settling scenes', () => {
+    const assets = { code: [], table: [], diagram: [{ nodes: [] }] };
+    const box = (id, y, h = 100) => ({ id, shape: 'box', x: 100, y, w: 200, h, show: true });
+    const sceneOf = (objects, beats = [{ say: 'Go.', do: [] }]) => ({ title: 'T', objects, beats });
+
+    test('an object a little off the stage moves back, all its positions together', () => {
+      const set = { on: null, set: { a: { y: 430 } } };
+      const { scenes: [scene] } = settleScenes({ scenes: [sceneOf([box('a', 300)], [{ say: 'Go.', do: [set] }])] }, assets);
+      assert.ok(scene.objects[0].y < 300);
+      assert.equal(300 - scene.objects[0].y, 430 - scene.beats[0].do[0].set.a.y);
+    });
+
+    test('an object far off the stage is left for Claude', () => {
+      const { scenes: [scene] } = settleScenes({ scenes: [sceneOf([box('a', 700)])] }, assets);
+      assert.equal(scene.objects[0].y, 700);
+    });
+
+    test('an object too big for the stage is not moved', () => {
+      const wide = { id: 'a', shape: 'box', x: 20, y: 200, w: 1100, h: 100, show: true };
+      assert.equal(settleScenes({ scenes: [sceneOf([wide])] }, assets).scenes[0].objects[0].x, 20);
+    });
+
+    test('an asset written as a block heading writes it becomes its number', () => {
+      const { scenes: [scene] } = settleScenes({ scenes: [sceneOf([{ id: 'd', shape: 'diagram', x: 100, y: 120, w: 400, h: 300, asset: 'diagram 0', show: true }])] }, assets);
+      assert.equal(scene.objects[0].asset, 0);
+    });
+
+    test('the answer it was given is left alone', () => {
+      const given = { scenes: [sceneOf([box('a', 430)])], pronounce: [] };
+      const settled = settleScenes(given, assets);
+      assert.equal(given.scenes[0].objects[0].y, 430);
+      assert.deepEqual(settled.pronounce, []);
+    });
   });
 
   test('an estimate grows with the words', () => {

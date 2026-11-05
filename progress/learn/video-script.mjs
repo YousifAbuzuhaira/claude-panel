@@ -2,9 +2,8 @@
 // is tested as the player would draw it, repaired, or rebuilt from the page. Then someone who only
 // watches answers the questions, and a check compares the script with the page, both ways.
 import { READER_SCHEMA, readerPrompt } from './prompts.mjs';
-import { faultsBySection, flattenPage, hearing, plainScenes, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
+import { faultsBySection, flattenPage, hearing, plainScenes, settleScenes, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
 
-const SECTIONS_AT_ONCE = 4;
 const REPAIRS = 2;
 
 export const SCENE_SCHEMA = {
@@ -141,13 +140,6 @@ function watcherRequest(page, { quiz }, heard) {
   });
 }
 
-async function eachAtOnce(list, limit, fn) {
-  const queue = [...list];
-  await Promise.all(Array.from({ length: Math.min(limit, queue.length) }, async () => {
-    while (queue.length) await fn(queue.shift());
-  }));
-}
-
 /** `ask(prompt, schema)` is one Claude call. Returns the script `narrate.py` records. */
 export async function writeScript({ page, ask, onStep = () => {} }) {
   const started = Date.now();
@@ -156,6 +148,7 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
   const written = new Map();
   const rebuilt = new Set();
   const firstProblems = {};
+  const forClaude = {};
   const whyRebuilt = {};
   const readOut = [];
   const rebuild = (section, problems) => {
@@ -163,13 +156,15 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
     whyRebuilt[section] = problems.slice(0, 8);
     written.set(section, { scenes: plainScenes(section, material), pronounce: [] });
   };
-  const attempt = (section, repair) => ask(sectionRequest(page, material, section, repair), SCENE_SCHEMA);
+  // Small misses are fixed here, so Claude only ever hears about what code can't fix.
+  const attempt = async (section, repair) => settleScenes(await ask(sectionRequest(page, material, section, repair), SCENE_SCHEMA), assets);
   let finished = 0;
-  await eachAtOnce(sections, SECTIONS_AT_ONCE, async section => {
+  await Promise.all(sections.map(async section => {
     if (blocks.some(block => block.section === section)) {
       let result = await attempt(section, null);
       let problems = testSection(section, result, material);
       firstProblems[section] = problems.length;
+      if (problems.length) forClaude[section] = problems.slice(0, 8);
       for (let round = 0; round < REPAIRS && problems.length; round++) {
         result = await attempt(section, { result, problems });
         problems = testSection(section, result, material);
@@ -181,7 +176,7 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
     }
     finished++;
     onStep(`scenes, section ${finished} of ${sections.length}`);
-  });
+  }));
   const allScenes = () => sections.flatMap(section => written.get(section).scenes.map(scene => ({ ...scene, section })));
   const review = async () => {
     const heard = hearing(allScenes(), assets);
@@ -193,12 +188,12 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
   const firstClaims = { added: checked.claims.added?.length || 0, dropped: checked.claims.dropped?.length || 0 };
   if (checked.faults.size) {
     onStep('fixing what the check found');
-    await eachAtOnce([...checked.faults], SECTIONS_AT_ONCE, async ([section, problems]) => {
+    await Promise.all([...checked.faults].map(async ([section, problems]) => {
       const result = await attempt(section, { result: written.get(section), problems });
       const left = testSection(section, result, material);
       if (left.length) rebuild(section, left);
       else written.set(section, result);
-    });
+    }));
     onStep('checking it against the page again');
     checked = await review();
     // A second miss isn't worth a third try: the page's own words can't be wrong about the page.
@@ -238,6 +233,7 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
       whyRebuilt,
       readOut,
       firstProblems,
+      forClaude,
       firstClaims,
       claimsLeft: { added: checked.claims.added || [], dropped: checked.claims.dropped || [] },
       watcher: {

@@ -3589,7 +3589,7 @@ function Show-Settings {
   [void]$libraryRow.Children.Add($useButton)
   [void]$stack.Children.Add($libraryRow)
 
-  foreach ($which in @(@{ key = 'build'; title = 'Model that builds courses'; note = 'Research, planning and writing the pages.' }, @{ key = 'chat'; title = 'Model for chat'; note = 'The page chats, the Advisor, and filing concepts you add.' })) {
+  foreach ($which in @(@{ key = 'build'; title = 'Model that builds courses'; note = 'Research, planning and writing the pages.' }, @{ key = 'video'; title = 'Model that makes videos'; note = 'Writes each video''s script. Opus runs at low effort, the others at high.' }, @{ key = 'chat'; title = 'Model for chat'; note = 'The page chats, the Advisor, and filing concepts you add.' })) {
     [void]$stack.Children.Add((New-SettingTitle $which.title $which.note))
     $chips = New-Object System.Windows.Controls.WrapPanel
     $chips.Margin = New-Gap 0 0 0 -6

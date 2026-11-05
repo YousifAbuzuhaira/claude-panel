@@ -13,6 +13,8 @@ const CODE_LINES = 18;
 const CODE_WIDTH = 112;
 const TABLE_ROWS = 6;
 const ROUGH = { s: 16, m: 22, l: 30, xl: 46 };
+const NUDGE = 30; // the furthest code will move an object back on stage
+const LIMITS = { left: STAGE.left - 10, top: STAGE.top - 8, right: STAGE.right + 10, bottom: STAGE.bottom + 12 };
 
 export const norm = text => String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const words = text => String(text ?? '').trim().split(/\s+/).filter(Boolean);
@@ -112,7 +114,7 @@ function testPicture(objects, assets, name, when, problems) {
       problems.push(`${name}: ${o.id} has no position or size`);
       continue;
     }
-    if (r.x < STAGE.left - 10 || r.y < STAGE.top - 8 || r.x + r.w > STAGE.right + 10 || r.y + r.h > STAGE.bottom + 12) problems.push(`${name}, ${when}: ${o.id} leaves the stage (x ${Math.round(r.x)}-${Math.round(r.x + r.w)}, y ${Math.round(r.y)}-${Math.round(r.y + r.h)})`);
+    if (r.x < LIMITS.left || r.y < LIMITS.top || r.x + r.w > LIMITS.right || r.y + r.h > LIMITS.bottom) problems.push(`${name}, ${when}: ${o.id} leaves the stage (x ${Math.round(r.x)}-${Math.round(r.x + r.w)}, y ${Math.round(r.y)}-${Math.round(r.y + r.h)})`);
     if (o.shape === 'box' && o.text) {
       const fit = Math.min(r.h * 0.42, (r.w - 30) / (String(o.text).length * 0.62));
       if (fit < 16) problems.push(`${name}: "${o.text}" is too long for box ${o.id}`);
@@ -140,6 +142,83 @@ function testPicture(objects, assets, name, when, problems) {
   }
 }
 
+const apply = (objects, action) => {
+  for (const id of action.show || []) if (objects.has(id)) objects.get(id).visible = true;
+  for (const id of action.hide || []) if (objects.has(id)) objects.get(id).visible = false;
+  for (const [id, change] of Object.entries(action.set || {})) if (objects.has(id)) Object.assign(objects.get(id), change);
+};
+
+/** `diagram 0`, as a block's heading writes it, is asset 0. */
+const assetNumber = value => {
+  const found = typeof value === 'string' ? /(\d+)\s*$/.exec(value) : null;
+  return found ? Number(found[1]) : value;
+};
+
+const hasAsset = o => ['code', 'table', 'diagram'].includes(o.shape);
+
+/** How far each object strays past the stage at its worst, across the scene: id to { dx, dy }. */
+function strays(scene, assets) {
+  const objects = new Map((scene.objects || []).map(o => [o.id, { ...o, visible: Boolean(o.show) }]));
+  const worst = new Map();
+  const look = () => {
+    for (const o of objects.values()) {
+      if (!o.visible || ['arrow', 'dot'].includes(o.shape)) continue;
+      const r = rectOf(o, assets);
+      if ([r.x, r.y, r.w, r.h].some(value => typeof value !== 'number' || Number.isNaN(value))) continue;
+      const seen = worst.get(o.id) || { left: 0, right: 0, up: 0, down: 0 };
+      seen.left = Math.max(seen.left, LIMITS.left - r.x);
+      seen.right = Math.max(seen.right, r.x + r.w - LIMITS.right);
+      seen.up = Math.max(seen.up, LIMITS.top - r.y);
+      seen.down = Math.max(seen.down, r.y + r.h - LIMITS.bottom);
+      worst.set(o.id, seen);
+    }
+  };
+  look();
+  for (const beat of scene.beats || []) {
+    for (const action of beat.do || []) apply(objects, action);
+    look();
+  }
+  // Past both sides, it's too big to move: that one is Claude's to fix.
+  const shift = (low, high) => (low > 0 && high > 0 ? 0 : low > 0 ? Math.ceil(low) : high > 0 ? -Math.ceil(high) : 0);
+  const moves = new Map();
+  for (const [id, seen] of worst) {
+    const [dx, dy] = [shift(seen.left, seen.right), shift(seen.up, seen.down)];
+    if ((dx || dy) && Math.abs(dx) <= NUDGE && Math.abs(dy) <= NUDGE) moves.set(id, { dx, dy });
+  }
+  return moves;
+}
+
+const moved = (o, { dx, dy }) => ({ ...o, ...(typeof o.x === 'number' ? { x: o.x + dx } : {}), ...(typeof o.y === 'number' ? { y: o.y + dy } : {}) });
+
+/**
+ * Fixes what code can, before anything is tested: an object a little off the stage moves back, all
+ * its positions together, and an asset written as `diagram 0` becomes 0. `testSection` still judges
+ * the result, so a move that makes an overlap goes to Claude like any other miss.
+ */
+export function settleScenes(result, assets) {
+  const scenes = (result?.scenes || []).map(scene => {
+    const objects = (scene.objects || []).map(o => (hasAsset(o) ? { ...o, asset: assetNumber(o.asset) } : o));
+    const named = new Map(objects.map(o => [o.id, o]));
+    const beats = (scene.beats || []).map(beat => ({
+      ...beat,
+      do: (beat.do || []).map(action => (action.set ? { ...action, set: Object.fromEntries(Object.entries(action.set).map(([id, change]) => [id, 'asset' in change ? { ...change, asset: assetNumber(change.asset) } : change])) } : action)),
+    }));
+    const tidy = { ...scene, objects, beats };
+    if (scene.check) return tidy;
+    const moves = strays(tidy, assets);
+    if (!moves.size) return tidy;
+    return {
+      ...tidy,
+      objects: objects.map(o => (moves.has(o.id) ? moved(o, moves.get(o.id)) : o)),
+      beats: beats.map(beat => ({
+        ...beat,
+        do: beat.do.map(action => (action.set ? { ...action, set: Object.fromEntries(Object.entries(action.set).map(([id, change]) => [id, moves.has(id) && named.has(id) ? moved(change, moves.get(id)) : change])) } : action)),
+      })),
+    };
+  });
+  return { ...result, scenes };
+}
+
 /** Plays a scene through, picture by picture. Adds what's wrong to `problems`. */
 export function simulate(scene, name, assets, problems) {
   const objects = new Map((scene.objects || []).map(o => [o.id, { ...o, visible: Boolean(o.show) }]));
@@ -150,9 +229,7 @@ export function simulate(scene, name, assets, problems) {
     for (const action of beat.do || []) {
       if (action.on && !said.includes(norm(action.on))) problems.push(`${name}, beat ${index}: "on" word "${action.on}" is not in: ${beat.say}`);
       for (const id of [...(action.show || []), ...(action.hide || []), ...Object.keys(action.set || {})]) if (!objects.has(id)) problems.push(`${name}, beat ${index}: unknown object ${id}`);
-      for (const id of action.show || []) if (objects.has(id)) objects.get(id).visible = true;
-      for (const id of action.hide || []) if (objects.has(id)) objects.get(id).visible = false;
-      for (const [id, change] of Object.entries(action.set || {})) if (objects.has(id)) Object.assign(objects.get(id), change);
+      apply(objects, action);
     }
     testPicture(objects, assets, name, `beat ${index}`, problems);
   });

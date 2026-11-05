@@ -65,7 +65,7 @@ export function showSettings() {
   out.push(title('Library folder', 'Where your courses, concepts and chats are kept (~/... or a full path). Changing it starts using that folder; nothing is moved.'),
     h('div.add-row', null, libraryBox, h('button.ui-btn', { type: 'button', onclick: () => save({ library: libraryBox.value.trim() }) }, 'Use this folder')));
 
-  for (const [key, label, note] of [['build', 'Model that builds courses', 'Research, planning and writing the pages.'], ['chat', 'Model for chat', 'The page chats, the Advisor, and filing concepts you add.']]) {
+  for (const [key, label, note] of [['build', 'Model that builds courses', 'Research, planning and writing the pages.'], ['video', 'Model that makes videos', 'Writes each video\'s script. Opus runs at low effort, the others at high.'], ['chat', 'Model for chat', 'The page chats, the Advisor, and filing concepts you add.']]) {
     const current = settings.models?.[key];
     out.push(title(label, note), h('div.chips', null, MODEL_CHOICES.map(([model, name]) => chip(name, current === model, () => save({ models: { [key]: model } })))));
   }

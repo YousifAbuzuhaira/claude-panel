@@ -18,7 +18,7 @@ export const MODELS = ['sonnet', 'opus', 'haiku'];
 export const defaults = () => ({
   v: 1,
   library: join(homedir(), '.claude/learn'),
-  models: { build: 'sonnet', chat: 'sonnet' },
+  models: { build: 'sonnet', chat: 'sonnet', video: 'opus' },
   workFolders: [],
   claudePath: null,
 });
@@ -49,6 +49,7 @@ export function normalizeSettings(raw) {
     models: {
       build: isModel(models.build) ? models.build : base.models.build,
       chat: isModel(models.chat) ? models.chat : base.models.chat,
+      video: isModel(models.video) ? models.video : base.models.video,
     },
     workFolders: [...new Set(folders.filter(folder => typeof folder === 'string' && folder.trim()).map(toWslPath))].filter(folder => folder.startsWith('/')),
     claudePath: typeof value.claudePath === 'string' && value.claudePath.startsWith('/') ? value.claudePath : null,
