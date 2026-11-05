@@ -18,6 +18,8 @@ const LIMITS = { left: STAGE.left - 10, top: STAGE.top - 8, right: STAGE.right +
 
 export const norm = text => String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const words = text => String(text ?? '').trim().split(/\s+/).filter(Boolean);
+/** A word as the recorder matches it (narrate.py's `clean`): `1,000` and `non-linear` are one word. */
+const spokenWord = word => String(word ?? '').replace(/[^\p{L}\p{N}_']/gu, '').toLowerCase();
 
 /** What the page's text says: its source marks are for reading, not for hearing. */
 const plain = inlines => (inlines || []).filter(item => !item.added && !item.time && !item.sec).map(item => item.s || '').join('').replace(/\s+([.,;:!?])/g, '$1').replace(/\s+/g, ' ').trim();
@@ -225,9 +227,9 @@ export function simulate(scene, name, assets, problems) {
   if (objects.size !== (scene.objects || []).length) problems.push(`${name}: two objects share an id`);
   testPicture(objects, assets, name, 'at the start', problems);
   (scene.beats || []).forEach((beat, index) => {
-    const said = norm(beat.say).split(' ');
+    const said = words(beat.say).map(spokenWord);
     for (const action of beat.do || []) {
-      if (action.on && !said.includes(norm(action.on))) problems.push(`${name}, beat ${index}: "on" word "${action.on}" is not in: ${beat.say}`);
+      if (action.on && !said.includes(spokenWord(action.on))) problems.push(`${name}, beat ${index}: "on" word "${action.on}" is not in: ${beat.say}`);
       for (const id of [...(action.show || []), ...(action.hide || []), ...Object.keys(action.set || {})]) if (!objects.has(id)) problems.push(`${name}, beat ${index}: unknown object ${id}`);
       apply(objects, action);
     }

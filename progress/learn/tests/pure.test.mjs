@@ -1009,6 +1009,16 @@ describe('a page as a video', () => {
     assert.ok(problems.some(problem => /"on" word "gone"/.test(problem)));
   });
 
+  test('a cue word is one word as the recorder hears it: numbers with commas, hyphens, a final stop', () => {
+    const scene = {
+      objects: [{ id: 'a', shape: 'box', x: 100, y: 200, w: 200, h: 100, text: 'hi' }],
+      beats: [{ say: 'GPT-3 has 1,000 non-linear steps.', do: [{ on: 'GPT-3', show: ['a'] }, { on: '1,000', set: { a: { fade: true } } }, { on: 'non-linear', set: { a: { fade: false } } }, { on: 'steps', set: { a: { fade: true } } }] }],
+    };
+    const problems = [];
+    simulate(scene, 'S', { code: [], table: [], diagram: [] }, problems);
+    assert.ok(!problems.some(problem => /"on" word/.test(problem)));
+  });
+
   test('an object never shown is caught', () => {
     const problems = [];
     simulate({ objects: [{ id: 'a', shape: 'box', x: 100, y: 200, w: 200, h: 100 }], beats: [{ say: 'Hello.', do: [] }] }, 'S', { code: [], table: [], diagram: [] }, problems);

@@ -107,6 +107,8 @@ def main():
     questions = {q['id']: q for q in script['quiz']}
     total = sum(len(split(b['say'])) for s in script['scenes'] for b in s.get('beats') or [])
     total += sum(len(split(q['q'])) for q in script['quiz'])
+    # What follows an answer is said too, so a percentage of this is a true percentage.
+    total += sum(len(split(f"Right. {o['why']}")) + len(split(f"Not quite. The answer is: {o['text'].rstrip('.')}. {o['why']}")) for q in script['quiz'] for o in q['options'] if o['right'])
     print(json.dumps({'sentences': total}), flush=True)
     speaker = Speaker(model_dir, voice, script.get('pronounce') or [])
     all_words = []
