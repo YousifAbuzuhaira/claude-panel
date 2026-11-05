@@ -17,7 +17,7 @@ import { askStructured, describeTool } from './claude.mjs';
 import { chatKey, clearChat, listAdvisorChats, readChat, removeAdvisorChat, sendChat } from './chat.mjs';
 import { cancelJob, createJob, createPageJob, createRefreshJob, dropJobFiles, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon, startVideos, videoJob } from './build.mjs';
 import { videoStamp } from './video-check.mjs';
-import { clearQueue, courseVideos, queueVideos, videoInfo } from './video.mjs';
+import { clearQueue, courseVideos, queueVideos, swapVideo, videoInfo } from './video.mjs';
 import { voiceStatus } from './voice.mjs';
 import { ensureYtDlp, installedYtDlp } from './deps.mjs';
 import {
@@ -170,16 +170,23 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       if (!course) throw new Error('no such course');
       return courseVideos(lib, course, { job: videoJob(lib) });
     },
-    'video.queue': ({ courseId, n }) => {
+    'video.queue': ({ courseId, n, again }) => {
       const course = readCourse(lib, courseId);
       if (!course) throw new Error('no such course');
       const voice = voiceStatus();
       const wanted = n === undefined ? courseVideos(lib, course).wanted : [Number(n)];
       if (voice.reason) throw new Error(voice.reason);
       if (!wanted.length) throw new Error('every page that can have a video has one');
-      queueVideos(lib, courseId, wanted, { first: n !== undefined });
+      queueVideos(lib, courseId, wanted, { first: n !== undefined, again: Boolean(again) });
       startVideos(lib);
       return courseVideos(lib, course, { job: videoJob(lib) });
+    },
+    'video.swap': ({ courseId, n }) => {
+      const page = readPage(lib, courseId, Number(n));
+      if (!page) throw new Error('no such page');
+      if (videoInfo(lib, courseId, page, { job: videoJob(lib) }).state === 'making') throw new Error('this video is being made: wait for that to finish');
+      swapVideo(lib, courseId, Number(n));
+      return videoInfo(lib, courseId, page, { job: videoJob(lib) });
     },
     'video.get': ({ courseId, n }) => {
       const course = readCourse(lib, courseId);

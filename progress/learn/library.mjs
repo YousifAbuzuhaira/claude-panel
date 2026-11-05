@@ -171,7 +171,7 @@ export function removePage(lib, courseId, n) {
     if (course.pages.length === 1) throw new Error('this is the only page: remove the course instead');
     course.pages.splice(index, 1);
     // Its video goes with it (learn/video.mjs names these files).
-    for (const end of ['.mp3', '.json', '.meta.json', '.script.json', '.new.mp3', '.new.json']) rmSync(`${lib.paths.videoBase(courseId, n)}${end}`, { force: true });
+    for (const end of ['.mp3', '.json', '.meta.json', '.script.json', '.new.mp3', '.new.json', '.previous.mp3', '.previous.json', '.previous.meta.json']) rmSync(`${lib.paths.videoBase(courseId, n)}${end}`, { force: true });
     course.read = (course.read || []).filter(other => other !== n);
     course.skipped = (course.skipped || []).filter(other => other !== n);
     if (course.overlap?.skippablePages) course.overlap.skippablePages = course.overlap.skippablePages.filter(other => other !== n);
@@ -252,4 +252,5 @@ export const buildStatus = job => job && {
   done: job.done || 0,
   total: job.total || 0,
   courseId: job.courseId || null,
+  ...(job.kind === 'video' ? { working: job.working || [], leftMinutes: job.leftMinutes ?? null } : {}),
 };

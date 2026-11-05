@@ -175,7 +175,7 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
       written.set(section, { scenes: plainScenes(section, material), pronounce: [] }); // questions alone
     }
     finished++;
-    onStep(`scenes, section ${finished} of ${sections.length}`);
+    onStep(`writing the script, section ${finished} of ${sections.length}`, (finished / sections.length) * 0.8);
   }));
   const allScenes = () => sections.flatMap(section => written.get(section).scenes.map(scene => ({ ...scene, section })));
   const review = async () => {
@@ -183,18 +183,18 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
     const [reading, claims] = await Promise.all([ask(watcherRequest(page, material, heard), READER_SCHEMA), ask(claimRequest(page, material, heard), CLAIM_SCHEMA)]);
     return { reading, claims, faults: faultsBySection({ claims, reading, blocks, quiz, sections }, rebuilt) };
   };
-  onStep('checking it against the page');
+  onStep('checking it against the page', 0.82);
   let checked = await review();
   const firstClaims = { added: checked.claims.added?.length || 0, dropped: checked.claims.dropped?.length || 0 };
   if (checked.faults.size) {
-    onStep('fixing what the check found');
+    onStep('fixing what the check found', 0.86);
     await Promise.all([...checked.faults].map(async ([section, problems]) => {
       const result = await attempt(section, { result: written.get(section), problems });
       const left = testSection(section, result, material);
       if (left.length) rebuild(section, left);
       else written.set(section, result);
     }));
-    onStep('checking it against the page again');
+    onStep('checking it against the page again', 0.93);
     checked = await review();
     // A second miss isn't worth a third try: the page's own words can't be wrong about the page.
     // Something wrong takes the section's scenes with it. Something only left out doesn't: that

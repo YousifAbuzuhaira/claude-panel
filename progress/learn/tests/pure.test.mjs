@@ -1103,7 +1103,8 @@ describe('a page as a video', () => {
 
   test('an estimate grows with the words', () => {
     assert.ok(estimate(2000).minutes > estimate(1000).minutes);
-    assert.ok(estimate(1822).minutes > 12 && estimate(1822).minutes < 15);
+    assert.ok(estimate(2529).minutes > 21 && estimate(2529).minutes < 24);
+    assert.equal(estimate(2529).totalMinutes, estimate(2529).scriptMinutes + estimate(2529).recordingMinutes);
   });
 });
 

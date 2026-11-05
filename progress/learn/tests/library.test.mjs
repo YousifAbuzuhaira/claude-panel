@@ -17,7 +17,7 @@ const { listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCo
 const { addConcept, ensureCategory, setPassed } = await import('../catalogue.mjs');
 const { createServer } = await import('../serve.mjs');
 const { withLock, writeJson, readJson } = await import('../store.mjs');
-const { clearQueue, courseVideos, makeVideos, queueVideos, readQueue, videoInfo } = await import('../video.mjs');
+const { clearQueue, courseVideos, makeVideos, queueVideos, readQueue, swapVideo, videoInfo } = await import('../video.mjs');
 const { readDocument } = await import('../documents.mjs');
 
 const CHUNKS = Array.from({ length: 60 }, (_, i) => ({ t: i * 30, text: `part ${i} about volumes` }));
@@ -679,8 +679,88 @@ describe('videos', () => {
     assert.equal(videoInfo(lib, 'queue-g', pageOf(2, { stats: undefined })).state, 'old');
     queueVideos(lib, 'queue-g', [3]);
     assert.equal(videoInfo(lib, 'queue-g', pageOf(3)).state, 'queued');
-    assert.equal(videoInfo(lib, 'queue-g', pageOf(3), { job: { ...quiet, current: { courseId: 'queue-g', n: 3 }, message: 'recording' } }).state, 'making');
+    const working = [{ courseId: 'queue-g', n: 3, note: 'recording, 40%', fraction: 0.6, leftMinutes: 6 }];
+    const making = videoInfo(lib, 'queue-g', pageOf(3), { job: { ...quiet, working } });
+    assert.equal(making.state, 'making');
+    assert.equal(making.progress.fraction, 0.6);
+    assert.match(making.message, /about 6 min left/);
+    assert.equal(videoInfo(lib, 'queue-g', pageOf(3), { job: { state: 'paused', working } }).state, 'queued');
     clearQueue(lib);
+  });
+
+  test('while a page records, the next page\'s script is written, and no further', async () => {
+    const lib = courseWith('queue-k', [1, 2, 3]);
+    queueVideos(lib, 'queue-k', [1, 2, 3]);
+    const scriptOf = n => existsSync(`${lib.paths.videoBase('queue-k', n)}.script.json`);
+    let seen = null;
+    const record = recording();
+    await run(lib, async options => {
+      await new Promise(resolve => setTimeout(resolve, 30));
+      seen ||= { next: scriptOf(2), after: scriptOf(3) };
+      return record(options);
+    });
+    assert.deepEqual(seen, { next: true, after: false });
+  });
+
+  test('a script that fails ahead lets the recording going on finish first', async () => {
+    const lib = courseWith('queue-l', [1, 2]);
+    queueVideos(lib, 'queue-l', [1, 2]);
+    let calls = 0;
+    const failing = { askStructured: async options => {
+      calls++;
+      if (options.prompt.includes('Page 2') && !options.schema.properties.answers && !options.schema.properties.added) throw new Error('no more usage');
+      return videoAsk.askStructured(options);
+    } };
+    await assert.rejects(makeVideos({ lib, io: { ...failing, record: recording() }, save: () => {}, isStopping: () => false }), /no more usage/);
+    assert.ok(calls > 0);
+    assert.ok(existsSync(`${lib.paths.videoBase('queue-l', 1)}.meta.json`));
+    assert.deepEqual(readQueue(lib).map(item => item.n), [2]);
+    clearQueue(lib);
+  });
+
+  test('made again, the new one replaces the old only when done, and the old stays as the earlier version', async () => {
+    const lib = courseWith('queue-m', [1]);
+    queueVideos(lib, 'queue-m', [1]);
+    await run(lib, recording());
+    const base = lib.paths.videoBase('queue-m', 1);
+    writeFileSync(`${base}.mp3`, 'first sound');
+    queueVideos(lib, 'queue-m', [1], { first: true, again: true });
+    const record = recording();
+    await run(lib, async options => {
+      assert.equal(readFileSync(`${base}.mp3`, 'utf8'), 'first sound');
+      return record(options);
+    });
+    assert.deepEqual(readQueue(lib), []);
+    assert.equal(readFileSync(`${base}.mp3`, 'utf8'), 'sound');
+    assert.equal(readFileSync(`${base}.previous.mp3`, 'utf8'), 'first sound');
+    assert.ok(videoInfo(lib, 'queue-m', pageOf(1)).earlier);
+  });
+
+  test('switching brings the earlier version forward, and back', async () => {
+    const lib = courseWith('queue-n', [1]);
+    queueVideos(lib, 'queue-n', [1]);
+    await run(lib, recording());
+    assert.throws(() => swapVideo(lib, 'queue-n', 1), /no earlier version/);
+    const base = lib.paths.videoBase('queue-n', 1);
+    writeFileSync(`${base}.mp3`, 'first sound');
+    queueVideos(lib, 'queue-n', [1], { first: true, again: true });
+    await run(lib, recording());
+    swapVideo(lib, 'queue-n', 1);
+    assert.equal(readFileSync(`${base}.mp3`, 'utf8'), 'first sound');
+    swapVideo(lib, 'queue-n', 1);
+    assert.equal(readFileSync(`${base}.mp3`, 'utf8'), 'sound');
+  });
+
+  test('a video remembers how it was made; an older one still says what it took', async () => {
+    const lib = courseWith('queue-o', [1]);
+    queueVideos(lib, 'queue-o', [1]);
+    await run(lib, recording());
+    const { made } = videoInfo(lib, 'queue-o', pageOf(1));
+    assert.equal(made.model, lib.settings.models.video);
+    assert.equal(made.effort, /opus/.test(made.model) ? 'low' : 'high');
+    const meta = `${lib.paths.videoBase('queue-o', 1)}.meta.json`;
+    writeJson(meta, { stamp: 'x', minutes: 2, stats: { minutes: 9 }, recordingSeconds: 660 });
+    assert.deepEqual(videoInfo(lib, 'queue-o', pageOf(1)).made, { model: null, effort: null, takenMinutes: 20, minutes: 2 });
   });
 
   test('a course counts what a press would make, and leaves old pages out', () => {
@@ -696,8 +776,11 @@ describe('videos', () => {
     const lib = courseWith('queue-i', [1, 2]);
     queueVideos(lib, 'queue-i', [1]);
     await run(lib, recording());
+    queueVideos(lib, 'queue-i', [1], { first: true, again: true });
+    await run(lib, recording());
     removePage(lib, 'queue-i', 1);
-    assert.ok(!existsSync(`${lib.paths.videoBase('queue-i', 1)}.mp3`));
+    const base = lib.paths.videoBase('queue-i', 1);
+    assert.ok(!existsSync(`${base}.mp3`) && !existsSync(`${base}.previous.mp3`) && !existsSync(`${base}.previous.meta.json`));
   });
 
   test('a video job never locks a course: it has none', () => {

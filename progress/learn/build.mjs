@@ -76,7 +76,7 @@ export function startVideos(lib) {
   const stamp = now().replace(/[-:T]/g, '').slice(0, 12);
   const job = saveJob(lib, {
     v: 1, id: `j${stamp}${randomBytes(2).toString('hex')}`, kind: 'video', topic: 'Videos', courseTitle: 'Videos', link: null, category: null, mode: 'page', courseId: null, summary: null,
-    step: 'voice', state: 'running', message: 'Getting ready', done: 0, total: 0, current: null, candidates: null, picks: null, pid: null, error: null, startedAt: now(),
+    step: 'voice', state: 'running', message: 'Getting ready', done: 0, total: 0, working: [], leftMinutes: null, candidates: null, picks: null, pid: null, error: null, startedAt: now(),
   });
   startDaemon(lib, job.id);
   return job;
@@ -314,7 +314,7 @@ export async function runJob(lib, id, io = defaultIo) {
         save({ step: 'videos' });
       }
       const made = await makeVideos({ lib, io, save, isStopping: () => stopping });
-      save({ step: 'done', state: 'done', current: null, message: made === 1 ? 'Your video is ready' : `${made} videos ready`, done: made, total: made });
+      save({ step: 'done', state: 'done', working: [], leftMinutes: null, message: made === 1 ? 'Your video is ready' : `${made} videos ready`, done: made, total: made });
       // Something asked for in the moment this one finished.
       if (readQueue(lib).length) startVideos(lib);
       return job;
