@@ -2,6 +2,15 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.7.3",
+      "date": "2026-11-05",
+      "by": "Yousif",
+      "notes": [
+        "Make it again starts on one press and says so where you pressed",
+        "The Windows Learn window shows a video's bar and time left"
+      ]
+    },
+    {
       "version": "0.7.2",
       "date": "2026-11-05",
       "by": "Yousif",

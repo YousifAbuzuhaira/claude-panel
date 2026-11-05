@@ -747,8 +747,11 @@ function New-JobRow($Job) {
     $barRow = New-Object System.Windows.Controls.StackPanel
     $barRow.Orientation = 'Horizontal'
     $barRow.Margin = New-Gap 0 6 0 0
-    [void]$barRow.Children.Add((New-Bar ([double]$Job.done / [double]$Job.total) 260))
-    $count = New-Text ("{0}/{1} pages" -f [int]$Job.done, [int]$Job.total) $dim
+    # A video's own progress says more than a count of one.
+    $making = if ([string]$Job.kind -eq 'video' -and $state -eq 'running') { @($Job.working)[0] } else { $null }
+    $ratio = if ($making) { [double]$making.fraction } else { [double]$Job.done / [double]$Job.total }
+    [void]$barRow.Children.Add((New-Bar $ratio 260))
+    $count = New-Text ("{0}/{1} {2}" -f [int]$Job.done, [int]$Job.total, $(if ([string]$Job.kind -eq 'video') { 'videos' } else { 'pages' })) $dim
     $count.FontFamily = $monoFont
     $count.FontSize = 11
     $count.Margin = New-Gap 8 0 0 0
@@ -1741,6 +1744,26 @@ function Add-VideoNote([string]$Text) {
   [void]$script:videoPanel.Children.Add($note)
 }
 
+function Add-VideoStarting([string]$Text) {
+  $note = New-Text $Text $accent
+  $note.Padding = New-Gap 4 2 10 2
+  $note.TextWrapping = 'Wrap'
+  [void]$script:videoPanel.Children.Add($note)
+}
+
+# A video being made: a bar, what it's doing, how long so far and how long is left.
+function Add-VideoProgress($Item) {
+  $track = New-Bar ([Math]::Max(0.0, [Math]::Min(1.0, [double]$Item.fraction))) 180
+  $track.Margin = New-Gap 4 7 12 7
+  [void]$script:videoPanel.Children.Add($track)
+  $words = [string]$Item.note
+  if ($words) { $words = $words.Substring(0, 1).ToUpper() + $words.Substring(1) }
+  $sofar = 0.0
+  try { $sofar = ([DateTime]::UtcNow - ([DateTime]::Parse([string]$Item.startedAt)).ToUniversalTime()).TotalMinutes } catch {}
+  $left = [int][Math]::Max(1, [Math]::Round([double]$Item.leftMinutes))
+  Add-VideoNote "$words $GLYPH_DOT $(Format-VideoTime ([int][Math]::Max(1, [Math]::Round($sofar)))) so far $GLYPH_DOT about $(Format-VideoTime $left) left"
+}
+
 function Show-VideoRow {
   $video = $script:pageVideo
   if (-not $script:videoPanel -or -not $video) { return }
@@ -1762,14 +1785,19 @@ function Show-VideoRow {
       Update-PageVideo
     }
   }
+  # One press: the row says so at once, in the place that was pressed.
   $again = {
     param($Data, $Sender)
-    $video = $script:pageVideo
-    if (-not (Test-ArmedHere $Sender "video:$($script:courseId):$($script:pageNumber)" "Start? $([int]$video.estimate.totalMinutes) min")) { return }
+    Reset-Armed
+    $script:videoPanel.Children.Clear()
+    Add-VideoStarting "Starting the new video. The one you have stays until it's done."
     Invoke-Helper 'video.queue' @{ courseId = $script:courseId; n = [int]$script:pageNumber; again = $true } {
       param($Result, $Context)
-      Show-Toast "Making it again in the background. This one stays until it's done."
       Update-PageVideo
+    } $null {
+      param($Message, $Context)
+      Show-Toast $Message 'error'
+      Show-VideoRow
     }
   }
   $flip = {
@@ -1799,7 +1827,10 @@ function Show-VideoRow {
       Add-VideoNote 'This page changed since the video was made.'
       Add-VideoLink 'Update the video' $make
     }
-    'making' { Add-VideoNote "Making this video: $(if ($video.message) { [string]$video.message } else { 'starting' })" }
+    'making' {
+      if ($video.progress) { Add-VideoProgress $video.progress }
+      else { Add-VideoNote 'Making this video' }
+    }
     'queued' { Add-VideoNote 'Waiting for its turn to be made' }
     'old' {
       Add-VideoLink 'Update this course first' {

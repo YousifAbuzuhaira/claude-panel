@@ -466,14 +466,25 @@ async function openVideo() {
   window.open(withToken(`video/?course=${encodeURIComponent(S.courseId)}&page=${S.pageN}`), 'learn-video', 'popup,width=1180,height=760');
 }
 
-async function makeVideo(event, video, { again = false, beside = again } = {}) {
+/** One press: the page's row says so at once, in the place that was pressed. */
+async function remakeVideo() {
+  const [courseId, n] = [S.courseId, S.pageN];
+  ui.videoRow.replaceChildren(h('div.video-starting', null, 'Starting the new video. The one you have stays until it\'s done.'));
+  if ((await act('video.queue', { courseId, n, again: true })) === undefined) {
+    showVideoRow();
+    return;
+  }
+  refreshVideo();
+}
+
+async function makeVideo(event, video, { beside = false } = {}) {
   const setup = video.voice?.needsSetup ? `, plus a ${video.voice.setupMb} MB one-time download` : '';
   // Beside other links the prompt has to stay short: a long one wraps away from under the pointer,
   // and the second press lands on nothing.
   const prompt = beside ? `Start? ${video.estimate.totalMinutes} min` : `About ${video.estimate.totalMinutes} min to make${setup}. Click to start`;
   if (!armed(`video:${S.courseId}:${S.pageN}`, event.currentTarget, prompt)) return;
-  if ((await act('video.queue', { courseId: S.courseId, n: S.pageN, again })) === undefined) return;
-  toast(again ? 'Making it again in the background. This one stays until it\'s done.' : 'Making the video in the background. You can keep working.');
+  if ((await act('video.queue', { courseId: S.courseId, n: S.pageN })) === undefined) return;
+  toast('Making the video in the background. You can keep working.');
   refreshVideo();
 }
 
@@ -504,7 +515,7 @@ function videoRow(video) {
   const make = (text, beside = false) => action(text, event => makeVideo(event, video, { beside }), 'blue');
   if (video.voice?.reason && video.state !== 'ready') row.append(h('span.dim', null, video.voice.reason));
   else if (video.state === 'ready') {
-    row.append(watch(), action('Make it again', event => makeVideo(event, video, { again: true }), 'blue'));
+    row.append(watch(), action('Make it again', remakeVideo, 'blue'));
     if (video.earlier) {
       const earlier = howMade(video.earlier);
       row.append(action(`Switch to the earlier version${earlier ? ` (${earlier})` : ''}`, swapVideo, 'blue'));

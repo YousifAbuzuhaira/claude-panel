@@ -587,6 +587,7 @@ html[data-see-through] :is(.ui-btn.green, .chat-button.learn:not(.done), .toast)
 /* The page's video, under its title, and the course's in Contents */
 .course-videos { margin: 2px 0 0; font-size: 12px; }
 .video-row { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; margin: 2px 0 10px; }
+.video-starting { flex-basis: 100%; margin-top: 2px; font-size: 13px; color: var(--accent); }
 .video-progress { display: flex; flex-wrap: wrap; flex-basis: 100%; align-items: center; gap: 4px 12px; margin-top: 6px; font-size: 12px; }
 .video-progress .bar { flex: 0 0 180px; }
 
