@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.7.0",
+      "date": "2026-11-05",
+      "by": "Yousif",
+      "notes": [
+        "Videos are made faster, and a whole course far faster",
+        "Learn shows how far a video is and how long is left",
+        "Make a video again, on another model if you like, and switch back"
+      ]
+    },
+    {
       "version": "0.6.0",
       "date": "2026-11-04",
       "by": "Yousif",

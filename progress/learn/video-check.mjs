@@ -412,7 +412,7 @@ export function tidyPronounce(list, scenes) {
 /** Roughly how long a page's video and recording will be, and its size. */
 export function estimate(wordCount) {
   const minutes = wordCount / 112;
-  const scriptMinutes = Math.max(2, Math.round(wordCount / 800));
+  const scriptMinutes = Math.max(2, Math.round(wordCount / 650));
   const recordingMinutes = Math.max(1, Math.round(minutes * 0.49));
   return { minutes: Math.round(minutes * 10) / 10, scriptMinutes, recordingMinutes, totalMinutes: scriptMinutes + recordingMinutes, mb: Math.round(minutes * 0.53 * 10) / 10 };
 }
