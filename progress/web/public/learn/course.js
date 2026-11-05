@@ -4,7 +4,7 @@ import { isNative } from '../shared/look.js';
 import { renderBlocks } from './blocks.js';
 import { doneListeners, chatHooks, chatPanel, fillInput, forgetChat, pageKey, redrawIdle, showChat } from './chat.js';
 import { renderCheck } from './checks.js';
-import { GLYPH, S, act, action, armed, call, formatClock, formatDate, h, inlineEdit, isHttp, nav, savePrefs, short, toast } from './core.js';
+import { GLYPH, S, act, action, armed, call, formatClock, formatDate, h, inlineEdit, isHttp, nav, savePrefs, short, timeOf, toast, videoBar } from './core.js';
 
 const C = {
   renamingPage: null,
@@ -466,15 +466,34 @@ async function openVideo() {
   window.open(withToken(`video/?course=${encodeURIComponent(S.courseId)}&page=${S.pageN}`), 'learn-video', 'popup,width=1180,height=760');
 }
 
-async function makeVideo(event, video) {
+async function makeVideo(event, video, again = false) {
   const setup = video.voice?.needsSetup ? `, plus a ${video.voice.setupMb} MB one-time download` : '';
-  if (!armed(`video:${S.courseId}:${S.pageN}`, event.currentTarget, `About ${video.estimate.recordingMinutes} min to make${setup}. Click to start`)) return;
-  if ((await act('video.queue', { courseId: S.courseId, n: S.pageN })) === undefined) return;
+  const prompt = again ? `About ${video.estimate.totalMinutes} min. This one stays until it's done. Click to start` : `About ${video.estimate.totalMinutes} min to make${setup}. Click to start`;
+  if (!armed(`video:${S.courseId}:${S.pageN}`, event.currentTarget, prompt)) return;
+  if ((await act('video.queue', { courseId: S.courseId, n: S.pageN, again })) === undefined) return;
   toast('Making the video in the background. You can keep working.');
   refreshVideo();
 }
 
 /** Under the page's title: watch it, make it, or what it's waiting for. */
+const MODEL_NAMES = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+
+/** How a video was made, in a few words, as far as it's known. */
+function howMade(made) {
+  const parts = [];
+  if (made?.model) parts.push(`${MODEL_NAMES[made.model] || made.model}${made.effort ? `, ${made.effort} effort` : ''}`);
+  if (made?.takenMinutes) parts.push(`took ${timeOf(made.takenMinutes)}`);
+  return parts.join(', ');
+}
+
+async function swapVideo() {
+  const video = await act('video.swap', { courseId: S.courseId, n: S.pageN });
+  if (!video) return;
+  S.pageData.video = video;
+  showVideoRow();
+  toast('Switched. Watch plays that version now.');
+}
+
 function videoRow(video) {
   if (!video) return null;
   const row = h('div.video-row');
@@ -482,9 +501,17 @@ function videoRow(video) {
   const watch = () => action(`${GLYPH.play} Watch this page${minutes}`, openVideo, 'blue');
   const make = text => action(text, event => makeVideo(event, video), 'blue');
   if (video.voice?.reason && video.state !== 'ready') row.append(h('span.dim', null, video.voice.reason));
-  else if (video.state === 'ready') row.append(watch());
+  else if (video.state === 'ready') {
+    row.append(watch(), action('Make it again', event => makeVideo(event, video, true), 'blue'));
+    if (video.earlier) {
+      const earlier = howMade(video.earlier);
+      row.append(action(`Switch to the earlier version${earlier ? ` (${earlier})` : ''}`, swapVideo, 'blue'));
+    }
+    const made = howMade(video.made);
+    if (made) row.append(h('span.dim', null, `This version: ${made}`));
+  }
   else if (video.state === 'stale') row.append(watch(), h('span.dim', null, 'This page changed since the video was made.'), make('Update the video'));
-  else if (video.state === 'making') row.append(h('span.dim', null, `Making this video: ${video.message || 'starting'}`));
+  else if (video.state === 'making') row.append(video.progress ? videoBar(video.progress) : h('span.dim', null, 'Making this video'));
   else if (video.state === 'queued') row.append(h('span.dim', null, 'Waiting for its turn to be made'));
   else if (video.state === 'old') {
     const update = action('Update this course first', updateCourse, 'blue');
@@ -511,13 +538,12 @@ async function refreshVideo() {
   showVideoRow();
 }
 
-const timeOf = minutes => (minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 6) / 10} hours`);
 let videosFor = null;
 
 async function makeCourseVideos(event, videos) {
   const setup = videos.voice.needsSetup ? `, plus a ${videos.voice.setupMb} MB one-time download` : '';
-  const { recordingMinutes, mb } = videos.estimate;
-  if (!armed(`videos:${S.courseId}`, event.currentTarget, `About ${timeOf(recordingMinutes)} and ${mb} MB${setup}. Click to start`)) return;
+  const { totalMinutes, mb } = videos.estimate;
+  if (!armed(`videos:${S.courseId}`, event.currentTarget, `About ${timeOf(totalMinutes)} and ${mb} MB${setup}. Click to start`)) return;
   if ((await act('video.queue', { courseId: S.courseId })) === undefined) return;
   toast('Making the videos in the background, at low priority. You can keep working.');
   showCourseVideos();
@@ -535,7 +561,7 @@ async function showCourseVideos() {
   ui.courseVideos.hidden = !shown;
   if (!shown) return;
   const line = [];
-  if (videos.waiting) line.push(h('span.dim', null, `Making videos: ${videos.ready} of ${videos.total} ready`));
+  if (videos.waiting) line.push(h('span.dim', null, `Making videos: ${videos.ready} of ${videos.total} ready${videos.leftMinutes ? `  ${GLYPH.dot}  about ${timeOf(videos.leftMinutes)} left` : ''}`));
   else if (videos.wanted.length) {
     const link = action(`Make videos (${videos.wanted.length} ${videos.wanted.length === 1 ? 'page' : 'pages'})`, event => makeCourseVideos(event, videos), 'blue');
     link.title = 'Records in the background at low priority. Your work comes first, so it takes longer while you use the machine.';

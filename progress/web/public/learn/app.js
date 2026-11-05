@@ -4,7 +4,7 @@ import { onEvents, openWindow, withToken } from '../shared/api.js';
 import { isNative, watchAppearance } from '../shared/look.js';
 import { buildAskView, openAdvisor } from './ask.js';
 import { chatEvent, forgetChats } from './chat.js';
-import { GLYPH, MAX_SCALE, MIN_SCALE, S, VIEW_NAMES, banner, call, loadPrefs, nav, savePrefs, short, toast } from './core.js';
+import { GLYPH, MAX_SCALE, MIN_SCALE, S, VIEW_NAMES, banner, call, loadPrefs, nav, savePrefs, short, timeOf, toast } from './core.js';
 import { buildCourseView, courseStatus, openCourse, openOverlap, overlapOpen, saveProgress, showOverlap, stepPage, videoProgress } from './course.js';
 import { buildLearnedView, leaveLearnedModes, refreshLearned, resetLearned } from './learned.js';
 import { buildLibraryView, libraryDue, refreshLibrary, resetLibraryModes } from './library.js';
@@ -68,6 +68,14 @@ function showReviewCount() {
 
 Object.assign(nav, { showView, openCourse: openCourseView, refreshLibrary, refreshLearned, showReviewCount, setTextScale });
 
+/** The top bar while videos are made: one video's percent, or how far through a course. */
+function videoChip(build) {
+  const left = build.leftMinutes ? `  ${GLYPH.dot}  about ${timeOf(build.leftMinutes)} left` : '';
+  const item = build.working?.[0];
+  if (build.total > 1) return `${GLYPH.half} Videos ${build.done}/${build.total}${left}`;
+  return `${GLYPH.half} Video ${item ? `${Math.round((item.fraction || 0) * 100)}%` : 'getting ready'}${left}`;
+}
+
 function updateBuildChip() {
   const build = S.status?.build;
   buildChip.className = 'build-chip';
@@ -77,7 +85,7 @@ function updateBuildChip() {
   }
   let text = '';
   switch (build.state) {
-    case 'running': text = `${GLYPH.half} ${short(build.topic, 28)}${build.total > 0 ? ` ${build.done}/${build.total}` : ''}`; buildChip.classList.add('running'); break;
+    case 'running': text = build.kind === 'video' ? videoChip(build) : `${GLYPH.half} ${short(build.topic, 28)}${build.total > 0 ? ` ${build.done}/${build.total}` : ''}`; buildChip.classList.add('running'); break;
     case 'waiting-picks': text = `${GLYPH.empty} Pick sources: ${short(build.topic, 24)}`; buildChip.classList.add('waiting'); break;
     case 'failed': text = `${GLYPH.empty} Build stopped: ${short(build.topic, 24)}`; buildChip.classList.add('failed'); break;
     case 'done': text = `${GLYPH.check} ${short(build.message, 36)}`; buildChip.classList.add('done'); break;

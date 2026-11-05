@@ -151,6 +151,18 @@ export function formatClock(seconds) {
   return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${secs}` : `${minutes}:${secs}`;
 }
 
+/** "12 min" or "7 hours". */
+export const timeOf = minutes => (minutes < 60 ? `${Math.max(1, Math.round(minutes))} min` : `${Math.round(minutes / 6) / 10} hours`);
+
+/** A page's video being made: a bar, what it's doing, how long so far and how long is left. */
+export function videoBar(item) {
+  const percent = Math.round(Math.max(0, Math.min(1, item.fraction || 0)) * 100);
+  const sofar = Math.max(0, (Date.now() - Date.parse(item.startedAt)) / 60_000);
+  const note = String(item.note || 'starting');
+  const words = [note[0].toUpperCase() + note.slice(1), `${timeOf(sofar)} so far`, `about ${timeOf(item.leftMinutes)} left`].join(`  ${GLYPH.dot}  `);
+  return h('div.video-progress', null, h('div.bar', null, h('div.bar-fill', { style: { width: `${percent}%` } })), h('span.dim', null, words));
+}
+
 export const isHttp = url => /^https?:\/\//i.test(String(url || ''));
 
 /** Links open in a new tab, and only for http(s). */

@@ -1101,7 +1101,7 @@ function Build-CourseView {
     $videos = $script:courseVideos
     if (-not $videos -or @($videos.wanted).Count -eq 0 -or [int]$videos.waiting -gt 0) { return }
     $setup = if ($videos.voice.needsSetup) { ", plus a $([int]$videos.voice.setupMb) MB one-time download" } else { '' }
-    $prompt = "About $(Format-VideoTime ([int]$videos.estimate.recordingMinutes)) and $([int]$videos.estimate.mb) MB$setup. Click to start"
+    $prompt = "About $(Format-VideoTime ([int]$videos.estimate.totalMinutes)) and $([int]$videos.estimate.mb) MB$setup. Click to start"
     if (-not (Test-ArmedHere $Sender "videos:$($script:courseId)" $prompt)) { return }
     Invoke-Helper 'video.queue' @{ courseId = $script:courseId } {
       param($Result, $Context)
@@ -1752,16 +1752,45 @@ function Show-VideoRow {
     param($Data, $Sender)
     $video = $script:pageVideo
     $setup = if ($video.voice.needsSetup) { ", plus a $([int]$video.voice.setupMb) MB one-time download" } else { '' }
-    if (-not (Test-ArmedHere $Sender "video:$($script:courseId):$($script:pageNumber)" "About $([int]$video.estimate.recordingMinutes) min to make$setup. Click to start")) { return }
+    if (-not (Test-ArmedHere $Sender "video:$($script:courseId):$($script:pageNumber)" "About $([int]$video.estimate.totalMinutes) min to make$setup. Click to start")) { return }
     Invoke-Helper 'video.queue' @{ courseId = $script:courseId; n = [int]$script:pageNumber } {
       param($Result, $Context)
       Show-Toast 'Making the video in the background. You can keep working.'
       Update-PageVideo
     }
   }
+  $again = {
+    param($Data, $Sender)
+    $video = $script:pageVideo
+    if (-not (Test-ArmedHere $Sender "video:$($script:courseId):$($script:pageNumber)" "About $([int]$video.estimate.totalMinutes) min. This one stays until it's done. Click to start")) { return }
+    Invoke-Helper 'video.queue' @{ courseId = $script:courseId; n = [int]$script:pageNumber; again = $true } {
+      param($Result, $Context)
+      Show-Toast 'Making the video in the background. You can keep working.'
+      Update-PageVideo
+    }
+  }
+  $flip = {
+    param($Data, $Sender)
+    Invoke-Helper 'video.swap' @{ courseId = $script:courseId; n = [int]$script:pageNumber } {
+      param($Result, $Context)
+      if (-not $Result) { return }
+      $script:pageVideo = $Result
+      Show-VideoRow
+      Show-Toast 'Switched. Watch plays that version now.'
+    }
+  }
   if ($video.voice.reason -and $state -ne 'ready') { Add-VideoNote ([string]$video.voice.reason); return }
   switch ($state) {
-    'ready' { Add-VideoLink $watch { Open-PageVideo } }
+    'ready' {
+      Add-VideoLink $watch { Open-PageVideo }
+      Add-VideoLink 'Make it again' $again
+      if ($video.earlier) {
+        $earlier = Format-VideoMade $video.earlier
+        Add-VideoLink "Switch to the earlier version$(if ($earlier) { " ($earlier)" })" $flip
+      }
+      $made = Format-VideoMade $video.made
+      if ($made) { Add-VideoNote "This version: $made" }
+    }
     'stale' {
       Add-VideoLink $watch { Open-PageVideo }
       Add-VideoNote 'This page changed since the video was made.'
@@ -1783,6 +1812,19 @@ function Show-VideoRow {
     }
     default { Add-VideoLink 'Make a video of this page' $make }
   }
+}
+
+# How a video was made, in a few words, as far as it's known.
+function Format-VideoMade($Made) {
+  if (-not $Made) { return '' }
+  $parts = @()
+  if ($Made.model) {
+    $name = @{ opus = 'Opus'; sonnet = 'Sonnet'; haiku = 'Haiku' }[[string]$Made.model]
+    if (-not $name) { $name = [string]$Made.model }
+    $parts += $(if ($Made.effort) { "$name, $($Made.effort) effort" } else { $name })
+  }
+  if ($Made.takenMinutes) { $parts += "took $(Format-VideoTime ([int][Math]::Round([double]$Made.takenMinutes)))" }
+  return ($parts -join ', ')
 }
 
 function Format-VideoTime([int]$Minutes) {
@@ -1809,7 +1851,8 @@ function Show-CourseVideos {
   $link.Visibility = 'Visible'
   $left = @($videos.wanted).Count
   if ([int]$videos.waiting -gt 0) {
-    $link.Text = "Making videos: $([int]$videos.ready) of $([int]$videos.total) ready"
+    $leftText = if ($videos.leftMinutes) { " $GLYPH_DOT about $(Format-VideoTime ([int][Math]::Round([double]$videos.leftMinutes))) left" } else { '' }
+    $link.Text = "Making videos: $([int]$videos.ready) of $([int]$videos.total) ready$leftText"
     $link.Foreground = $dim
   } elseif ($left -gt 0) {
     $link.Text = "Make videos ($left $(if ($left -eq 1) { 'page' } else { 'pages' }))"

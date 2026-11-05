@@ -1,6 +1,6 @@
 // Library: a new course, the builds, and the courses by category.
 import { upload } from '../shared/api.js';
-import { GLYPH, S, act, action, armed, categoryName, chip, formatDate, h, inlineEdit, isHttp, nav, onEnter, short, toast } from './core.js';
+import { GLYPH, S, act, action, armed, categoryName, chip, formatDate, h, inlineEdit, isHttp, nav, onEnter, short, toast, videoBar } from './core.js';
 
 const L = {
   mode: 'auto',
@@ -290,11 +290,13 @@ function jobRow(job) {
     h('div.job-top', null, h('span.job-title', { title: job.topic || '' }, short(job.courseTitle || job.topic || 'A build', 120)), actions),
     h('div.job-message', null, job.message || job.state));
   if (job.state === 'failed' && job.error) row.append(h('div.job-error', null, short(job.error, 300)));
-  if (job.total > 0 && job.state !== 'done') {
+  const making = job.kind === 'video' && job.state === 'running' ? (S.status?.build?.id === job.id ? S.status.build : job).working?.[0] : null;
+  if (making) row.append(videoBar(making));
+  else if (job.total > 0 && job.state !== 'done') {
     const ratio = Math.max(0, Math.min(1, job.done / job.total));
     row.append(h('div.job-bar', null,
       h('div.bar', null, h('div.bar-fill', { style: { width: `${Math.round(ratio * 100)}%` } })),
-      h('span.mono.dim', null, `${job.done}/${job.total} pages`)));
+      h('span.mono.dim', null, `${job.done}/${job.total} ${job.kind === 'video' ? 'videos' : 'pages'}`)));
   }
   if (job.state === 'waiting-picks' && L.pickingJob === job.id) row.append(picker(job));
   return row;
