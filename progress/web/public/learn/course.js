@@ -466,12 +466,14 @@ async function openVideo() {
   window.open(withToken(`video/?course=${encodeURIComponent(S.courseId)}&page=${S.pageN}`), 'learn-video', 'popup,width=1180,height=760');
 }
 
-async function makeVideo(event, video, again = false) {
+async function makeVideo(event, video, { again = false, beside = again } = {}) {
   const setup = video.voice?.needsSetup ? `, plus a ${video.voice.setupMb} MB one-time download` : '';
-  const prompt = again ? `About ${video.estimate.totalMinutes} min. This one stays until it's done. Click to start` : `About ${video.estimate.totalMinutes} min to make${setup}. Click to start`;
+  // Beside other links the prompt has to stay short: a long one wraps away from under the pointer,
+  // and the second press lands on nothing.
+  const prompt = beside ? `Start? ${video.estimate.totalMinutes} min` : `About ${video.estimate.totalMinutes} min to make${setup}. Click to start`;
   if (!armed(`video:${S.courseId}:${S.pageN}`, event.currentTarget, prompt)) return;
   if ((await act('video.queue', { courseId: S.courseId, n: S.pageN, again })) === undefined) return;
-  toast('Making the video in the background. You can keep working.');
+  toast(again ? 'Making it again in the background. This one stays until it\'s done.' : 'Making the video in the background. You can keep working.');
   refreshVideo();
 }
 
@@ -499,10 +501,10 @@ function videoRow(video) {
   const row = h('div.video-row');
   const minutes = video.minutes ? ` ${GLYPH.dot} ${Math.round(video.minutes)} min` : '';
   const watch = () => action(`${GLYPH.play} Watch this page${minutes}`, openVideo, 'blue');
-  const make = text => action(text, event => makeVideo(event, video), 'blue');
+  const make = (text, beside = false) => action(text, event => makeVideo(event, video, { beside }), 'blue');
   if (video.voice?.reason && video.state !== 'ready') row.append(h('span.dim', null, video.voice.reason));
   else if (video.state === 'ready') {
-    row.append(watch(), action('Make it again', event => makeVideo(event, video, true), 'blue'));
+    row.append(watch(), action('Make it again', event => makeVideo(event, video, { again: true }), 'blue'));
     if (video.earlier) {
       const earlier = howMade(video.earlier);
       row.append(action(`Switch to the earlier version${earlier ? ` (${earlier})` : ''}`, swapVideo, 'blue'));
@@ -510,7 +512,7 @@ function videoRow(video) {
     const made = howMade(video.made);
     if (made) row.append(h('span.dim', null, `This version: ${made}`));
   }
-  else if (video.state === 'stale') row.append(watch(), h('span.dim', null, 'This page changed since the video was made.'), make('Update the video'));
+  else if (video.state === 'stale') row.append(watch(), h('span.dim', null, 'This page changed since the video was made.'), make('Update the video', true));
   else if (video.state === 'making') row.append(video.progress ? videoBar(video.progress) : h('span.dim', null, 'Making this video'));
   else if (video.state === 'queued') row.append(h('span.dim', null, 'Waiting for its turn to be made'));
   else if (video.state === 'old') {

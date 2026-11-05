@@ -148,7 +148,7 @@ function Test-Armed([string]$Key, $Sender = $null, [string]$Prompt = 'remove?') 
     $Sender.Text = $Prompt
     $Sender.Foreground = $red
   }
-  Show-Toast 'Click again to remove'
+  Show-Toast $(if ($Prompt -like 'remove*') { 'Click again to remove' } else { 'Click again to confirm' })
   return $false
 }
 
@@ -1752,7 +1752,10 @@ function Show-VideoRow {
     param($Data, $Sender)
     $video = $script:pageVideo
     $setup = if ($video.voice.needsSetup) { ", plus a $([int]$video.voice.setupMb) MB one-time download" } else { '' }
-    if (-not (Test-ArmedHere $Sender "video:$($script:courseId):$($script:pageNumber)" "About $([int]$video.estimate.totalMinutes) min to make$setup. Click to start")) { return }
+    # Beside other links the prompt has to stay short: a long one wraps away from under the pointer,
+    # and the second press lands on nothing.
+    $prompt = if ([string]$video.state -eq 'stale') { "Start? $([int]$video.estimate.totalMinutes) min" } else { "About $([int]$video.estimate.totalMinutes) min to make$setup. Click to start" }
+    if (-not (Test-ArmedHere $Sender "video:$($script:courseId):$($script:pageNumber)" $prompt)) { return }
     Invoke-Helper 'video.queue' @{ courseId = $script:courseId; n = [int]$script:pageNumber } {
       param($Result, $Context)
       Show-Toast 'Making the video in the background. You can keep working.'
@@ -1762,10 +1765,10 @@ function Show-VideoRow {
   $again = {
     param($Data, $Sender)
     $video = $script:pageVideo
-    if (-not (Test-ArmedHere $Sender "video:$($script:courseId):$($script:pageNumber)" "About $([int]$video.estimate.totalMinutes) min. This one stays until it's done. Click to start")) { return }
+    if (-not (Test-ArmedHere $Sender "video:$($script:courseId):$($script:pageNumber)" "Start? $([int]$video.estimate.totalMinutes) min")) { return }
     Invoke-Helper 'video.queue' @{ courseId = $script:courseId; n = [int]$script:pageNumber; again = $true } {
       param($Result, $Context)
-      Show-Toast 'Making the video in the background. You can keep working.'
+      Show-Toast "Making it again in the background. This one stays until it's done."
       Update-PageVideo
     }
   }
