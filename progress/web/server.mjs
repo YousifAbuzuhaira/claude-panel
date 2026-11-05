@@ -205,12 +205,14 @@ const TYPES = {
 /** One `learn.sh serve` child: requests go in by rid, events go out to every page. */
 function startHelper(onEvent) {
   let child = null;
+  let version = null;
   let rid = 0;
   let restarts = 0;
   let lastStderr = '';
   const pending = new Map();
 
   const launch = () => {
+    version = pluginVersion();
     const argv = process.platform === 'win32' ? [process.execPath, [LEARN_MJS, 'serve']] : ['bash', [LEARN_SH, 'serve']];
     child = spawn(argv[0], argv[1], { stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
     createInterface({ input: child.stdout }).on('line', line => {
@@ -249,8 +251,18 @@ function startHelper(onEvent) {
   launch();
 
   return {
-    ask(request) {
-      if (!child) return Promise.resolve({ ok: false, error: 'Learn\'s helper is not running' });
+    async ask(request) {
+      // Pages come from disk, so after an update they're new while a running helper is still old.
+      // A new version starts a new helper before it's asked anything. Jobs run apart, so they go on.
+      if (child && pluginVersion() !== version) {
+        const stale = child;
+        restarts = 0;
+        await new Promise(resolve => {
+          stale.once('exit', resolve);
+          stale.kill();
+        });
+      }
+      if (!child) return { ok: false, error: 'Learn\'s helper is not running' };
       const id = ++rid;
       return new Promise(resolve => {
         const timer = setTimeout(() => {
