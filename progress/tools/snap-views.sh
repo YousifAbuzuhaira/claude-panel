@@ -3,10 +3,9 @@
 # OUTDIR/<window>-<view>-<scheme>-<opacity>.png ("def" = each group's default opacity).
 #
 #   progress/tools/snap-views.sh [--as NAME] [--schemes "ember paper hc"] [--opacities "def 0.4"] \
-#     OUTDIR panel|learn|sudoku|2048|typing|chess...
+#     OUTDIR panel|sudoku|2048|typing|chess...
 #
-# Learn draws from a COPY of a library, never the real one: SNAP_LIBRARY (default: a copy of
-# ~/.claude/learn made under OUTDIR/../lib the first time) and an empty SNAP_CONFIG.
+# Learn is a web page (web/public/learn): draw it with tools/shoot.mjs.
 # A view that fails to draw is reported and the rest carry on; the exit code says if any failed.
 set -uo pipefail
 
@@ -21,20 +20,12 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
-[ $# -ge 2 ] || { sed -n '2,10p' "$0" >&2; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,9p' "$0" >&2; exit 2; }
 out="$1"; shift
 mkdir -p "$out"
 here="$(cd "$(dirname "$0")" && pwd)"
 fixtures="$here/fixtures"
 
-library="${SNAP_LIBRARY:-}"
-if [ -z "$library" ]; then
-  library="$(cd "$out/.." && pwd)/lib"
-  [ -d "$library" ] || cp -r "$HOME/.claude/learn" "$library"
-fi
-config="${SNAP_CONFIG:-$(cd "$out/.." && pwd)/config-$name}"
-mkdir -p "$config"
-course="$(ls "$library/courses" 2>/dev/null | head -1)"
 fixture() { wslpath -w "$fixtures/$1"; }
 
 # window: view label, then the script and its arguments (one view per line).
@@ -51,15 +42,6 @@ views_of() {
       echo "games|PhasesWidget.ps1 -StateFile $(fixture panel-full.json) -SnapshotTab phases -SnapshotLook open -SnapshotStrip games"
       echo "long|PhasesWidget.ps1 -StateFile $(fixture panel-long.json) -SnapshotTab phases -SnapshotLook open"
       echo "course|PhasesWidget.ps1 -StateFile $(fixture panel-course.json) -SnapshotTab learn -SnapshotLook open"
-      ;;
-    learn)
-      for view in library review learned ask settings; do
-        echo "$view|Learn.ps1 -SnapshotView $view -SnapshotLibrary $library -SnapshotConfig $config"
-      done
-      if [ -n "$course" ]; then
-        echo "course|Learn.ps1 -SnapshotView course -SnapshotLibrary $library -SnapshotConfig $config -SnapshotCourse $course -SnapshotPage 1"
-        echo "overlap|Learn.ps1 -SnapshotView overlap -SnapshotLibrary $library -SnapshotConfig $config -SnapshotCourse $course"
-      fi
       ;;
     sudoku)
       echo "demo|Sudoku.ps1 -SnapshotDemo"

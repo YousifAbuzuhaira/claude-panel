@@ -1,6 +1,5 @@
 // A diagram block (learn/diagram.mjs lays it out) drawn as SVG: boxes, text and lines at the
 // helper's coordinates, coloured by the scheme's CSS variables so a scheme change repaints it.
-// The twin of New-DiagramBlock in widget/LearnRender.ps1; keep the two drawing the same.
 const SVG = 'http://www.w3.org/2000/svg';
 
 function el(name, attrs = {}, ...kids) {

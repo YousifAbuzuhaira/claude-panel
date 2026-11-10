@@ -7,8 +7,7 @@
 #     OUT.png Script.ps1 [script args...]
 #
 #   progress/tools/snap.sh --scheme paper /tmp/p.png Game2048.ps1 -SnapshotDemo
-#   progress/tools/snap.sh --opacity 0.4 /tmp/l.png Learn.ps1 -SnapshotView library \
-#     -SnapshotLibrary /tmp/lib -SnapshotConfig /tmp/cfg
+#   progress/tools/snap.sh --opacity 0.4 /tmp/s.png Sudoku.ps1 -SnapshotDemo
 #
 # The script runs from this checkout's widget folder (a worktree runs its own code). Every
 # argument after the script name goes to it as is. Windows paths are not needed: OUT.png is a
