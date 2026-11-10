@@ -43,6 +43,10 @@ public static class ClaudeLearnLaunch {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int pid);
+  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
 
   // The first visible top-level window whose caption is exactly `text` (a minimised one counts).
   public static IntPtr WindowByText(string text) {
@@ -57,6 +61,9 @@ public static class ClaudeLearnLaunch {
   }
 }
 '@
+
+# Screen and window positions in real pixels on every monitor (per-monitor DPI aware).
+[void][ClaudeLearnLaunch]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
 
 # The distro and web.sh's WSL path, from where this script runs (\\wsl.localhost\<distro>\...\widget).
 function Get-WebScript {
@@ -89,6 +96,33 @@ function Invoke-WebOpen([switch]$New) {
   try { return ($lines[-1] | ConvertFrom-Json) } catch { Write-Log "not JSON: $($lines[-1])"; return $null }
 }
 
+# A new Learn window fills the second screen (the first one that isn't the main one), as the
+# person asked; with one screen it stays where Edge put it. It waits for the window (its caption
+# is the page's title, once the page loads), and leaves one Edge already put on that screen.
+$WINDOW_WAIT_MS = 15000
+function Move-ToSecondScreen {
+  Add-Type -AssemblyName System.Windows.Forms
+  $screen = [System.Windows.Forms.Screen]::AllScreens | Where-Object { -not $_.Primary } | Select-Object -First 1
+  if (-not $screen) { return }
+  $until = [DateTime]::UtcNow.AddMilliseconds($WINDOW_WAIT_MS)
+  $hwnd = [IntPtr]::Zero
+  while ($hwnd -eq [IntPtr]::Zero -and [DateTime]::UtcNow -lt $until) {
+    Start-Sleep -Milliseconds 100
+    $hwnd = [ClaudeLearnLaunch]::WindowByText($WINDOW_TITLE)
+  }
+  if ($hwnd -eq [IntPtr]::Zero) { Write-Log 'the new window never showed its title: left where it opened'; return }
+  $rect = New-Object ClaudeLearnLaunch+RECT
+  [void][ClaudeLearnLaunch]::GetWindowRect($hwnd, [ref]$rect)
+  $middle = New-Object System.Drawing.Point([int](($rect.Left + $rect.Right) / 2), [int](($rect.Top + $rect.Bottom) / 2))
+  $work = $screen.WorkingArea
+  if ($work.Contains($middle)) { return }
+  # Restored first: a maximised window moves as a whole, then fills the screen it is on.
+  [void][ClaudeLearnLaunch]::ShowWindow($hwnd, 9)
+  [void][ClaudeLearnLaunch]::SetWindowPos($hwnd, [IntPtr]::Zero, $work.X, $work.Y, $work.Width, $work.Height, 0x14)
+  [void][ClaudeLearnLaunch]::ShowWindow($hwnd, 3)
+  Write-Log "moved the new window to $($screen.DeviceName)"
+}
+
 # The link in an Edge app window (no tabs or address bar), else in the default browser.
 function Open-Link([string]$Link) {
   # The new window may take the foreground: this process may, having been started from a click.
@@ -99,6 +133,7 @@ function Open-Link([string]$Link) {
     if (Test-Path -LiteralPath $edge) {
       [void][System.Diagnostics.Process]::Start($edge, "--app=$Link")
       Write-Log 'opened an Edge app window'
+      Move-ToSecondScreen
       return
     }
   }
