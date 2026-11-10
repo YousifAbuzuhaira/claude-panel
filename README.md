@@ -30,14 +30,14 @@ I built this for **my** machine, and it's only been run there:
 - **Claude Code inside WSL2** (Ubuntu)
 - **WezTerm** as the terminal
 
-The panel and the Learn window are Windows PowerShell 5.1 + WPF windows. They find the chat's WezTerm window and sit over it, and they reach into WSL through `\\wsl.localhost`. Mahmood built the macOS side (a native floating panel and windows); anywhere else the panel is a Claude Code pane and Learn and the games open in the browser. The next sections say what works where.
+The panel and the games are Windows PowerShell 5.1 + WPF windows. They find the chat's WezTerm window and sit over it, and they reach into WSL through `\\wsl.localhost`. Learn is a small local web app on every setup: on Windows it opens in an Edge window with no tabs or address bar. Mahmood built the macOS side (a native floating panel and windows); anywhere else the panel is a Claude Code pane and Learn and the games open in the browser. The next sections say what works where.
 
 ## What works where
 
 | Your setup | Works today | Missing |
 |---|---|---|
 | **Windows + WSL2 + WezTerm** | Everything. | – |
-| **Windows + WSL2 + another terminal** (Windows Terminal, VS Code) | The Learn window and the games (`/learn`, `/games <name>`, or the command below), and the panel as a Claude Code pane. | The floating panel, which looks for WezTerm. |
+| **Windows + WSL2 + another terminal** (Windows Terminal, VS Code) | Learn and the games (`/learn`, `/games <name>`, or the command below), and the panel as a Claude Code pane. | The floating panel, which looks for WezTerm. |
 | **Windows, Claude Code in PowerShell** (no WSL) | The plugin loads and stays out of the way. | The panel, Learn and the games: they all go through WSL. |
 | **macOS** (iTerm2, Terminal, Ghostty, any terminal; zsh or bash) | Everything: the floating panel that follows your terminal window, test tracking, and Learn and the games in their own windows (`/learn`, `/games`). | – |
 | **Linux / plain bash** | The same as macOS (`xdg-open` opens the browser). Built for macOS, not yet run on Linux. | Same as macOS. |
@@ -111,7 +111,7 @@ P=$(ls -d ~/.claude/plugins/cache/claude-panel/progress/*/ | tail -1)
 
 ### Windows + WSL2 with another terminal
 
-Install the same way. The panel won't appear, because it looks for WezTerm, but you can open Learn and the games yourself:
+Install the same way. The panel won't appear, because it looks for WezTerm, but you can open Learn (in its Edge window) and the games yourself:
 
 ```bash
 P=$(ls -d ~/.claude/plugins/cache/claude-panel/progress/*/ | tail -1)
@@ -140,7 +140,7 @@ Then in a Claude Code session, `/reload-plugins`:
 - **The windows** stick to your terminal window like the panel: the first time centred on it, then wherever you move them on it. They move with it, float above it while it's in front, go behind other apps, and hide when it's minimized or on another Space. This works with the terminal in full screen too: the panel and the windows join its Space and take typing and clicks without pulling you off it. Window ▸ Always on Top keeps one above other apps too. ⌘[ makes the background more see-through and ⌘] more solid (the text stays solid; all Learn windows, or all game windows, together).
 - They're a small native app (`progress/mac/ClaudePanel.swift`, a WKWebView with no tabs or address bar). It's built with `swiftc` the first time it's needed (a few seconds) and cached in `~/.cache/claude-panel/app/`. Links to YouTube, docs or lichess open in your browser. Without Xcode or its Command Line Tools (`xcode-select --install`), or with `CLAUDE_PANEL_BROWSER=1`, the pages open in your browser instead.
 
-Learn and the games run on a small local server (`progress/web/server.mjs`). It listens on 127.0.0.1 only, wants a per-launch token on every request, and exits after 30 minutes with no page open. Its record is in `~/.config/claude-learn/web.json`, and game saves go in `~/.config/claude-panel/games/`. Chess downloads Stockfish (WebAssembly, GPL-3.0) from unpkg the first time, checks its hash, and caches it in `~/.cache/claude-learn/stockfish/`.
+Learn and the games run on a small local server (`progress/web/server.mjs`). It listens on 127.0.0.1 only, wants a per-launch token on every request, and exits after 30 minutes with no page open. After an update it hands over to a new server on the same address, so open pages carry on. Its record is in `~/.config/claude-learn/web.json`, and game saves go in `~/.config/claude-panel/games/`. Chess downloads Stockfish (WebAssembly, GPL-3.0) from unpkg the first time, checks its hash, and caches it in `~/.cache/claude-learn/stockfish/`.
 
 **Needs:** Node 22+ (Homebrew's `/opt/homebrew/bin/node` is found) and `claude` on your PATH.
 
@@ -151,7 +151,10 @@ Learn and the games run on a small local server (`progress/web/server.mjs`). It 
 - **The panel.** Its top row holds the open/closed arrow, the chat's title, the version (that's the **Releases** tab, with a dot while there's news) and three marks: ◐ colour scheme and see-through, ▦ Learn and the games, ✕ hide until something new. Below it are the Phases, Tests and Learn tabs. A tab you click stays in front until a new plan or test run arrives. Drag the panel anywhere and resize it from the corner grip.
 - **Colour scheme and see-through.** ◐ in the panel: click a scheme; drag the Panel, Learn and Games bars to make each window's background more or less see-through (the text stays solid; below about 85% it gets a soft edge so it reads over anything). *Custom colours →* opens Learn's Settings, where you can set your own background, accent and text colours. Every open window changes within a second.
 - **Releases.** Click the version in the panel's top row: each release, its date, who made it, and what's new.
-- **Learn.** Use the panel's Learn tab, then *Open Learn*.
+- **Learn.** Use the panel's Learn tab, then *Open Learn*, or `/learn`.
+  - **Its window:** on Windows, an Edge window with no tabs or address bar. With two screens, a new one fills the second screen; open it again and the same window comes forward, at the course you asked for. Without Edge it opens in your default browser.
+  - **Updates:** after an update, an open Learn says *Learn was updated* with a *Reload* button; nothing needs closing.
+  - **The chats line:** the foot of the window lists every Claude chat at work and the phase it's on, or its running tests. Hover it for each chat's whole plan.
   - **Library:** a new course is built *From* one of three things. Builds run in the background: close the window and they carry on.
     - **A topic or link:** type a topic, or paste a YouTube, playlist or docs link. *Just build it* finds sources for everything you named and builds straight away; *Let me pick* lets you tick them yourself. Anything no source or page could cover shows on the course as *Not covered*.
     - **A document:** a PDF, Word (.docx), Markdown, text or HTML file, up to 64 MB. Choose it, or drop it on the Library. A PDF's text comes from pypdf (fetched once into `~/.cache/claude-learn/pypdf/`, needs `python3`). Scanned pages are read by Claude, up to 60 of them.

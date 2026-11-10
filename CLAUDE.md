@@ -12,7 +12,8 @@ progress/
   .claude-plugin/plugin.json
   hooks/register.tsx              the plugin: hooks, the phases_write tool, /phases, panel life, Learn status poll
   hooks/*.ts                      pure helpers (phases schema + guide, test-command wrapping, output parsing, panel state, pane.ts for the pane)
-  web/server.mjs, web/web.sh      the local web server (macOS/Linux): Learn + games in the browser, bridged to learn.sh serve
+  web/server.mjs, web/web.sh      the local web server (every setup): Learn + games in the browser, bridged to learn.sh serve;
+                                  one Learn window (`navigate`), the hand-over after an update, the chats line (/api/phases)
   web/public/                     the browser pages: learn/, games/ (the hub) and games/<sudoku|2048|typing|chess>/
   web/public/shared/              api.js (the server), theme.js + theme.css (the colour scheme, the twin of Theme.ps1), look.js (load/save/follow it)
   web/tests/                      node:test tests for the games, the server, Learn's look, the theme and the releases
@@ -22,7 +23,7 @@ progress/
   widget/Chrome.ps1               the shared WPF pieces: marks, buttons, chips, stat boxes, grip, swatches, opacity bars, halo, window switcher
   widget/Presets.json             the colour-scheme presets (Ember is today's look and the default)
   widget/PhasesWidget.ps1         the floating panel (Windows PowerShell 5.1 + WPF)
-  widget/Learn.ps1 (+ LearnRender.ps1, LearnViews.ps1, LearnCore.cs)   the Learn window
+  widget/Learn.ps1                Learn's launcher on Windows: opens the web Learn in an Edge app window (second screen), or brings the open one forward
   widget/{Sudoku,Game2048,TypeTest,ChessPuzzles}.ps1, ChessCore.cs, *.txt   the games and their data
   learn/*.mjs, learn/learn.sh     Learn's helper (Node 22, no dependencies): library, builds, chats, prompts
                                   diagram.mjs (Mermaid subset -> laid-out diagram blocks), documents.mjs (PDF via pypdf,
@@ -32,7 +33,7 @@ progress/
   releases.json                   what each version brought: the Releases tab in every panel
   hooks/releases.ts, hooks/pages.ts   reading releases.json; the one TypeScript list of pages and windows
   tools/build-*.mjs               rebuild the chess puzzles / pieces from their public sources
-  tools/snap.sh, snap-views.sh    draw WPF windows to PNGs in any scheme and opacity, away from the person's prefs
+  tools/snap.sh, snap-views.sh    draw the panel and the games (WPF) to PNGs in any scheme and opacity, away from the person's prefs
   tools/shoot.mjs                 screenshots of web pages and mac/panel.html, and review sheets (Playwright's Chromium)
   tools/check-releases.mjs        the releases.json lint; tools/fixtures/ holds panel states for snapshots
   tests/, learn/tests/            plugin tests (claude-code/testing) and Learn helper tests (node:test)
@@ -51,13 +52,13 @@ Claude ─ Bash test command ─┤  hooks/register.tsx
                             ▼
       a panel (today: PowerShell + WPF, owned by the WezTerm window)
 
-Learn window ─ JSON lines ─ learn/learn.sh serve   ← contract 2
+Learn (web/server.mjs) ─ JSON lines ─ learn/learn.sh serve   ← contract 2
                                  │ builds run detached: learn.mjs build run <job>
                                  ▼
       <library>/ (default ~/.claude/learn)  +  ~/.config/claude-learn/{settings,status}.json
 ```
 
-`register.tsx` writes `phases.json` on every setup. It starts the WPF panel only when `TERM_PROGRAM=WezTerm` and `WSL_DISTRO_NAME` are set (`panelDistro`). On macOS it starts the floating panel instead: the window app in panel mode (`macPanelArgv` in `hooks/widget.ts`, binary from `web.sh app-path`), speaking the same ready/closed/alive events as the WPF panel. Anywhere else, or if that panel can't start, it opens a Claude Code pane (`PANE_ID` in `hooks/pane.ts`). Off WSL it also sets a one-line `$.ui.status`, and `/learn` and `/games <name>` open the browser through `web/web.sh open <page>`. On WSL (any terminal) those two commands start the WPF windows instead (`windowArgv` in `hooks/widget.ts`). Test tracking runs under bash and zsh: the wrapper reads `${PIPESTATUS[0]:-${pipestatus[1]}}` and defines its shadows as `function name { …; }`.
+`register.tsx` writes `phases.json` on every setup. It starts the WPF panel only when `TERM_PROGRAM=WezTerm` and `WSL_DISTRO_NAME` are set (`panelDistro`). On macOS it starts the floating panel instead: the window app in panel mode (`macPanelArgv` in `hooks/widget.ts`, binary from `web.sh app-path`), speaking the same ready/closed/alive events as the WPF panel. Anywhere else, or if that panel can't start, it opens a Claude Code pane (`PANE_ID` in `hooks/pane.ts`). Off WSL it also sets a one-line `$.ui.status`, and `/learn` and `/games <name>` open the browser through `web/web.sh open <page>`. On WSL (any terminal) `/games <name>` starts the game's WPF window and `/learn` starts `widget/Learn.ps1`, which opens Learn in an Edge app window (`windowArgv` in `hooks/widget.ts`). Test tracking runs under bash and zsh: the wrapper reads `${PIPESTATUS[0]:-${pipestatus[1]}}` and defines its shadows as `function name { …; }`.
 
 ## Contract 1: the panel state file
 
@@ -157,7 +158,7 @@ One file per machine holds the colour scheme and how see-through each group of w
 - **Three colours make every role** (`ink dim faint accent accentSoft selected onAccent green red gold blue *Soft line rule edge hover pressed surface surface2 button well codeBg codeInline codeInk scroll popup cardFill veil`). The derivation exists twice, `Get-ThemePalette` in `widget/Theme.ps1` and `derivePalette` in `web/public/shared/theme.js`, and both must give exactly `tests/theme-vectors.json`. Change them together and regenerate the vectors on purpose. Swift never derives: `mac/panel.html` loads `theme.js`.
 - **Opacity is the background's only:** `cardFill` carries it (never below 0.15, where a layered window stops taking clicks); every surface is a tint of the text, so it fades with the card; text, lines and accents stay solid. Secondary text moves toward the text as the background clears, and below 0.85 the text gets a halo of the card colour (`New-UiHaloFrame`; the panel its own from 0.8; `games/legible.js` on the web).
 - **Live:** every WPF window calls `Update-Theme` on its timer (it looks at the file's stamp once a second and recolours the brushes in place); web pages call `watchAppearance(group)` (every 2 s) and paint first from `GET /look.css?group=`; the Mac panel reads the file on its tick.
-- **Edited in:** the panel's ◐ strip (presets, the three bars, *Custom colours →*), Learn ▸ Settings ▸ Appearance (WPF and web: presets, your own three colours, the bars, *Reset to Ember*), and ⌘[ / ⌘] in a Mac window.
+- **Edited in:** the panel's ◐ strip (presets, the three bars, *Custom colours →*), Learn ▸ Settings ▸ Appearance (the web page: presets, your own three colours, the bars, *Reset to Ember*), and ⌘[ / ⌘] in a Mac window.
 - Game-owned colours stay the game's: 2048's tiles, the chess board and pieces, Typing's Monkeytype themes (its default, `auto`, follows the scheme).
 
 ## Releases
@@ -173,7 +174,12 @@ Newest first; the newest is the version in `plugin.json`; 1 to 3 notes of at mos
 ## Between windows
 
 - **One list of windows:** `$UI_SIBLINGS` in `Chrome.ps1` (WPF), `hooks/pages.ts` (TypeScript), the page regexes and titles in `server.mjs` (web). ▦ in the panel and in every Learn or game window opens the others (`Open-Sibling` / `New-UiSwitcherRow`).
-- **Learn deep links:** `Learn.ps1 -View library|course|review|learned|ask|settings -CourseId <id>`. For a Learn that is already open, the opener writes `%LOCALAPPDATA%\ClaudePhases\learn-open.json` (`{view, courseId, at}`, honoured within 15 s, then deleted) with `Write-LearnRequest`; a second Learn does the same before it brings the first forward. On macOS `web.sh open learn --view <v> --course <id>` loads `/learn/?view=&course=`, and an open window gets the path through `~/.cache/claude-panel/windows/<id>.open`. `/learn [view]` uses all of this.
+- **Learn deep links:** `Learn.ps1 -View library|course|review|learned|ask|settings|overlap -CourseId <id>` on Windows; `web.sh open learn --view <v> --course <id>` elsewhere, which loads `/learn/?view=&course=`. `/learn [view]` uses these.
+  - **One Learn window on Windows:** Learn.ps1 runs `web.sh open learn …` through wsl.exe with `CLAUDE_PANEL_LAUNCH=1`. The server answers a one-time link, `<page>/?launch=<nonce>`, or `shown: 'existing'` when a Learn page is connected: it has sent that page a `navigate` event (`{view, course}`), and the launcher brings the Edge window captioned exactly `Learn` forward, restoring it if minimised. It finds no such window? It asks again with `CLAUDE_PANEL_NEW=1` and opens one. A new window fills the first screen that isn't the main one. Learn pages name themselves on the event stream (`/api/events?page=learn`), and `document.title` stays `Learn`.
+  - **The launch address** keeps the page's folder and puts the nonce in the query: Edge keys an app window's saved place on the address without its port or query.
+  - **On macOS** an open window gets the path through `~/.cache/claude-panel/windows/<id>.open`.
+- **Hand-over after an update:** `/api/ping` and `web.json` carry the server's version. When the plugin's version differs (a once-a-minute check, or `open` asking `POST /api/handover`), the server stops listening and starts a new one with `CLAUDE_PANEL_TAKEOVER=1`, which reuses the port and token from `web.json`. It never does this while a helper request or a chat reply is in flight. The old server ends its event streams once the new one answers, or listens again after 5 s and leaves that version alone (`shouldHandOver`). Pages reconnect within a second (`retry: 1000`), get `{event: 'server', version}` first on every stream, and show *Learn was updated* with Reload when it changes. A page without its server for 30 s says to open Learn again.
+- **The chats line:** `GET /api/phases` reads every `<CLAUDE_PANEL_GLANCE_ROOT or /tmp/claude-progress>/*/phases.json` (contract 1) through `phaseLine` and gives the foot of web Learn `{items, tip}`. A chat shows while its plan has phases left, a test runs, or it changed in the last 15 minutes.
 - **Owned windows from WSL:** the panel's `ready` event carries WezTerm's window handle; `register.tsx` passes it as `-OwnerHwnd` so windows opened by `/learn` and `/games` follow WezTerm. Before the panel is up they open on their own.
 
 ## Porting to another setup
@@ -203,7 +209,6 @@ macOS, Linux and other terminals are built (0.2.0 and 0.3.0); what's left is **n
   - Keep files ASCII and build glyphs from code points. Catch `AbandonedMutexException`.
 - **WPF brushes from `Theme.ps1`** are recoloured in place: assign the role brush objects themselves, never copies, and use `New-ThemeTint` for a colour that isn't a role. Never put a role brush into a `ResourceDictionary` yourself: a style or template that resolves it freezes it, and the next scheme change throws. `Add-ThemeResources` gives styles brushes of their own and replaces them on a change.
 - **C# in the widgets** is compiled by the legacy C# 5 compiler: no `$"…"`, no `?.`, no `out var`. No PowerShell may run on a background thread, so C# threads fill fields that a `DispatcherTimer` drains.
-- **WPF FlowDocument:** clickable things inside a document must be real `Button`s. The text selection takes the mouse on press, so a `Border` with `MouseLeftButtonUp` never fires.
 - **From WSL,** `powershell.exe` sometimes fails with `UtilAcceptVsock accept4 failed 110`. Retry it.
 
 ## Shipping a change
@@ -220,10 +225,10 @@ macOS, Linux and other terminals are built (0.2.0 and 0.3.0); what's left is **n
   powershell.exe -NoProfile -Command '[void][System.Management.Automation.Language.Parser]::ParseFile("<\\wsl.localhost path>", [ref]$null, [ref]$e); $e'
   ```
 - Draw a window you touched to a PNG and look at it, in more than one scheme and opacity:
-  - `progress/tools/snap-views.sh --schemes "ember paper hc" --opacities "def 0.4" <out-dir> panel|learn|sudoku|2048|typing|chess` draws every standard view (Learn from a **copy** of the library); `progress/tools/snap.sh --scheme paper --opacity 0.4 out.png <Script.ps1> [args]` draws one. Both run the window with `LOCALAPPDATA` pointed at a scratch folder, so the person's prefs are never read or written.
-  - The panel's own switches: `-StateFile <fixture> -SnapshotTab phases|tests|learn|releases -SnapshotLook open|closed -SnapshotStrip look|games`; Learn's: `-SnapshotView library|course|overlap|review|learned|ask|settings -SnapshotLibrary <a COPY> -SnapshotConfig <an empty folder>`. Never point Learn at a real library.
+  - `progress/tools/snap-views.sh --schemes "ember paper hc" --opacities "def 0.4" <out-dir> panel|sudoku|2048|typing|chess` draws every standard view; `progress/tools/snap.sh --scheme paper --opacity 0.4 out.png <Script.ps1> [args]` draws one. Both run the window with `LOCALAPPDATA` pointed at a scratch folder, so the person's prefs are never read or written.
+  - The panel's own switches: `-StateFile <fixture> -SnapshotTab phases|tests|learn|releases -SnapshotLook open|closed -SnapshotStrip look|games`. Learn is a web page: see *Web pages* below.
   - `node progress/tools/shoot.mjs sheet out.png label=a.png …` puts PNGs over a dark terminal-like and a light backdrop, which is how see-through has to be judged.
 - `node progress/tools/check-releases.mjs` after a version bump.
 - `node --check` every `learn/*.mjs` you touched. For the hooks, `tsc -p progress` type-checks against the engine's types when they are there.
 - Tests: `claude plugin test ./progress`, `node --test progress/learn/tests/`, `node --test 'progress/web/tests/*.test.mjs'` (the browser pages, the server, the theme and the releases; the folder form fails on Node 24), and `powershell.exe -File progress\tests\ThemeVectors.ps1` (the PowerShell theme against the vectors).
-- Web pages (macOS/Linux): `node --check` every `progress/web/**/*.js` you touched, and screenshot them against a **copy** of a library: start `LEARN_LIBRARY=<copy> LEARN_CONFIG_DIR=<empty folder> CLAUDE_PANEL_SAVES=<empty folder> CLAUDE_PANEL_APPEARANCE=<scratch file> CLAUDE_PANEL_NO_BROWSER=1 node progress/web/server.mjs serve`, read the port and token from `<config>/web.json`, then `node progress/tools/shoot.mjs page out.png "http://127.0.0.1:<port>/learn/#token=<token>" --wait <selector>`. `mac/panel.html` draws with `shoot.mjs file … --eval "setAppearance(…); render(…)"`. Run the tests only as your own working rules allow.
+- Web pages (Learn everywhere, the games off WSL): `node --check` every `progress/web/**/*.js` you touched, and screenshot them against a **copy** of a library: start `LEARN_LIBRARY=<copy> LEARN_CONFIG_DIR=<empty folder> CLAUDE_PANEL_SAVES=<empty folder> CLAUDE_PANEL_APPEARANCE=<scratch file> CLAUDE_PANEL_GLANCE_ROOT=<a folder of fixture phases.json> CLAUDE_PANEL_NO_BROWSER=1 node progress/web/server.mjs serve`, read the port and token from `<config>/web.json`, then `node progress/tools/shoot.mjs page out.png "http://127.0.0.1:<port>/learn/#token=<token>" --wait <selector>`. `mac/panel.html` draws with `shoot.mjs file … --eval "setAppearance(…); render(…)"`. Run the tests only as your own working rules allow.

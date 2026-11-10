@@ -1,6 +1,6 @@
 # Porting claude-panel to your setup
 
-> **Status (0.3.0):** steps 1 to 6 are built. Mahmood's macOS port (0.2.0) added the native floating panel and windows, the pane, Learn and the games in the browser, and zsh test tracking; 0.3.0 added the shared colour scheme and see-through (contract 3 in [CLAUDE.md](../CLAUDE.md)) and the Releases tab (`progress/releases.json`) to all of them. What's left is **step 7, native Windows without WSL**, and a first run on Linux. The rest of this guide is kept as the design notes behind those parts: a new front end also reads `appearance.json` and `releases.json`, as CLAUDE.md describes.
+> **Status (0.3.0):** steps 1 to 6 are built. Mahmood's macOS port (0.2.0) added the native floating panel and windows, the pane, Learn and the games in the browser, and zsh test tracking; 0.3.0 added the shared colour scheme and see-through (contract 3 in [CLAUDE.md](../CLAUDE.md)) and the Releases tab (`progress/releases.json`) to all of them. Since 0.8.0 the web Learn is the only Learn: Windows opens it in an Edge app window, and the WPF Learn window is gone. What's left is **step 7, native Windows without WSL**, and a first run on Linux. The rest of this guide is kept as the design notes behind those parts: a new front end also reads `appearance.json` and `releases.json`, as CLAUDE.md describes.
 
 This guide is for the Claude working in **your fork** of this repo. It was written to build the parts missing on a setup, so you end up with what the author has: the floating panel, Learn, and the games. Treat every step as "build it, then check it", in order, one at a time.
 
@@ -176,7 +176,7 @@ Add a command, `/learn` (and `/games <name>`), that starts or finds the server a
 
 ## 5. Learn in the browser
 
-Rebuild the WPF window in `widget/Learn.ps1`, `LearnViews.ps1` and `LearnRender.ps1` as plain HTML, CSS and JS in `progress/web/public/learn/`. No framework is needed. The window never touches files; every action is one helper command.
+Done: `progress/web/public/learn/` is Learn on every setup since 0.8.0 (the WPF window it was rebuilt from is gone). The notes below are the design it follows. Plain HTML, CSS and JS, no framework. The page never touches files; every action is one helper command.
 
 **Shell**
 - A header with the tabs Library, Course (hidden until a course is open), Learned, Ask and Settings.

@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.8.0",
+      "date": "2026-11-10",
+      "by": "Yousif",
+      "notes": [
+        "Learn on Windows is one Edge window, on your second screen",
+        "An open Learn says when it was updated: Reload, nothing to close",
+        "Learn's foot lists every Claude chat at work and its phase"
+      ]
+    },
+    {
       "version": "0.7.3",
       "date": "2026-11-05",
       "by": "Yousif",
