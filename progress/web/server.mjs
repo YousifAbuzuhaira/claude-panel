@@ -1,6 +1,7 @@
-// Learn and the games in the browser, for every setup but WezTerm on WSL: a small local
-// server that bridges HTTP + Server-Sent Events to Learn's helper (`learn.sh serve`,
-// contract 2 in CLAUDE.md) and serves the pages in ./public. Node's own modules only.
+// Learn on every setup (on Windows in an Edge app window, from widget/Learn.ps1), and the games
+// in the browser: a small local server that bridges HTTP + Server-Sent Events to Learn's helper
+// (`learn.sh serve`, contract 2 in CLAUDE.md) and serves the pages in ./public. Node's own
+// modules only.
 //
 //   node server.mjs open [learn [--view <v>] [--course <id>] | games | games/<name>]
 //                                                 find or start the server, open the page
@@ -62,6 +63,10 @@ const APP_CACHE = join(homedir(), '.cache', 'claude-panel', 'app');
 // and loads the path in `<id>.open` when one appears (a deep link for a window already open).
 const WINDOWS_DIR = join(homedir(), '.cache', 'claude-panel', 'windows');
 const IDLE_MS = 30 * 60_000;
+// A new version takes over from this server on its port: how long the old one waits for it.
+const HANDOVER_WAIT_MS = 5_000;
+// Every chat's phases.json (register.tsx writes them), for Learn's chats line.
+const GLANCE_ROOT = process.env.CLAUDE_PANEL_GLANCE_ROOT || '/tmp/claude-progress';
 const RPC_TIMEOUT_MS = 10 * 60_000;
 const MAX_BODY = 4 * 1024 * 1024;
 // The appearance and the prefs are a few hundred bytes; every window re-reads the appearance.
@@ -111,6 +116,87 @@ export function pagePath(page, { view, course, n } = {}) {
   }
   const search = query.toString();
   return { key, path: `${key}/${search ? `?${search}` : ''}`, view: query.get('view'), course: query.get('course'), n: query.get('page') };
+}
+
+/**
+ * A one-time launch address: the page's own folder with the nonce in the query. Edge keys an app
+ * window's place on the address without its port or query, so `--app=` windows of one page
+ * reopen where they were left (a nonce in the path made every launch a stranger).
+ */
+export const launchPath = (key, nonce) => `${key}/?launch=${nonce}`;
+
+/**
+ * Whether a server on `running` hands over to a new one: the plugin is on another version, no
+ * helper request or chat reply is in flight (a new helper would drop it), and a hand-over to
+ * this same version hasn't already failed.
+ */
+export function shouldHandOver({ running, plugin, busy, failedFor = null }) {
+  return running !== plugin && !busy && failedFor !== plugin;
+}
+
+const CHAT_RECENT_MS = 15 * 60_000;
+const shorten = (text, max) => (text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1)).trimEnd()}…`);
+const PHASE_MARKS = { done: '✓', in_progress: '●' };
+
+/**
+ * Learn's chats line, from every chat's phases.json ({ state, mtimeMs }), newest first: each
+ * chat at work with the phase it's on and its count, or its live test run when it has no plan.
+ * A chat shows while its plan has phases left, a test runs, or it changed in the last 15
+ * minutes. `tip` holds each chat's whole plan.
+ */
+export function phaseLine(chats, now = Date.now()) {
+  const items = [];
+  const tip = [];
+  for (const { state, mtimeMs } of [...chats].sort((a, b) => b.mtimeMs - a.mtimeMs)) {
+    if (!state || typeof state !== 'object') continue;
+    const phases = Array.isArray(state.plan?.items) ? state.plan.items : [];
+    const live = (Array.isArray(state.runs) ? state.runs : []).filter(run => run?.status === 'running').at(-1);
+    const left = phases.filter(item => item?.status !== 'done').length;
+    const isRecent = now - mtimeMs < CHAT_RECENT_MS;
+    if (left === 0 && !live && !isRecent) continue;
+    if (phases.length === 0 && !live) continue;
+    const label = String(state.title || state.plan?.title || `chat ${String(state.sessionId || '').slice(0, 4)}`);
+    const item = { label: shorten(label, 24) };
+    if (phases.length) {
+      const current = phases.find(phase => phase?.status === 'in_progress');
+      if (current) Object.assign(item, { mark: 'now', text: shorten(String(current.name || ''), 34) });
+      else if (left === 0) Object.assign(item, { mark: 'done', text: 'All done' });
+      else Object.assign(item, { mark: 'next', text: shorten(String(state.plan.title || ''), 34) });
+      item.count = `${Number(state.plan.done) || 0}/${Number(state.plan.total) || phases.length}`;
+    } else {
+      Object.assign(item, { mark: 'tests', text: 'Tests', count: String(live.count ?? '') });
+    }
+    items.push(item);
+    if (tip.length) tip.push('');
+    tip.push(label);
+    if (phases.length) {
+      tip.push(`  ${state.plan.title || ''}`);
+      for (const phase of phases) tip.push(`    ${PHASE_MARKS[phase?.status] || '○'}  ${phase?.name || ''}`);
+    }
+    if (live) tip.push(`  Tests: ${live.label || ''} ${live.count ?? ''}`.trimEnd());
+  }
+  return { items, tip: tip.join('\n') };
+}
+
+/** Every chat's phases.json under `root`, with its time, for phaseLine; [] when there are none. */
+function readChats(root) {
+  const chats = [];
+  let dirs = [];
+  try {
+    dirs = readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory());
+  } catch {
+    return chats;
+  }
+  for (const dir of dirs) {
+    const file = join(root, dir.name, 'phases.json');
+    try {
+      const { mtimeMs } = statSync(file);
+      chats.push({ state: JSON.parse(readFileSync(file, 'utf8')), mtimeMs });
+    } catch {
+      // No file yet, or one being rewritten: the next look gets it.
+    }
+  }
+  return chats;
 }
 
 // --- The look, Learn's prefs, and the terminal a window follows (pure, for the tests) ---------
@@ -273,6 +359,8 @@ function startHelper(onEvent) {
         child.stdin.write(JSON.stringify({ ...request, rid: id }) + '\n');
       });
     },
+    /** A request is waiting for its answer. */
+    busy: () => pending.size > 0,
     stop() {
       restarts = Infinity;
       child?.stdin.end();
@@ -390,24 +478,52 @@ async function readJsonObject(req) {
 const sameToken = (given, token) => typeof given === 'string' && /^[0-9a-f]{64}$/.test(given) && timingSafeEqual(Buffer.from(given), Buffer.from(token));
 
 // One-time addresses for the browser: the token never goes on a command line, where any user
-// on the machine can read it. `open` asks for one, the browser opens /launch/<nonce>, and the
-// server answers once, within a minute, with a redirect to the page and its token in the #hash.
+// on the machine can read it. `open` asks for one, the browser opens <page>/?launch=<nonce> (or
+// the older /launch/<nonce>), and the server answers once, within a minute, with a redirect to
+// the page and its token in the #hash.
 const LAUNCH_MS = 60_000;
 const launches = new Map();
 
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/** `check`'s first truthy answer, asked every 150 ms for up to `ms`; null after that. */
+async function waitFor(check, ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    const value = await check();
+    if (value) return value;
+    await sleep(150);
+  }
+  return null;
+}
+
 function serve() {
-  const token = randomBytes(32).toString('hex');
+  // A server started to take over from an older version (CLAUDE_PANEL_TAKEOVER=1) keeps its
+  // port and token, so the pages it had open carry on with this one.
+  const takeover = process.env.CLAUDE_PANEL_TAKEOVER === '1' ? readRecord() : null;
+  const token = takeover?.token ?? randomBytes(32).toString('hex');
+  const version = pluginVersion();
+  let boundPort = 0;
   const clients = new Set();
+  // The page each event stream belongs to ('learn' or 'other'): `open` reuses an open Learn.
+  const pageOf = new Map();
+  // Chat replies still coming (chat.send answered, no chat.done or chat.error yet).
+  const busyChats = new Set();
   let lastActive = Date.now();
   // The terminal each native window follows, by page key, as `open` reported it (POST
   // /api/opened): with two Claude sessions in two terminal windows, a page opening another page
   // hands on its own terminal, not the one that first started this server.
   const terminals = new Map();
   let lastTerminal = cleanTerminal({ program: process.env.TERM_PROGRAM, itermSession: process.env.ITERM_SESSION_ID });
-  const broadcast = value => {
+  const write = (targets, value) => {
     const text = `data: ${JSON.stringify(value)}\n\n`;
-    for (const res of clients) res.write(text);
+    for (const res of targets) res.write(text);
   };
+  const broadcast = value => {
+    if (value?.event === 'chat.done' || value?.event === 'chat.error') busyChats.delete(value.key);
+    write(clients, value);
+  };
+  const learnPages = () => [...clients].filter(res => pageOf.get(res) === 'learn');
   const helper = startHelper(broadcast);
 
   const server = createServer((req, res) => {
@@ -421,7 +537,8 @@ function serve() {
 
   const handle = async (req, res) => {
     lastActive = Date.now();
-    const { port } = server.address();
+    // Kept from listen(): during a hand-over the server has stopped listening, and has no address.
+    const port = boundPort;
     const self = `127.0.0.1:${port}`;
     const send = (code, body, type = 'application/json; charset=utf-8', extra = {}) => {
       res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', ...extra });
@@ -440,16 +557,34 @@ function serve() {
       const given = path === '/api/events' ? url.searchParams.get('token') : req.headers['x-learn-token'];
       if (!sameToken(given, token)) return send(401, { error: 'missing or wrong token' });
 
-      if (path === '/api/ping') return send(200, { ok: true, pid: process.pid });
+      if (path === '/api/ping') return send(200, { ok: true, pid: process.pid, version });
 
+      // `reuse` (the Windows launcher): with a Learn page open, that page goes to the place asked
+      // for and the launcher brings its window forward, so there is one Learn window.
       if (path === '/api/launch' && req.method === 'POST') {
-        const { page, view, course, n } = JSON.parse((await readBody(req)) || '{}') || {};
+        const { page, view, course, n, reuse } = JSON.parse((await readBody(req)) || '{}') || {};
         const target = typeof page === 'string' && page ? pagePath(page, { view, course, n }) : null;
         if (!target) return send(400, { error: 'no such page' });
+        const open = target.key === 'learn' && reuse === true ? learnPages() : [];
+        if (open.length) {
+          if (target.view || target.course) write(open, { event: 'navigate', view: target.view, course: target.course });
+          return send(200, { existing: true });
+        }
         const nonce = randomBytes(16).toString('hex');
         launches.set(nonce, { page: target.path, until: Date.now() + LAUNCH_MS });
-        return send(200, { nonce });
+        return send(200, { nonce, path: launchPath(target.key, nonce) });
       }
+
+      // `open` found this server on an older version: hand over to a new one, unless busy.
+      if (path === '/api/handover' && req.method === 'POST') {
+        if (!canHandOver()) return send(200, { ok: false });
+        send(200, { ok: true });
+        handOver();
+        return;
+      }
+
+      // Learn's chats line (phaseLine).
+      if (path === '/api/phases' && req.method === 'GET') return send(200, phaseLine(readChats(GLANCE_ROOT)));
 
       // A page in a native window opening another page in its own window (Learn's games mark):
       // one window per page, as `open` gives. Only where the window app is already built.
@@ -483,11 +618,15 @@ function serve() {
       if (path === '/api/events' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
         res.write(': hello\n\n');
+        // The version first, so a page that reconnects after a hand-over knows Learn was updated.
+        write([res], { event: 'server', version });
         clients.add(res);
+        pageOf.set(res, url.searchParams.get('page') === 'learn' ? 'learn' : 'other');
         const beat = setInterval(() => res.write(': beat\n\n'), 25_000);
         req.on('close', () => {
           clearInterval(beat);
           clients.delete(res);
+          pageOf.delete(res);
           lastActive = Date.now();
         });
         return;
@@ -532,6 +671,7 @@ function serve() {
         if (!request || typeof request.cmd !== 'string') return send(400, { ok: false, error: 'no cmd' });
         delete request.rid;
         const answer = await helper.ask(request);
+        if (request.cmd === 'chat.send' && answer.ok && answer.result?.key) busyChats.add(answer.result.key);
         return send(200, answer.ok ? { ok: true, result: answer.result } : { ok: false, error: answer.error });
       }
 
@@ -611,11 +751,12 @@ function serve() {
       return send(200, lookCss(saved, group), TYPES['.css']);
     }
 
-    const launch = /^\/launch\/([0-9a-f]{32})$/.exec(path);
-    if (launch) {
-      const target = launches.get(launch[1]);
-      launches.delete(launch[1]);
-      if (!target || Date.now() > target.until) return send(403, 'This link has expired: run /learn again.', 'text/plain');
+    // <page>/?launch=<nonce>, or the older /launch/<nonce>.
+    const nonce = url.searchParams.get('launch') ?? /^\/launch\/([0-9a-f]{32})$/.exec(path)?.[1] ?? null;
+    if (nonce !== null) {
+      const target = /^[0-9a-f]{32}$/.test(nonce) ? launches.get(nonce) : undefined;
+      launches.delete(nonce);
+      if (!target || Date.now() > target.until) return send(403, 'This link has expired: open Learn again from the panel, or run /learn.', 'text/plain');
       return send(302, '', 'text/plain', { Location: `/${target.page}#token=${token}` });
     }
 
@@ -645,17 +786,91 @@ function serve() {
     return send(200, readFileSync(file), TYPES[extname(file)] || 'application/octet-stream', policy);
   };
 
-  server.listen(0, '127.0.0.1', () => {
-    const { port } = server.address();
-    mkdirSync(CONFIG_DIR, { recursive: true });
-    writeFileSync(WEB_FILE, JSON.stringify({ port, token, pid: process.pid }), { mode: 0o600 });
-    chmodSync(WEB_FILE, 0o600);
-    process.stdout.write(JSON.stringify({ event: 'listening', port }) + '\n');
+  const listen = port => new Promise((resolve, reject) => {
+    const fail = error => {
+      server.off('listening', done);
+      reject(error);
+    };
+    const done = () => {
+      server.off('error', fail);
+      boundPort = server.address().port;
+      resolve();
+    };
+    server.once('error', fail);
+    server.once('listening', done);
+    server.listen(port, '127.0.0.1');
   });
 
-  // Gone after 30 minutes with no page connected and no request.
+  const writeRecord = () => {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+    writeFileSync(WEB_FILE, JSON.stringify({ port: boundPort, token, pid: process.pid, version }), { mode: 0o600 });
+    chmodSync(WEB_FILE, 0o600);
+  };
+
+  (async () => {
+    // Taking over: the old server has just let the port go; a moment's retry covers the gap.
+    for (let tries = 0; ; tries++) {
+      try {
+        await listen(takeover?.port ?? 0);
+        break;
+      } catch (error) {
+        if (!takeover || error.code !== 'EADDRINUSE' || tries >= 20) {
+          process.stderr.write(`claude-panel: couldn't listen: ${error.message || error}\n`);
+          process.exit(1);
+        }
+        await sleep(150);
+      }
+    }
+    writeRecord();
+    process.stdout.write(JSON.stringify({ event: 'listening', port: boundPort }) + '\n');
+  })();
+
+  // After an update the pages and the helper are new, but this server's own code is old: it hands
+  // over to a new server on the same port with the same token, so open pages reconnect by
+  // themselves (and offer a reload). Never while a request or a chat reply is in flight; if the new
+  // one isn't up within HANDOVER_WAIT_MS, this one listens again and leaves that version alone.
+  let handingOver = false;
+  let failedFor = null;
+  const canHandOver = () => !handingOver && shouldHandOver({ running: version, plugin: pluginVersion(), busy: helper.busy() || busyChats.size > 0, failedFor });
+  const handOver = async () => {
+    handingOver = true;
+    const next = pluginVersion();
+    const port = boundPort;
+    server.close();
+    server.closeIdleConnections?.();
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'serve'], { detached: true, stdio: 'ignore', env: { ...process.env, CLAUDE_PANEL_TAKEOVER: '1' } });
+    child.on('error', () => {});
+    child.unref();
+    const ready = await waitFor(async () => {
+      const record = readRecord();
+      return record && record.pid === child.pid && record.port === port && (await ping(record));
+    }, HANDOVER_WAIT_MS);
+    if (ready) {
+      // The pages' event streams reconnect, to the new server.
+      for (const res of clients) res.end();
+      shutdown();
+      return;
+    }
+    try {
+      process.kill(child.pid);
+    } catch {
+      // It never started.
+    }
+    failedFor = next;
+    process.stderr.write(`claude-panel: version ${next} didn't take over in time; staying on ${version}\n`);
+    try {
+      await listen(port);
+      writeRecord();
+    } catch {
+      shutdown();
+    }
+    handingOver = false;
+  };
+
+  // Gone after 30 minutes with no page connected and no request; handed over after an update.
   setInterval(() => {
     if (clients.size === 0 && Date.now() - lastActive > IDLE_MS) shutdown();
+    else if (canHandOver()) handOver();
   }, 60_000).unref();
 
   const shutdown = () => {
@@ -684,11 +899,17 @@ function readRecord() {
   }
 }
 
-/** A one-time /launch/<nonce> address for `target` (from pagePath), from the running server. */
-async function launchNonce(record, target) {
-  const { nonce } = await postJson(record, '/api/launch', { page: target.key, view: target.view, course: target.course, n: target.n });
-  if (typeof nonce !== 'string') throw new Error('the server gave no launch link');
-  return nonce;
+/**
+ * A one-time launch address for `target` (from pagePath), from the running server, or
+ * { existing: true } when `reuse` and a Learn page is open (it was sent to the place asked for).
+ * A server older than launchPath answers only a nonce: its /launch/<nonce> still works.
+ */
+async function launchLink(record, target, { reuse = false } = {}) {
+  const answer = await postJson(record, '/api/launch', { page: target.key, view: target.view, course: target.course, n: target.n, reuse });
+  if (answer.existing === true) return { existing: true };
+  if (typeof answer.nonce !== 'string') throw new Error('the server gave no launch link');
+  const path = typeof answer.path === 'string' ? answer.path : `launch/${answer.nonce}`;
+  return { link: `http://127.0.0.1:${record.port}/${path}` };
 }
 
 function ping(record) {
@@ -711,7 +932,21 @@ function ping(record) {
 
 async function findOrStart() {
   const record = readRecord();
-  if (record && (await ping(record))) return record;
+  if (record && (await ping(record))) {
+    if (record.version === pluginVersion()) return record;
+    // An older server: ask it to hand over (it may be busy, or too old to know how), and use
+    // whichever server answers on the port after that.
+    const answer = await postJson(record, '/api/handover', {}).catch(() => null);
+    if (answer?.ok === true) {
+      const fresh = await waitFor(async () => {
+        const now = readRecord();
+        return now && now.pid !== record.pid && (await ping(now)) ? now : null;
+      }, HANDOVER_WAIT_MS + 3_000);
+      if (fresh) return fresh;
+    }
+    const still = await waitFor(async () => (await ping(record) ? record : null), 3_000);
+    if (still) return still;
+  }
   // Detached, so a closed Claude session doesn't take an open tab with it.
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'serve'], { detached: true, stdio: 'ignore', env: process.env });
   child.unref();
@@ -874,11 +1109,14 @@ async function open(page, terminal = {}, deep = {}) {
   const record = await findOrStart();
   const url = `http://127.0.0.1:${record.port}/${target.path}`;
   let shown = 'browser';
-  // CLAUDE_PANEL_LAUNCH=1: open nothing, answer a one-time link instead (the Windows panel opens
-  // it itself, which works where starting a Windows program from WSL doesn't).
+  // CLAUDE_PANEL_LAUNCH=1: open nothing, answer a one-time link instead (the Windows launcher
+  // opens it itself, which works where starting a Windows program from WSL doesn't). With a
+  // Learn page already open the answer is `existing`: that page has gone to the place asked for,
+  // and the launcher brings its window forward.
   if (process.env.CLAUDE_PANEL_LAUNCH === '1') {
-    const nonce = await launchNonce(record, target);
-    process.stdout.write(JSON.stringify({ ok: true, url, port: record.port, shown: 'none', launch: `http://127.0.0.1:${record.port}/launch/${nonce}` }) + '\n');
+    const answer = await launchLink(record, target, { reuse: true });
+    const shown = answer.existing ? { shown: 'existing' } : { shown: 'none', launch: answer.link };
+    process.stdout.write(JSON.stringify({ ok: true, url, port: record.port, ...shown }) + '\n');
     return;
   }
   if (process.env.CLAUDE_PANEL_NO_BROWSER !== '1') {
@@ -891,8 +1129,8 @@ async function open(page, terminal = {}, deep = {}) {
       if (follow.program) await postJson(record, '/api/opened', { page: target.key, ...follow }).catch(() => {});
     } else {
       // A one-time link, so the token never sits on the browser's command line.
-      const nonce = await launchNonce(record, target);
-      const [command, args] = browserArgv(`http://127.0.0.1:${record.port}/launch/${nonce}`);
+      const { link } = await launchLink(record, target);
+      const [command, args] = browserArgv(link);
       const opener = spawn(command, args, { detached: true, stdio: 'ignore' });
       if (process.env.WSL_DISTRO_NAME) {
         // From WSL the opener is a Windows cmd.exe that `start`s the browser and returns. Wait for

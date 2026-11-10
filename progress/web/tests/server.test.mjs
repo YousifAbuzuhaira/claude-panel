@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { WINDOW_TITLES, cleanAppearance, cleanPrefs, cleanTerminal, infoPlist, lookCss, pagePath, pluginVersion, uploadName, windowId } from '../server.mjs';
+import { WINDOW_TITLES, cleanAppearance, cleanPrefs, cleanTerminal, infoPlist, launchPath, lookCss, pagePath, phaseLine, pluginVersion, shouldHandOver, uploadName, windowId } from '../server.mjs';
 
 // server.mjs loads shared/theme.js, so the pages' own arithmetic is here to compare with.
 const T = globalThis.ClaudeTheme;
@@ -176,4 +176,80 @@ test("an upload's name is made safe for a file, keeping its extension", () => {
   assert.equal(uploadName(encodeURIComponent('café ☕ notes.txt')), 'caf_ _ notes.txt');
   assert.equal(uploadName('%E0%A4%A'), '_E0_A4_A', 'a name that is not valid encoding is still made safe');
   assert.equal(uploadName(undefined), '');
+});
+
+// --- One Learn window, the hand-over after an update, and the chats line ----------------------
+
+test('a launch address keeps the page folder, so Edge reopens an app window where it was', () => {
+  const nonce = 'a'.repeat(32);
+  assert.equal(launchPath('learn', nonce), `learn/?launch=${nonce}`);
+  assert.equal(launchPath('learn/video', nonce), `learn/video/?launch=${nonce}`);
+  // Two launches differ only in the query, which Edge leaves out of the window's key.
+  assert.equal(launchPath('learn', 'b'.repeat(32)).split('?')[0], launchPath('learn', nonce).split('?')[0]);
+});
+
+test('a navigate to an open Learn carries the view and course a deep link asks for', () => {
+  const target = pagePath('learn', { course: 'devops-1a2b' });
+  assert.deepEqual({ view: target.view, course: target.course }, { view: 'course', course: 'devops-1a2b' });
+  const plain = pagePath('learn');
+  assert.equal(plain.view, null);
+  assert.equal(plain.course, null);
+});
+
+test('a server hands over only on a new version, when idle, and not twice to a version that failed', () => {
+  assert.equal(shouldHandOver({ running: '0.8.0', plugin: '0.8.1', busy: false }), true);
+  assert.equal(shouldHandOver({ running: '0.8.0', plugin: '0.8.0', busy: false }), false);
+  assert.equal(shouldHandOver({ running: '0.8.0', plugin: '0.8.1', busy: true }), false);
+  assert.equal(shouldHandOver({ running: '0.8.0', plugin: '0.8.1', busy: false, failedFor: '0.8.1' }), false);
+  assert.equal(shouldHandOver({ running: '0.8.0', plugin: '0.8.2', busy: false, failedFor: '0.8.1' }), true);
+});
+
+const NOW = 1_800_000_000_000;
+const MIN = 60_000;
+const planOf = (title, statuses) => ({
+  title,
+  items: statuses.map((status, i) => ({ name: `Phase ${i + 1}`, status })),
+  done: statuses.filter(status => status === 'done').length,
+  total: statuses.length,
+});
+
+test('the chats line shows each chat at work, newest first, with its phase and count', () => {
+  const line = phaseLine([
+    { state: { sessionId: 'aaaa1111', title: 'Older chat', plan: planOf('Old plan', ['done', 'in_progress', 'pending']), runs: [] }, mtimeMs: NOW - 5 * MIN },
+    { state: { sessionId: 'bbbb2222', title: 'Newer chat', plan: planOf('New plan', ['pending', 'pending']), runs: [] }, mtimeMs: NOW - MIN },
+  ], NOW);
+  assert.deepEqual(line.items, [
+    { label: 'Newer chat', mark: 'next', text: 'New plan', count: '0/2' },
+    { label: 'Older chat', mark: 'now', text: 'Phase 2', count: '1/3' },
+  ]);
+  assert.match(line.tip, /^Newer chat\n {2}New plan\n {4}○ {2}Phase 1/);
+  assert.match(line.tip, /\n\nOlder chat\n/);
+  assert.match(line.tip, /✓ {2}Phase 1\n {4}● {2}Phase 2/);
+});
+
+test('a finished plan shows "All done" for 15 minutes, then the chat leaves the line', () => {
+  const chat = mtimeMs => ({ state: { sessionId: 's', title: 'Chat', plan: planOf('P', ['done', 'done']), runs: [] }, mtimeMs });
+  assert.deepEqual(phaseLine([chat(NOW - 14 * MIN)], NOW).items, [{ label: 'Chat', mark: 'done', text: 'All done', count: '2/2' }]);
+  assert.deepEqual(phaseLine([chat(NOW - 16 * MIN)], NOW).items, []);
+});
+
+test('a chat with no plan shows only while a test runs, with its count', () => {
+  const runs = [{ label: 'vitest', status: 'passed', count: '40/40' }, { label: 'node --test', status: 'running', count: '12/~30' }];
+  const line = phaseLine([{ state: { sessionId: 'cccc3333', plan: null, runs }, mtimeMs: NOW - 30 * MIN }], NOW);
+  assert.deepEqual(line.items, [{ label: 'chat cccc', mark: 'tests', text: 'Tests', count: '12/~30' }]);
+  assert.match(line.tip, /Tests: node --test 12\/~30/);
+  assert.deepEqual(phaseLine([{ state: { sessionId: 'd', plan: null, runs: [] }, mtimeMs: NOW }], NOW).items, []);
+});
+
+test('the chats line cuts long names, and names an untitled chat by its plan', () => {
+  const long = 'A chat title that is much longer than twenty-four characters';
+  const line = phaseLine([{ state: { sessionId: 'e', title: long, plan: { ...planOf('Plan', ['in_progress']), items: [{ name: 'x'.repeat(50), status: 'in_progress' }] }, runs: [] }, mtimeMs: NOW }], NOW);
+  assert.equal(line.items[0].label.length, 24);
+  assert.ok(line.items[0].label.endsWith('…'));
+  assert.equal(line.items[0].text.length, 34);
+  assert.equal(phaseLine([{ state: { sessionId: 'f', plan: planOf('The plan title', ['in_progress']), runs: [] }, mtimeMs: NOW }], NOW).items[0].label, 'The plan title');
+});
+
+test('a phases file that is not an object is skipped', () => {
+  assert.deepEqual(phaseLine([{ state: null, mtimeMs: NOW }, { state: 'x', mtimeMs: NOW }], NOW).items, []);
 });
