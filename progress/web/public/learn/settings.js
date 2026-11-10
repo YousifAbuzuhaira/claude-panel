@@ -166,7 +166,7 @@ function buildAppearance() {
     h('div.look-part', null, h('span.caption', null, 'Custom colours'), h('div.colours', null, colours, use), note),
     h('div.look-part', null, h('span.caption', null, 'See-through'),
       h(`div.opacities${native ? '' : '.off'}`, null, sliders.map(slider => slider.row)),
-      h('p.look-note', null, native ? 'The background only: text stays sharp.' : 'See-through needs the app window.'),
+      h('p.look-note', null, native ? 'The background only: text stays sharp.' : 'Set the panel\'s and the games\' from the panel\'s ◐. Learn in a browser is always solid.'),
       warning),
     h('div.look-reset', null, reset));
   A.parts = { schemes, boxes, wells, use, note, sliders, warning, native };

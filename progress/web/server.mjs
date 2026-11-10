@@ -617,7 +617,8 @@ function serve() {
 
       if (path === '/api/events' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
-        res.write(': hello\n\n');
+        // A dropped stream (a hand-over) comes back within a second, not the browser's default three.
+        res.write('retry: 1000\n: hello\n\n');
         // The version first, so a page that reconnects after a hand-over knows Learn was updated.
         write([res], { event: 'server', version });
         clients.add(res);
@@ -942,7 +943,11 @@ async function findOrStart() {
         const now = readRecord();
         return now && now.pid !== record.pid && (await ping(now)) ? now : null;
       }, HANDOVER_WAIT_MS + 3_000);
-      if (fresh) return fresh;
+      // Time for open pages to reconnect, so an open Learn is found and reused, not doubled.
+      if (fresh) {
+        await sleep(1_500);
+        return fresh;
+      }
     }
     const still = await waitFor(async () => (await ping(record) ? record : null), 3_000);
     if (still) return still;
