@@ -1114,7 +1114,8 @@ async function open(page, terminal = {}, deep = {}) {
   // Learn page already open the answer is `existing`: that page has gone to the place asked for,
   // and the launcher brings its window forward.
   if (process.env.CLAUDE_PANEL_LAUNCH === '1') {
-    const answer = await launchLink(record, target, { reuse: true });
+    // CLAUDE_PANEL_NEW=1: a link even so (the launcher found no window to bring forward).
+    const answer = await launchLink(record, target, { reuse: process.env.CLAUDE_PANEL_NEW !== '1' });
     const shown = answer.existing ? { shown: 'existing' } : { shown: 'none', launch: answer.link };
     process.stdout.write(JSON.stringify({ ok: true, url, port: record.port, ...shown }) + '\n');
     return;

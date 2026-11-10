@@ -505,7 +505,7 @@ $tabRow.Orientation = 'Horizontal'
 $tabRow.Margin = New-Gap 0 4 0 0
 $phasesTab = New-Tab 'phases'
 $testsTab = New-Tab 'tests'
-# Learn: courses Claude builds (widget/Learn.ps1). The tab only shows; reading happens in its window.
+# Learn: courses Claude builds. The tab only shows; reading happens in Learn's Edge window (Learn.ps1).
 $learnTab = New-Tab 'learn'
 $pickTabs = @($phasesTab, $testsTab, $learnTab)
 foreach ($pickTab in $pickTabs) { [void]$tabRow.Children.Add($pickTab) }
@@ -602,10 +602,10 @@ foreach ($sibling in $UI_SIBLINGS) {
   [void]$gameChipRow.Children.Add($chip)
   $gameChips += $chip
 }
-# And the same in the browser (the web version, served from WSL).
-$browserLink = New-Text ("In the browser " + [string][char]0x2197) $blue
+# And the games in the browser (the web version, served from WSL). Learn is always the web version.
+$browserLink = New-Text ("Games in the browser " + [string][char]0x2197) $blue
 $browserLink.Cursor = [System.Windows.Input.Cursors]::Hand
-$browserLink.ToolTip = 'Open Learn and the games in your web browser'
+$browserLink.ToolTip = 'Open the games in your web browser'
 $browserLink.HorizontalAlignment = 'Left'
 $browserLink.Margin = New-Gap 0 8 0 0
 $browserLink.Add_MouseEnter({ param($sender, $e) $sender.TextDecorations = [System.Windows.TextDecorations]::Underline })
@@ -799,7 +799,7 @@ function Add-RunRows($Runs) {
   }
 }
 
-# A link that opens the Learn window (at a view and a course, when given).
+# A link that opens Learn (at a view and a course, when given): its Edge window, through Learn.ps1.
 function New-LearnLink([string]$Text, [string]$View, [string]$CourseId) {
   $link = New-Link $Text ''
   $link.Tag = @{ view = $View; course = $CourseId }
@@ -807,16 +807,12 @@ function New-LearnLink([string]$Text, [string]$View, [string]$CourseId) {
   return $link
 }
 
-# Learn's link, and beside it the same in the browser (the web version, served from WSL).
+# Learn's link, in a row of its own, as the tab lays it out.
 function New-LearnLinks([string]$Text, [string]$View, [string]$CourseId) {
   $row = New-Object System.Windows.Controls.StackPanel
   $row.Orientation = 'Horizontal'
   $row.HorizontalAlignment = 'Left'
   [void]$row.Children.Add((New-LearnLink $Text $View $CourseId))
-  $web = New-Link ("In the browser " + [string][char]0x2197) 'Open Learn in your web browser instead'
-  $web.Margin = New-Gap 16 0 0 0
-  $web.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Open-InBrowser 'learn' })
-  [void]$row.Children.Add($web)
   return $row
 }
 
@@ -1346,7 +1342,7 @@ $browserLink.Add_MouseLeftButtonUp({
   $e.Handled = $true
   Set-Strip ''
   Update-Panel
-  Open-InBrowser 'learn'
+  Open-InBrowser 'games'
 })
 $customLink.Add_MouseLeftButtonUp({
   param($sender, $e)
@@ -1365,21 +1361,22 @@ $closeMark.Add_MouseLeftButtonUp({
 # --- Learn and the games: each its own process, so it outlives the panel -------
 
 # Opens one of the other windows ($UI_SIBLINGS), owned by the chat's WezTerm window; Learn can be
-# sent to a view and a course. One open already comes forward at once, through this panel's own
-# Win32 (the shared Open-Sibling compiles its own the first time); a new one starts through
-# Open-Sibling.
+# sent to a view and a course. A game open already comes forward at once, through this panel's
+# own Win32 (the shared Open-Sibling compiles its own the first time); a new one starts through
+# Open-Sibling. Learn always goes through its launcher, which sends an open Learn where it's asked.
 function Open-PanelSibling([string]$Id, [string]$View, [string]$CourseId) {
   try {
     $sibling = $UI_SIBLINGS | Where-Object { $_.id -eq $Id } | Select-Object -First 1
     if (-not $sibling) { return }
-    $windowText = $sibling.title
-    if (-not $sibling.shared) { $windowText = '{0}:{1}' -f $sibling.title, $SessionId }
-    $existing = [PhasesWin32]::WindowByText($windowText)
-    if ($existing -ne [IntPtr]::Zero) {
-      if ($sibling.id -eq 'learn') { Write-LearnRequest $View $CourseId }
-      # The panel just took the click, so it may hand the foreground over.
-      [void][PhasesWin32]::SetForegroundWindow($existing)
-      return
+    if ($sibling.id -ne 'learn') {
+      $windowText = $sibling.title
+      if (-not $sibling.shared) { $windowText = '{0}:{1}' -f $sibling.title, $SessionId }
+      $existing = [PhasesWin32]::WindowByText($windowText)
+      if ($existing -ne [IntPtr]::Zero) {
+        # The panel just took the click, so it may hand the foreground over.
+        [void][PhasesWin32]::SetForegroundWindow($existing)
+        return
+      }
     }
     Open-Sibling $Id ([int64]$owner) $SessionId -View $View -CourseId $CourseId
   } catch {

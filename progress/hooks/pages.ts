@@ -1,5 +1,6 @@
 // The pages /learn, /games and the pane open, in one list: what each is called and the
-// WPF window behind it on WSL (none for the games page, which is a web page alone).
+// Windows program behind it on WSL: a WPF game window, or Learn.ps1, the launcher that opens Learn
+// in an Edge app window (none for the games page, which is a web page alone).
 // Adding a game is one line here. Pure helpers only: the calls on `$` live in register.tsx.
 
 const LEARN_PAGE = { id: 'learn', label: 'Learn', script: 'Learn.ps1' } as const
@@ -25,7 +26,7 @@ export const GAMES: readonly { id: GameId; label: string }[] = PAGES.filter((pag
   page.id.startsWith(GAME_PREFIX),
 ).map(page => ({ id: page.id.slice(GAME_PREFIX.length) as GameId, label: page.label }))
 
-/** Learn's WPF window: the one window that takes a view and a course. */
+/** Learn's launcher on WSL (Learn.ps1): the one script that takes a view and a course. */
 export const LEARN_SCRIPT = LEARN_PAGE.script
 
 export const isGame = (name: string): name is GameId => GAMES.some(game => game.id === name)
@@ -46,7 +47,7 @@ export function openingText(page: string, deep: { view?: string; courseTitle?: s
   return isWindow ? `Opened ${name} in its own window.` : `Opening ${name}.`
 }
 
-/** The WPF window behind a page on WSL, or undefined where it has none (the games page). */
+/** The Windows script behind a page on WSL, or undefined where it has none (the games page). */
 export function windowScript(page: string): string | undefined {
   return PAGES.find(one => one.id === page)?.script ?? undefined
 }

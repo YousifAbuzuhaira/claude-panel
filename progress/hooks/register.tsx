@@ -246,9 +246,10 @@ async function syncPane($: EngineInterface, plan: PhasePlan | null, runs: readon
 }
 
 /**
- * Opens Learn (at one of its views, or a course), a game, or the games page: its WPF
- * window on WSL (any terminal; owned by the WezTerm window once the panel has named it),
- * else the page from web/server.mjs, in its own window on macOS or the browser.
+ * Opens Learn (at one of its views, or a course), a game, or the games page. On WSL (any
+ * terminal): a game's WPF window (owned by the WezTerm window once the panel has named it),
+ * or Learn.ps1, which opens Learn in an Edge app window. Else the page from web/server.mjs,
+ * in its own window on macOS or the browser.
  * `courseTitle` only names the course in the message.
  */
 async function openPage(

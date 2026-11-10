@@ -34,9 +34,10 @@ $UI_GLYPHS = @{
 $UI_GLYPH_FONTS = @{ ([string][char]0xE7FC) = (New-Object System.Windows.Media.FontFamily('Segoe MDL2 Assets')) }
 
 # Every window the panel can open: one list, so each window can open the others.
-# Learn is one per machine; a game is one per chat (its window title ends in :<session>).
+# A game is one per chat (its window title ends in :<session>). Learn is the web page in an
+# Edge app window: Learn.ps1 only opens it, and keeps it to one window (so no title here).
 $UI_SIBLINGS = @(
-  @{ id = 'learn'; label = 'Learn'; script = 'Learn.ps1'; title = 'ClaudeLearn'; shared = $true },
+  @{ id = 'learn'; label = 'Learn'; script = 'Learn.ps1'; title = ''; shared = $true },
   @{ id = 'sudoku'; label = 'Sudoku'; script = 'Sudoku.ps1'; title = 'ClaudeSudoku'; shared = $false },
   @{ id = '2048'; label = '2048'; script = 'Game2048.ps1'; title = 'Claude2048'; shared = $false },
   @{ id = 'typing'; label = 'Typing'; script = 'TypeTest.ps1'; title = 'ClaudeTypeTest'; shared = $false },
@@ -541,34 +542,26 @@ public static class ClaudeUiWin32 {
 '@
 }
 
-# Asks Learn to show a view (and a course): read by a Learn window already open, on its timer,
-# and by a Learn window as it starts. Fields it leaves out keep Learn where it is.
-function Write-LearnRequest([string]$View, [string]$CourseId) {
-  if (-not $View -and -not $CourseId) { return }
-  try {
-    $dir = Join-Path $env:LOCALAPPDATA 'ClaudePhases'
-    if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
-    $request = @{ view = $View; courseId = $CourseId; at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
-    $path = Join-Path $dir 'learn-open.json'
-    [System.IO.File]::WriteAllText($path + '.tmp', ($request | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
-    if (Test-Path -LiteralPath $path) { [System.IO.File]::Replace($path + '.tmp', $path, [NullString]::Value) } else { [System.IO.File]::Move($path + '.tmp', $path) }
-  } catch {}
-}
-
 # Opens a sibling window by id ('learn', 'sudoku', '2048', 'typing', 'chess'), or brings it
-# forward when it is already open. Learn can be sent to a view and a course.
+# forward when it is already open. Learn can be sent to a view and a course: its launcher
+# (Learn.ps1) always runs, and brings an open Learn forward itself.
 function Open-Sibling([string]$Id, [int64]$OwnerHwnd, [string]$SessionId, [string]$View, [string]$CourseId) {
   try {
     $sibling = $UI_SIBLINGS | Where-Object { $_.id -eq $Id } | Select-Object -First 1
     if (-not $sibling) { return }
     Initialize-UiWin32
-    if ($sibling.id -eq 'learn') { Write-LearnRequest $View $CourseId }
-    $title = if ($sibling.shared) { $sibling.title } else { '{0}:{1}' -f $sibling.title, $SessionId }
-    $existing = [ClaudeUiWin32]::WindowByText($title)
-    if ($existing -ne [IntPtr]::Zero) { [void][ClaudeUiWin32]::SetForegroundWindow($existing); return }
+    $extra = ''
+    if ($sibling.id -eq 'learn') {
+      if ($View -match '^[a-z]{1,20}$') { $extra += " -View $View" }
+      if ($CourseId -match '^[\w.-]{1,160}$') { $extra += " -CourseId $CourseId" }
+    } else {
+      $title = if ($sibling.shared) { $sibling.title } else { '{0}:{1}' -f $sibling.title, $SessionId }
+      $existing = [ClaudeUiWin32]::WindowByText($title)
+      if ($existing -ne [IntPtr]::Zero) { [void][ClaudeUiWin32]::SetForegroundWindow($existing); return }
+    }
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = 'powershell.exe'
-    $start.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSScriptRoot\$($sibling.script)`" -OwnerHwnd $OwnerHwnd -SessionId $SessionId"
+    $start.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSScriptRoot\$($sibling.script)`" -OwnerHwnd $OwnerHwnd -SessionId $SessionId$extra"
     # Shell-started: it inherits no handle, so whoever watches this window's output still sees it end.
     $start.UseShellExecute = $true
     $start.WindowStyle = 'Hidden'

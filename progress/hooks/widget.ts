@@ -96,10 +96,11 @@ export function widgetArgv(options: {
 const COURSE_ID = /^[\w.-]{1,80}$/
 
 /**
- * The command that starts a Learn or game window from WSL, any terminal. With
- * `ownerHwnd` (the WezTerm window the panel reported) the window follows it, as
- * the panel's own launches do; `view` and `courseId` send Learn to one of its
- * views and a course (an open Learn gets them too: the new one hands them over).
+ * The command that starts a game window, or Learn's launcher, from WSL, any
+ * terminal. With `ownerHwnd` (the WezTerm window the panel reported) a game
+ * follows it, as the panel's own launches do; `view` and `courseId` send Learn
+ * to one of its views and a course (Learn.ps1 opens it in an Edge app window,
+ * or sends the Learn already open there and brings it forward).
  */
 export function windowArgv(options: {
   distro: string
