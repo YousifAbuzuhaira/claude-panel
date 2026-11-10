@@ -181,9 +181,13 @@ export function toast(text, kind = 'info') {
   toastTimer = setTimeout(() => { el.className = 'toast'; }, 5000);
 }
 
-export function banner(text) {
+/** The line under the header: a problem in red, or `info` in the accent; `action` adds a button. */
+export function banner(text, { info = false, action = null } = {}) {
   const el = document.getElementById('banner');
-  el.textContent = text || '';
+  el.replaceChildren();
+  el.classList.toggle('info', info);
+  if (text) el.append(text);
+  if (text && action) el.append(h('button.ui-btn.banner-action', { type: 'button', onclick: action.run }, action.label));
   el.hidden = !text;
 }
 

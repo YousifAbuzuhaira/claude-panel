@@ -1,10 +1,10 @@
 // Learn in the browser: the shell (tabs, build chip, toast, banner, keys) and the events.
 // Every action is one helper command through /api/rpc; the page never touches files.
-import { onEvents, openWindow, withToken } from '../shared/api.js';
+import { getJson, onEvents, openWindow, withToken } from '../shared/api.js';
 import { isNative, watchAppearance } from '../shared/look.js';
 import { buildAskView, openAdvisor } from './ask.js';
 import { chatEvent, forgetChats } from './chat.js';
-import { GLYPH, MAX_SCALE, MIN_SCALE, S, VIEW_NAMES, banner, call, loadPrefs, nav, savePrefs, short, timeOf, toast } from './core.js';
+import { GLYPH, MAX_SCALE, MIN_SCALE, S, VIEW_NAMES, banner, call, h, loadPrefs, nav, savePrefs, short, timeOf, toast } from './core.js';
 import { buildCourseView, courseStatus, openCourse, openOverlap, overlapOpen, saveProgress, showOverlap, stepPage, videoProgress } from './course.js';
 import { buildLearnedView, leaveLearnedModes, refreshLearned, resetLearned } from './learned.js';
 import { buildLibraryView, libraryDue, refreshLibrary, resetLibraryModes } from './library.js';
@@ -120,7 +120,7 @@ async function hello() {
     S.status = result.status;
     S.reviewDue = result.reviewDue || 0;
     showReviewCount();
-    banner('');
+    restingBanner();
     updateBuildChip();
     if ((result.resumed || []).length) toast('Carrying on with a build that was interrupted');
     return true;
@@ -130,8 +130,37 @@ async function hello() {
   }
 }
 
+// --- The server: its version, and being sent somewhere ---------------------------------------
+
+// The server's version when this page loaded. A server that comes back on another one has taken
+// over after an update (web/server.mjs): the page offers a reload, which keeps the token.
+let loadedVersion = null;
+let updated = false;
+
+/** The banner when nothing is wrong: the update notice, or none. */
+function restingBanner() {
+  if (updated) banner('Learn was updated.', { info: true, action: { label: 'Reload', run: () => location.reload() } });
+  else banner('');
+}
+
+function onServer(version) {
+  if (typeof version !== 'string') return;
+  if (loadedVersion === null) loadedVersion = version;
+  else if (version !== loadedVersion && !updated) {
+    updated = true;
+    restingBanner();
+  }
+}
+
 function onEvent(event) {
   switch (event.event) {
+    case 'server':
+      onServer(event.version);
+      break;
+    case 'navigate':
+      // Learn was opened again (the panel, /learn, /course): this window goes there instead.
+      if (S.helperReady) showAsked(event.view, event.course);
+      break;
     case 'ready':
       // The helper (re)started: say hello again.
       if (S.helperReady) hello();
@@ -219,19 +248,56 @@ gamesMark.addEventListener('click', async event => {
 // The first paint came from /look.css; from here the page follows every change, from any window.
 watchAppearance('learn', appearanceChanged);
 
-const events = onEvents(onEvent);
+const events = onEvents(onEvent, 'learn');
+// The event stream retries on its own (a hand-over drops it for a moment). Gone for 30 s, the
+// server isn't coming back on this address: a new one needs opening from outside the page.
+const LOST_FOR_GOOD_MS = 30_000;
 let lost = false;
+let lostTimer = 0;
 events.addEventListener('error', () => {
-  if (events.readyState !== EventSource.OPEN) {
-    lost = true;
-    banner("Lost the connection to Learn's server. Trying again...");
-  }
+  if (events.readyState === EventSource.OPEN || lost) return;
+  lost = true;
+  banner("Lost the connection to Learn's server. Trying again...");
+  lostTimer = setTimeout(() => {
+    if (lost) banner("Learn's server has stopped. Open Learn again from the panel, or with /learn in Claude.");
+  }, LOST_FOR_GOOD_MS);
 });
 events.addEventListener('open', () => {
   if (!lost) return;
   lost = false;
+  clearTimeout(lostTimer);
   hello().then(ok => { if (ok) showView(S.view); });
 });
+
+// --- The chats line: every Claude chat at work, at the foot of the window ---------------------
+
+const chatsLine = document.getElementById('chats-line');
+const CHAT_MARKS = { now: GLYPH.full, done: GLYPH.check, next: GLYPH.empty, tests: GLYPH.full };
+let chatsStamp = '';
+
+async function updateChatsLine() {
+  if (document.hidden) return;
+  const line = await getJson('/api/phases');
+  const items = Array.isArray(line?.items) ? line.items : [];
+  const stamp = JSON.stringify(line);
+  if (stamp === chatsStamp) return;
+  chatsStamp = stamp;
+  chatsLine.hidden = items.length === 0;
+  chatsLine.title = typeof line?.tip === 'string' ? line.tip : '';
+  chatsLine.replaceChildren(...items.flatMap((item, i) => {
+    const parts = i ? [h('span.chats-gap', { 'aria-hidden': 'true' }, '|')] : [];
+    parts.push(h('span.chat-name', null, item.label));
+    const mark = h(`span.chat-mark.${item.mark}`, { 'aria-hidden': 'true' }, CHAT_MARKS[item.mark] || '');
+    // A plan: its mark, the phase it's on, its count. Tests alone: 'Tests', the mark, the count.
+    if (item.mark === 'tests') parts.push(h('span.chat-dim', null, item.text), mark, h('span', null, item.count));
+    else parts.push(mark, h('span', null, item.text), h('span.chat-dim', null, item.count));
+    return parts;
+  }));
+}
+
+updateChatsLine();
+setInterval(updateChatsLine, 3_000);
+document.addEventListener('visibilitychange', updateChatsLine);
 
 /** A view asked for by a link (`open learn --view ...`): a view name, or 'course'/'overlap' with a course. */
 function showAsked(view, courseId, page = null) {

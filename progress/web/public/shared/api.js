@@ -38,9 +38,23 @@ export async function upload(file) {
   return answer;
 }
 
-/** Every helper event (ready, status, chat.delta, chat.tool, chat.done, chat.error, fatal). */
-export function onEvents(handler) {
-  const source = new EventSource(`/api/events?token=${token}`);
+/** A small JSON answer from the server (GET), or null. */
+export async function getJson(path) {
+  try {
+    const response = await fetch(path, { headers: { 'X-Learn-Token': token } });
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every helper event (ready, status, chat.delta, chat.tool, chat.done, chat.error, fatal), and
+ * the server's own: `server` (its version, first on every connection) and, for Learn, `navigate`.
+ * `page` names this page ('learn'), so the server can send an open Learn where it's asked to go.
+ */
+export function onEvents(handler, page = '') {
+  const source = new EventSource(`/api/events?token=${token}${page ? `&page=${encodeURIComponent(page)}` : ''}`);
   source.onmessage = message => {
     try { handler(JSON.parse(message.data)); } catch {}
   };

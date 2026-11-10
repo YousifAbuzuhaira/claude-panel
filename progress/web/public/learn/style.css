@@ -102,6 +102,29 @@ a.ui-mark:hover { text-decoration: none; }
 .marks { display: flex; gap: 4px; flex: none; margin-left: auto; }
 .build-chip:not([hidden]) ~ .marks { margin-left: 0; }
 .banner { flex: none; padding: 8px var(--gutter); background: var(--red-soft); border-bottom: 1px solid var(--red); color: var(--ink); }
+.banner.info { background: var(--selected); border-bottom-color: var(--accent); }
+.banner-action { margin-left: 12px; padding: 1px 10px; }
+/* Every Claude chat at work (the server's /api/phases), at the foot of the window; the tooltip
+   holds each chat's whole plan. */
+.chats-line {
+  flex: none;
+  padding: 4px var(--gutter) 5px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.chats-line > span { margin-right: 6px; }
+.chats-line .chat-name, .chats-line .chat-dim { color: var(--dim); }
+.chats-line .chats-gap { color: var(--faint); margin: 0 12px 0 6px; }
+.chat-mark.now, .chat-mark.tests { color: var(--accent); }
+.chat-mark.done { color: var(--green); }
+.chat-mark.next { color: var(--dim); }
+body:has(.chats-line:not([hidden])) .toast { bottom: 44px; }
 .views { flex: 1; min-height: 0; position: relative; }
 .view { position: absolute; inset: 0; }
 .view.scroll { overflow-y: auto; padding: 24px 0 64px; }
