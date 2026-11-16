@@ -212,7 +212,7 @@ macOS, Linux and other terminals are built (0.2.0 and 0.3.0), and Windows withou
 - **WPF brushes from `Theme.ps1`** are recoloured in place: assign the role brush objects themselves, never copies, and use `New-ThemeTint` for a colour that isn't a role. Never put a role brush into a `ResourceDictionary` yourself: a style or template that resolves it freezes it, and the next scheme change throws. `Add-ThemeResources` gives styles brushes of their own and replaces them on a change.
 - **C# in the widgets** is compiled by the legacy C# 5 compiler: no `$"…"`, no `?.`, no `out var`. No PowerShell may run on a background thread, so C# threads fill fields that a `DispatcherTimer` drains.
 - **From WSL,** `powershell.exe` sometimes fails with `UtilAcceptVsock accept4 failed 110`. Retry it.
-- **On Windows itself:** never start `bash` from the plugin or the server (it's WSL's launcher there, or missing); give every `spawn` `windowsHide: true` (a child of a console-less process opens a console window of its own); stop a process tree with `taskkill /T /F` (no signals); paths compare with `path.sep`.
+- **On Windows itself:** never start `bash` from the plugin or the server (it's WSL's launcher there, or missing); give every `spawn` `windowsHide: true` (a child of a console-less process opens a console window of its own); stop a process tree with `taskkill /T /F` (no signals); paths compare with `path.sep`. A window that must outlive the chat goes through `web/detach.mjs`: Node's `detached` starts a child with no console (Windows PowerShell then won't start), and a child that isn't detached dies with Node (its job), so a hidden `cmd /c start /b` starts it on a windowless console of its own.
 
 ## Shipping a change
 
