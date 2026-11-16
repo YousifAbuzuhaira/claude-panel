@@ -620,7 +620,8 @@ function Open-InBrowser([string]$Page = 'learn', [string]$Extra = '', [switch]$A
         if (-not $state.child.HasExited) { Write-UiBrowserLog 'no answer from WSL in 30 s'; return }
         $lines = @($state.child.StandardOutput.ReadToEnd() -split "`n" | Where-Object { $_.Trim() })
         $answer = if ($lines.Count) { $lines[$lines.Count - 1] | ConvertFrom-Json } else { $null }
-        if ($answer -and $answer.ok -and $answer.launch -match '^http://127\.0\.0\.1:\d+/launch/[0-9a-f]+$') {
+        # The link is <page>/?launch=<nonce> (a server older than 0.8.0 answers /launch/<nonce>).
+        if ($answer -and $answer.ok -and $answer.launch -match '^http://127\.0\.0\.1:\d+/([a-z0-9/-]+/\?launch=|launch/)[0-9a-f]+$') {
           Start-LaunchLink ([string]$answer.launch) ([bool]$state.app)
           Write-UiBrowserLog "opened $($answer.url)"
         } else {

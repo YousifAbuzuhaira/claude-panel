@@ -2,6 +2,14 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.8.1",
+      "date": "2026-11-16",
+      "by": "Yousif",
+      "notes": [
+        "The panel's Games in the browser link opens the games again"
+      ]
+    },
+    {
       "version": "0.8.0",
       "date": "2026-11-10",
       "by": "Yousif",
