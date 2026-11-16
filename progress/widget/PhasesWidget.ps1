@@ -1,7 +1,9 @@
 #Requires -Version 5.1
-# The phases checklist as a small card over the chat's WezTerm window.
+# The phases checklist as a small card over the chat's terminal window: WezTerm (from WSL or on
+# Windows itself, placed by the chat's pane), or on Windows itself Git Bash's mintty or Windows
+# Terminal (-Terminal), placed at the window's top right.
 #
-# Owned by the WezTerm window: it sits above that window and under every other
+# Owned by the terminal window: it sits above that window and under every other
 # app, hides when it minimizes and goes when it closes. It follows the window,
 # keeps the spot the person dragged it to, and reads the plan the mod writes to
 # -StateFile. It talks back on stdout, one JSON line per event: ready, closed,
@@ -23,6 +25,8 @@ param(
   [string]$Title = '',
   [string]$Root = '',
   [string]$WezTerm = 'C:\Program Files\WezTerm\wezterm.exe',
+  # The terminal window to follow. WSL's launch names none: WezTerm.
+  [ValidateSet('wezterm', 'mintty', 'wt')][string]$Terminal = 'wezterm',
   [int]$PadLeft = 12,
   [int]$PadTop = 10,
   [int]$PadBottom = 6,
@@ -127,7 +131,14 @@ if (-not $isOwner -and -not $SnapshotPath) {
 $T = Initialize-Theme 'panel'
 . (Join-Path $PSScriptRoot 'Chrome.ps1')
 
-$WEZTERM_CLASS = 'org.wezfurlong.wezterm'
+# Each terminal the panel can follow: its GUI process and its top-level window class.
+$TERMINALS = @{
+  wezterm = @{ Process = 'wezterm-gui.exe'; Class = 'org.wezfurlong.wezterm' }
+  mintty = @{ Process = 'mintty.exe'; Class = 'mintty' }
+  wt = @{ Process = 'WindowsTerminal.exe'; Class = 'CASCADIA_HOSTING_WINDOW_CLASS' }
+}
+$TERMINAL_PROCESS = $TERMINALS[$Terminal].Process
+$TERMINAL_CLASS = $TERMINALS[$Terminal].Class
 $GLYPH_CHECK = $UI_GLYPHS.check
 $GLYPH_FAILED = $UI_GLYPHS.cross
 # One mark for "now": the phase in progress, a live run, a build at work, something new.
@@ -160,33 +171,50 @@ $PICKABLE_TABS = @('phases', 'tests', 'learn')
 # Which tab gives up its count first when the tabs don't fit: a live test count goes last.
 $SHORTEN_ORDER = @('learn', 'phases', 'tests')
 
-# --- Which WezTerm window and pane this chat lives in -------------------------
+# --- Which terminal window (and WezTerm pane) this chat lives in ---------------
 
-# The widget is a child of this chat's pane: wsl.exe under wezterm-gui.exe.
-function Find-WezTermProcessId {
+# The widget is a child of this chat's terminal: from WSL, wsl.exe under wezterm-gui.exe; on
+# Windows itself, claude.exe under the shell under the terminal (mintty's chain can break where
+# Git Bash's own processes hand over, so the window in front is the next guess).
+function Find-TerminalProcessId {
   $all = @{}
   foreach ($p in Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name) { $all[[int]$p.ProcessId] = $p }
   $id = $PID
-  for ($i = 0; $i -lt 12 -and $all.ContainsKey($id); $i++) {
+  for ($i = 0; $i -lt 16 -and $all.ContainsKey($id); $i++) {
     $p = $all[$id]
-    if ($p.Name -eq 'wezterm-gui.exe') { return [int]$p.ProcessId }
+    if ($p.Name -eq $TERMINAL_PROCESS) { return [int]$p.ProcessId }
     $id = [int]$p.ParentProcessId
   }
   $fg = [PhasesWin32]::GetForegroundWindow()
-  if ([PhasesWin32]::ClassOf($fg) -eq $WEZTERM_CLASS) { return [int][PhasesWin32]::ProcessOf($fg) }
-  # Several WezTerms and none in front: the one whose window is highest (EnumWindows walks the
+  if ([PhasesWin32]::ClassOf($fg) -eq $TERMINAL_CLASS) { return [int][PhasesWin32]::ProcessOf($fg) }
+  # Several terminals and none in front: the one whose window is highest (EnumWindows walks the
   # top-level windows from the top), not whichever process happens to be listed first.
-  $front = [PhasesWin32]::WindowsOf(0, $WEZTERM_CLASS) | Select-Object -First 1
+  $front = [PhasesWin32]::WindowsOf(0, $TERMINAL_CLASS) | Select-Object -First 1
   if ($front) { return [int][PhasesWin32]::ProcessOf($front) }
-  $any = Get-Process wezterm-gui -ErrorAction SilentlyContinue | Select-Object -First 1
+  $any = Get-Process ($TERMINAL_PROCESS -replace '\.exe$', '') -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($any) { return [int]$any.Id }
   return 0
 }
 
+# wezterm.exe (the CLI) sits beside wezterm-gui.exe: found there when it isn't where -WezTerm says.
+function Resolve-WezTermCli([int]$GuiPid) {
+  if (Test-Path -LiteralPath $WezTerm) { return $WezTerm }
+  try {
+    $gui = (Get-Process -Id $GuiPid -ErrorAction Stop).Path
+    if ($gui) {
+      $cli = Join-Path (Split-Path -Parent $gui) 'wezterm.exe'
+      if (Test-Path -LiteralPath $cli) { return $cli }
+    }
+  } catch {}
+  return $WezTerm
+}
+
+# Only WezTerm has panes to place the card by; any other terminal answers none.
 function Get-Panes([int]$GuiPid) {
+  if ($Terminal -ne 'wezterm') { return @() }
   if ($GuiPid -gt 0) { $env:WEZTERM_UNIX_SOCKET = Join-Path $env:USERPROFILE ".local\share\wezterm\gui-sock-$GuiPid" }
   try {
-    $json = & $WezTerm cli list --format json 2>$null
+    $json = & $script:wezTermCli cli list --format json 2>$null
     if (-not $json) { return @() }
     return @(($json -join "`n") | ConvertFrom-Json)
   } catch {
@@ -201,7 +229,8 @@ function Select-Pane($Panes) {
     if ($match) { return $match }
   }
   if ($Root) {
-    $match = $Panes | Where-Object { $_.cwd -and $_.cwd.TrimEnd('/').EndsWith($Root.TrimEnd('/')) } | Select-Object -First 1
+    # A Windows pane's folder is file:///C:/..., whose drive letter's case may differ from -Root's.
+    $match = $Panes | Where-Object { $_.cwd -and $_.cwd.TrimEnd('/').EndsWith($Root.TrimEnd('/'), [StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
     if ($match) { return $match }
   }
   $match = $Panes | Where-Object { $_.is_active } | Select-Object -First 1
@@ -209,15 +238,21 @@ function Select-Pane($Panes) {
   return $Panes[0]
 }
 
-$guiPid = Find-WezTermProcessId
+$guiPid = Find-TerminalProcessId
+$script:wezTermCli = Resolve-WezTermCli $guiPid
 $panes = Get-Panes $guiPid
 $pane = Select-Pane $panes
-$owners = [PhasesWin32]::WindowsOf([uint32]$guiPid, $WEZTERM_CLASS)
+$owners = @([PhasesWin32]::WindowsOf([uint32]$guiPid, $TERMINAL_CLASS))
 $owner = [IntPtr]::Zero
 if ($pane) { $owner = $owners | Where-Object { [PhasesWin32]::TextOf($_) -eq $pane.window_title } | Select-Object -First 1 }
+# One process, several windows (Windows Terminal): the one in front, else the highest.
+if (-not $owner -or $owner -eq [IntPtr]::Zero) {
+  $fg = [PhasesWin32]::GetForegroundWindow()
+  $owner = $owners | Where-Object { $_ -eq $fg } | Select-Object -First 1
+}
 if (-not $owner -or $owner -eq [IntPtr]::Zero) { $owner = $owners | Select-Object -First 1 }
 if (-not $owner) {
-  [void](Send-Event @{ event = 'error'; message = 'no WezTerm window found' })
+  [void](Send-Event @{ event = 'error'; message = "no $Terminal window found" })
   exit 1
 }
 
