@@ -1,12 +1,12 @@
 // Making videos: one job for the whole library, working down a queue, so only one voice records at
 // a time and a course is never locked by hours of it. A video is made from a page and kept beside
 // it in its own files, so the page can change meanwhile: the video is then marked out of date.
-import { existsSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { readCourse, readPage, recordUsage } from './library.mjs';
 import { estimate, isOldPage, videoStamp } from './video-check.mjs';
 import { writeScript } from './video-script.mjs';
 import { voiceStatus } from './voice.mjs';
-import { readJson, withLock, writeJson } from './store.mjs';
+import { readJson, renameRetry, withLock, writeJson } from './store.mjs';
 
 export const readQueue = lib => readJson(lib.paths.videoQueue) || [];
 
@@ -118,9 +118,9 @@ function keep(lib, courseId, n, stamp, seconds, again) {
   const made = readJson(`${base}.new.json`);
   rmSync(`${base}.previous.meta.json`, { force: true });
   for (const end of WHOLE.slice(0, 2)) rmSync(`${base}.previous${end}`, { force: true });
-  if (again && existsSync(`${base}.meta.json`)) for (const end of WHOLE) renameSync(`${base}${end}`, `${base}.previous${end}`);
-  renameSync(`${base}.new.mp3`, `${base}.mp3`);
-  renameSync(`${base}.new.json`, `${base}.json`);
+  if (again && existsSync(`${base}.meta.json`)) for (const end of WHOLE) renameRetry(`${base}${end}`, `${base}.previous${end}`);
+  renameRetry(`${base}.new.mp3`, `${base}.mp3`);
+  renameRetry(`${base}.new.json`, `${base}.json`);
   const scriptSeconds = (made.stats?.minutes || 0) * 60;
   writeJson(`${base}.meta.json`, { stamp, minutes: Math.round(made.audio.mainEnd / 6) / 10, questions: made.quiz.length, rebuilt: made.stats?.rebuilt || [], sections: made.sections.length, stats: made.stats, recordingSeconds: seconds, takenMinutes: Math.round((scriptSeconds + seconds) / 6) / 10, model: made.model || null, effort: made.effort || null, at: new Date().toISOString() });
 }
@@ -131,9 +131,9 @@ export function swapVideo(lib, courseId, n) {
   if (!existsSync(`${base}.previous.meta.json`)) throw new Error('this video has no earlier version');
   withLock(lib.root, () => {
     for (const end of WHOLE) {
-      renameSync(`${base}${end}`, `${base}.swap${end}`);
-      renameSync(`${base}.previous${end}`, `${base}${end}`);
-      renameSync(`${base}.swap${end}`, `${base}.previous${end}`);
+      renameRetry(`${base}${end}`, `${base}.swap${end}`);
+      renameRetry(`${base}.previous${end}`, `${base}${end}`);
+      renameRetry(`${base}.swap${end}`, `${base}.previous${end}`);
     }
   });
 }

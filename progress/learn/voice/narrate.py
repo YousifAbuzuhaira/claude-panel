@@ -98,10 +98,12 @@ def cue_time(action, words, cursor, beat_start):
 
 def main():
     model_dir, script_file, out, voice = sys.argv[1:5]
-    try:
-        os.nice(15)
-    except OSError:
-        pass
+    # Low priority where there is nice; on Windows the helper lowers this process itself.
+    if hasattr(os, 'nice'):
+        try:
+            os.nice(15)
+        except OSError:
+            pass
     with open(script_file, encoding='utf-8') as f:
         script = json.load(f)
     questions = {q['id']: q for q in script['quiz']}

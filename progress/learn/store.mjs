@@ -13,22 +13,32 @@ export function readJson(file, fallback = null) {
   }
 }
 
-/** Temp file, then rename. A synced folder (OneDrive) can hold a file a moment: retry. */
+/**
+ * A rename that waits out a moment's hold: a synced folder (OneDrive), or on Windows a reader
+ * (the player, a virus scan) that has the file open, refuses it for a little while.
+ */
+export function renameRetry(from, to) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (error) {
+      if (attempt >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error;
+      pause(100);
+    }
+  }
+}
+
+/** Temp file, then rename. */
 export function writeJson(file, value) {
   mkdirSync(dirname(file), { recursive: true });
   const temp = `${file}.tmp-${process.pid}`;
   writeFileSync(temp, JSON.stringify(value, null, 1) + '\n');
-  for (let attempt = 0; ; attempt++) {
-    try {
-      renameSync(temp, file);
-      return;
-    } catch (error) {
-      if (attempt >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) {
-        try { unlinkSync(temp); } catch {}
-        throw error;
-      }
-      pause(100);
-    }
+  try {
+    renameRetry(temp, file);
+  } catch (error) {
+    try { unlinkSync(temp); } catch {}
+    throw error;
   }
 }
 
@@ -36,7 +46,7 @@ export function writeText(file, text) {
   mkdirSync(dirname(file), { recursive: true });
   const temp = `${file}.tmp-${process.pid}`;
   writeFileSync(temp, text);
-  renameSync(temp, file);
+  renameRetry(temp, file);
 }
 
 const isAlive = pid => {

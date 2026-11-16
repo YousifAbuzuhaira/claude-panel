@@ -891,8 +891,10 @@ describe('the fact-check', () => {
 });
 
 describe('where the voice runs', () => {
-  test('Linux, WSL and Apple Silicon on macOS 14 have a build', () => {
+  test('Linux, WSL, Windows and Apple Silicon on macOS 14 have a build', () => {
     assert.match(voicePlatform('linux', 'x64', '6.6.0').target, /x86_64-unknown-linux/);
+    assert.match(voicePlatform('win32', 'x64', '10.0.19045').target, /x86_64-pc-windows-msvc/);
+    assert.equal(voicePlatform('win32', 'x64', '10.0.19045').zip, true);
     assert.match(voicePlatform('linux', 'arm64', '6.6.0').target, /aarch64-unknown-linux/);
     assert.match(voicePlatform('darwin', 'arm64', '23.1.0').target, /aarch64-apple-darwin/);
   });
@@ -900,13 +902,18 @@ describe('where the voice runs', () => {
   test('an Intel Mac or an old macOS is told why', () => {
     assert.match(voicePlatform('darwin', 'x64', '23.1.0').reason, /Apple Silicon/);
     assert.match(voicePlatform('darwin', 'arm64', '22.6.0').reason, /macOS 14/);
-    assert.match(voicePlatform('win32', 'x64', '10').reason, /no build/);
+    assert.match(voicePlatform('win32', 'arm64', '10').reason, /no build/);
   });
 });
 
 describe('the voice lock', () => {
   test('keeps wheels Python 3.12 can use on Linux and Apple Silicon', () => {
     for (const name of ['numpy-2.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl', 'attrs-26.1.0-py3-none-any.whl', 'x-1-cp39-abi3-macosx_11_0_arm64.whl', 'onnxruntime-1.31.1-cp312-cp312-macosx_14_0_arm64.whl']) assert.equal(wheelFits(name), true, name);
+  });
+
+  test('the Windows lock keeps 64-bit Windows wheels, and none for Linux or a Mac', () => {
+    for (const name of ['x-1-cp312-cp312-win_amd64.whl', 'attrs-26.1.0-py3-none-any.whl', 'espeakng_loader-0.2.4-py3-none-win_amd64.whl', 'protobuf-7.36.2-cp310-abi3-win_amd64.whl']) assert.equal(wheelFits(name, { windows: true }), true, name);
+    for (const name of ['x-1-cp312-cp312-win32.whl', 'x-1-cp312-cp312-manylinux_2_28_x86_64.whl', 'x-1-cp312-cp312-macosx_11_0_arm64.whl', 'x-1-cp313-cp313-win_amd64.whl']) assert.equal(wheelFits(name, { windows: true }), false, name);
   });
 
   test('leaves out other Pythons and platforms', () => {
