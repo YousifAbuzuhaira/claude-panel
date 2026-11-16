@@ -17,8 +17,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
-import { homedir } from 'node:os';
-import { dirname, extname, join, normalize, sep } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 // The pages' own colour arithmetic (a classic script that sets globalThis.ClaudeTheme), so the
@@ -38,9 +38,12 @@ const WEB_FILE = join(CONFIG_DIR, 'web.json');
 const PREFS_FILE = join(CONFIG_DIR, 'web-prefs.json');
 const SAVES_DIR = process.env.CLAUDE_PANEL_SAVES || join(homedir(), '.config', 'claude-panel', 'games');
 // The colour scheme and see-through every window shares (the shape is in shared/theme.js).
-// Inside WSL it is the Windows windows' own file (%LOCALAPPDATA%\ClaudePhases), so the browser
-// pages and the PowerShell windows wear one scheme.
-const APPEARANCE_FILE = process.env.CLAUDE_PANEL_APPEARANCE || windowsAppearanceFile() || join(homedir(), '.config', 'claude-panel', 'appearance.json');
+// Inside WSL, and on Windows itself, it is the Windows windows' own file
+// (%LOCALAPPDATA%\ClaudePhases), so the browser pages and the PowerShell windows wear one scheme.
+const APPEARANCE_FILE = process.env.CLAUDE_PANEL_APPEARANCE
+  || (process.platform === 'win32' && process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'ClaudePhases', 'appearance.json') : null)
+  || windowsAppearanceFile()
+  || join(homedir(), '.config', 'claude-panel', 'appearance.json');
 
 /** On WSL, %LOCALAPPDATA%\ClaudePhases\appearance.json as a WSL path; null anywhere else. */
 function windowsAppearanceFile() {
@@ -65,8 +68,9 @@ const WINDOWS_DIR = join(homedir(), '.cache', 'claude-panel', 'windows');
 const IDLE_MS = 30 * 60_000;
 // A new version takes over from this server on its port: how long the old one waits for it.
 const HANDOVER_WAIT_MS = 5_000;
-// Every chat's phases.json (register.tsx writes them), for Learn's chats line.
-const GLANCE_ROOT = process.env.CLAUDE_PANEL_GLANCE_ROOT || '/tmp/claude-progress';
+// Every chat's phases.json (register.tsx writes them), for Learn's chats line. On Windows itself
+// the plugin writes them in the temp folder (stateRoot in hooks/widget.ts), which is tmpdir().
+const GLANCE_ROOT = process.env.CLAUDE_PANEL_GLANCE_ROOT || (process.platform === 'win32' ? join(tmpdir(), 'claude-progress') : '/tmp/claude-progress');
 const RPC_TIMEOUT_MS = 10 * 60_000;
 const MAX_BODY = 4 * 1024 * 1024;
 // The appearance and the prefs are a few hundred bytes; every window re-reads the appearance.
@@ -300,7 +304,8 @@ function startHelper(onEvent) {
   const launch = () => {
     version = pluginVersion();
     const argv = process.platform === 'win32' ? [process.execPath, [LEARN_MJS, 'serve']] : ['bash', [LEARN_SH, 'serve']];
-    child = spawn(argv[0], argv[1], { stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
+    // windowsHide: on Windows a child of this console-less server would open a console of its own.
+    child = spawn(argv[0], argv[1], { stdio: ['pipe', 'pipe', 'pipe'], env: process.env, windowsHide: true });
     createInterface({ input: child.stdout }).on('line', line => {
       let value;
       try {
@@ -374,7 +379,20 @@ function writeAtomic(path, text) {
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
   writeFileSync(temp, text, { mode: 0o600 });
-  renameSync(temp, path);
+  // On Windows a reader that has the file open (a WPF window reading appearance.json) refuses
+  // the rename for a moment: try again for up to two seconds, as learn/store.mjs does.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(temp, path);
+      return;
+    } catch (error) {
+      if (attempt >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) {
+        rmSync(temp, { force: true });
+        throw error;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
 }
 
 const fetchings = new Map();
@@ -575,11 +593,14 @@ function serve() {
         return send(200, { nonce, path: launchPath(target.key, nonce) });
       }
 
-      // `open` found this server on an older version: hand over to a new one, unless busy.
+      // `open` found this server on an older version: hand over to a new one, unless busy. It
+      // names its own server.mjs: an install from GitHub keeps each version in a folder of its
+      // own, so this server's folder never sees the new version.
       if (path === '/api/handover' && req.method === 'POST') {
-        if (!canHandOver()) return send(200, { ok: false });
+        const target = handoverTarget(JSON.parse((await readBody(req)) || '{}') || {});
+        if (!canHandOver(target)) return send(200, { ok: false });
         send(200, { ok: true });
-        handOver();
+        handOver(target);
         return;
       }
 
@@ -832,14 +853,17 @@ function serve() {
   // one isn't up within HANDOVER_WAIT_MS, this one listens again and leaves that version alone.
   let handingOver = false;
   let failedFor = null;
-  const canHandOver = () => !handingOver && shouldHandOver({ running: version, plugin: pluginVersion(), busy: helper.busy() || busyChats.size > 0, failedFor });
-  const handOver = async () => {
+  // `target`: the version to hand over to and its server.mjs; none means this folder's own.
+  const ownTarget = () => ({ version: pluginVersion(), script: fileURLToPath(import.meta.url) });
+  const canHandOver = (target = ownTarget()) =>
+    !handingOver && target.version !== '0.0.0' && shouldHandOver({ running: version, plugin: target.version, busy: helper.busy() || busyChats.size > 0, failedFor });
+  const handOver = async (target = ownTarget()) => {
     handingOver = true;
-    const next = pluginVersion();
+    const next = target.version;
     const port = boundPort;
     server.close();
     server.closeIdleConnections?.();
-    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'serve'], { detached: true, stdio: 'ignore', env: { ...process.env, CLAUDE_PANEL_TAKEOVER: '1' } });
+    const child = spawn(process.execPath, [target.script, 'serve'], { detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, CLAUDE_PANEL_TAKEOVER: '1' } });
     child.on('error', () => {});
     child.unref();
     const ready = await waitFor(async () => {
@@ -887,6 +911,22 @@ function serve() {
   process.on('unhandledRejection', error => process.stderr.write(`claude-panel: ${error?.stack || error}\n`));
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+}
+
+/**
+ * Where a hand-over request says to go: `{version, script}` when `script` is another copy's
+ * server.mjs whose plugin.json says that version (so only a real install of the plugin is ever
+ * started); else this folder's own. `read` is readFileSync, swapped by the tests.
+ */
+export function handoverTarget(body, { own = { version: pluginVersion(), script: fileURLToPath(import.meta.url) }, read = readFileSync } = {}) {
+  const { version, script } = body && typeof body === 'object' ? body : {};
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version) || typeof script !== 'string' || basename(script) !== 'server.mjs') return own;
+  try {
+    const manifest = JSON.parse(read(join(dirname(script), '..', '.claude-plugin', 'plugin.json'), 'utf8'));
+    return manifest.version === version ? { version, script } : own;
+  } catch {
+    return own;
+  }
 }
 
 // --- Finding or starting it, and opening the page -----------------------------------------------
@@ -937,7 +977,7 @@ async function findOrStart() {
     if (record.version === pluginVersion()) return record;
     // An older server: ask it to hand over (it may be busy, or too old to know how), and use
     // whichever server answers on the port after that.
-    const answer = await postJson(record, '/api/handover', {}).catch(() => null);
+    const answer = await postJson(record, '/api/handover', { version: pluginVersion(), script: fileURLToPath(import.meta.url) }).catch(() => null);
     if (answer?.ok === true) {
       const fresh = await waitFor(async () => {
         const now = readRecord();
@@ -953,7 +993,7 @@ async function findOrStart() {
     if (still) return still;
   }
   // Detached, so a closed Claude session doesn't take an open tab with it.
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'serve'], { detached: true, stdio: 'ignore', env: process.env });
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'serve'], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true });
   child.unref();
   const started = Date.now();
   while (Date.now() - started < 10_000) {
@@ -1023,11 +1063,20 @@ function nativeApp({ build = true } = {}) {
     return binary;
   }
   if (!build) return null;
+  // A build of this source that failed once isn't tried again on every open (a new version's
+  // Swift is a new folder, so it gets its own try).
+  const failed = `${binary}.failed`;
+  if (existsSync(failed)) return null;
+  // Without Apple's developer tools /usr/bin/xcrun is a stub that opens their "install" dialog;
+  // xcode-select -p never asks, so it says first whether swiftc can run at all.
+  if (spawnSync('xcode-select', ['-p'], { stdio: 'ignore', timeout: 5000 }).status !== 0) return null;
   mkdirSync(dirname(binary), { recursive: true });
   writeFileSync(plistFile, plist);
   const built = spawnSync('xcrun', ['swiftc', '-O', APP_SOURCE, '-o', `${binary}.tmp`], { encoding: 'utf8', timeout: 180_000 });
   if (built.status !== 0) {
-    process.stderr.write(`claude-panel: couldn't build the window app, using the browser: ${(built.stderr || built.error?.message || '').slice(0, 500)}\n`);
+    const why = (built.stderr || built.error?.message || '').slice(0, 2000);
+    try { writeFileSync(failed, why); } catch {}
+    process.stderr.write(`claude-panel: couldn't build the window app, using the browser: ${why.slice(0, 500)}\n`);
     return null;
   }
   renameSync(`${binary}.tmp`, binary);
@@ -1127,17 +1176,25 @@ async function open(page, terminal = {}, deep = {}) {
   }
   if (process.env.CLAUDE_PANEL_NO_BROWSER !== '1') {
     const app = nativeApp();
+    // One Learn window: an open Learn page is sent to the place asked for (`navigate`), so it
+    // neither reloads (losing what was typed) nor gets a twin in a new tab.
+    const sent = target.key === 'learn' ? await launchLink(record, target, { reuse: true }).catch(() => null) : null;
     if (app) {
       const follow = cleanTerminal(terminal);
-      startWindow(app, record, target, follow);
+      // The open window has its page already: started bare it only comes forward, with no mailbox.
+      const bare = sent?.existing === true && windowShowing(target.key, record.port);
+      startWindow(app, record, bare ? pagePath(target.key) : target, follow);
       shown = 'window';
       // So a page in this window that opens another (Learn's games mark) hands on this terminal.
       if (follow.program) await postJson(record, '/api/opened', { page: target.key, ...follow }).catch(() => {});
+    } else if (sent?.existing === true) {
+      // A browser tab can't be brought forward from here; it has gone to the place asked for.
+      shown = 'existing';
     } else {
       // A one-time link, so the token never sits on the browser's command line.
-      const { link } = await launchLink(record, target);
+      const { link } = sent?.link ? sent : await launchLink(record, target);
       const [command, args] = browserArgv(link);
-      const opener = spawn(command, args, { detached: true, stdio: 'ignore' });
+      const opener = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
       if (process.env.WSL_DISTRO_NAME) {
         // From WSL the opener is a Windows cmd.exe that `start`s the browser and returns. Wait for
         // it: started from a wsl.exe that ends with this process (the Windows panel's link), WSL

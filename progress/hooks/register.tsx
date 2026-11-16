@@ -347,6 +347,8 @@ async function openPage(
     const ran = await $.process.run([...opener, 'open', page, ...toView, ...follow])
     const answer = JSON.parse(ran.stdout.trim().split('\n').at(-1) ?? '{}') as { ok?: boolean; url?: string; error?: string; shown?: string }
     if (answer.ok && answer.shown === 'window') return openingText(page, deep, true)
+    // Learn was open already (a browser tab): it went to the place asked for.
+    if (answer.ok && answer.shown === 'existing') return `${openingText(page, deep, false)} It was open already: look for its tab.`
     if (answer.ok && answer.url) return `Opened ${answer.url} in your browser.`
     return `Couldn't open it: ${answer.error ?? (ran.stderr.trim() || 'no answer')}`
   } catch (error) {

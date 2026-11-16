@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { WINDOW_TITLES, cleanAppearance, cleanPrefs, cleanTerminal, infoPlist, launchPath, lookCss, pagePath, phaseLine, pluginVersion, shouldHandOver, uploadName, windowId } from '../server.mjs';
+import { WINDOW_TITLES, cleanAppearance, cleanPrefs, cleanTerminal, handoverTarget, infoPlist, launchPath, lookCss, pagePath, phaseLine, pluginVersion, shouldHandOver, uploadName, windowId } from '../server.mjs';
 
 // server.mjs loads shared/theme.js, so the pages' own arithmetic is here to compare with.
 const T = globalThis.ClaudeTheme;
@@ -252,4 +252,23 @@ test('the chats line cuts long names, and names an untitled chat by its plan', (
 
 test('a phases file that is not an object is skipped', () => {
   assert.deepEqual(phaseLine([{ state: null, mtimeMs: NOW }, { state: 'x', mtimeMs: NOW }], NOW).items, []);
+});
+
+test('a hand-over goes to the copy that asked, when its plugin.json says that version', () => {
+  const own = { version: '0.8.1', script: '/cache/progress/0.8.1/web/server.mjs' };
+  const manifests = { '/cache/progress/0.9.0/.claude-plugin/plugin.json': '{"version":"0.9.0"}' };
+  const read = path => {
+    const key = path.replaceAll('\\', '/').replace('/web/../', '/');
+    if (!(key in manifests)) throw new Error('missing');
+    return manifests[key];
+  };
+  // An install from GitHub: each version in its own folder.
+  assert.deepEqual(handoverTarget({ version: '0.9.0', script: '/cache/progress/0.9.0/web/server.mjs' }, { own, read }), { version: '0.9.0', script: '/cache/progress/0.9.0/web/server.mjs' });
+  // Anything else is this folder's own: no body (an older open), a version its plugin.json doesn't
+  // say, a script that isn't server.mjs, a bad version.
+  assert.deepEqual(handoverTarget({}, { own, read }), own);
+  assert.deepEqual(handoverTarget({ version: '0.9.1', script: '/cache/progress/0.9.0/web/server.mjs' }, { own, read }), own);
+  assert.deepEqual(handoverTarget({ version: '0.9.0', script: '/tmp/evil.mjs' }, { own, read }), own);
+  assert.deepEqual(handoverTarget({ version: 'x', script: '/cache/progress/0.9.0/web/server.mjs' }, { own, read }), own);
+  assert.deepEqual(handoverTarget(null, { own, read }), own);
 });
