@@ -160,11 +160,12 @@ func runningWindow(_ id: String, port: Int?) -> NSRunningApplication? {
 }
 
 /// The window id of one of the server's pages, from its path (as web/server.mjs `windowId` names
-/// them): /learn/ is 'learn', /games/ 'games', /games/2048/ 'games-2048'. Nil for any other path.
+/// them): /learn/ is 'learn', /learn/video/ 'learn-video' (the player, a window of its own),
+/// /games/ 'games', /games/2048/ 'games-2048'. Nil for any other path.
 func pageId(_ path: String) -> String? {
     let parts = path.split(separator: "/").map { String($0) }
     guard let first = parts.first else { return nil }
-    if first == "learn" { return "learn" }
+    if first == "learn" { return parts.count > 1 && parts[1] == "video" ? "learn-video" : "learn" }
     guard first == "games" else { return nil }
     if parts.count > 1, parts[1].range(of: "^[a-z0-9]+$", options: .regularExpression) != nil { return "games-\(parts[1])" }
     return "games"
@@ -308,8 +309,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         webView.uiDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
 
-        // Learn reads wide; the games hub is a short list; a game fits its board.
+        // Learn reads wide; a video is a 16:9 picture with its controls; the games hub is a short
+        // list; a game fits its board.
         let size = options.id == "learn" ? NSSize(width: 1280, height: 860)
+            : options.id == "learn-video" ? NSSize(width: 1180, height: 760)
             : options.id == "games" ? NSSize(width: 560, height: 460) : NSSize(width: 980, height: 820)
         if tracker.isKnown {
             // Stuck to the terminal: a floating panel on every Space, full-screen ones included.
@@ -521,7 +524,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let colors = (look["colors"] as? [String: String]) ?? [:]
         let bg = colors["bg"] ?? "#1C1D20"
         let ink = colors["text"] ?? "#E8E6E3"
-        let command = options.id == "learn" ? "/learn" : "/games"
+        let command = options.id.hasPrefix("learn") ? "/learn" : "/games"
         let top = Int(titleBarHeight.rounded()) + 24
         let html = "<!doctype html><meta charset='utf-8'><body style='margin:0;padding:\(top)px 40px 40px;font:14px -apple-system,sans-serif;color:\(ink);background:\(bg)'>"
             + "<h3>Couldn't reach the \(escape(options.title)) page</h3><p style='opacity:.7'>\(escape(text))</p>"
