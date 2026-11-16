@@ -1,13 +1,14 @@
 #Requires -Version 5.1
-# Opens Learn on Windows: the web version (web/server.mjs, running in WSL) in an Edge app
-# window, with no tabs or address bar. Run by the panel's Learn links, the games' Learn chip
+# Opens Learn on Windows: the web version (web/server.mjs, in WSL or on Windows itself) in an
+# Edge app window, with no tabs or address bar. Run by the panel's Learn links, the games' Learn chip
 # (Open-Sibling in Chrome.ps1) and /learn and /course (windowArgv in hooks/widget.ts).
 #
-# There is one Learn window. wsl.exe runs `web.sh open learn` with CLAUDE_PANEL_LAUNCH=1, and the
-# server answers either a one-time link, opened here, or `existing`: a Learn page is already
-# open and has gone to the view and course asked for, and this brings its window forward.
-# (Asking WSL to start the browser fails when the wsl.exe it ran in ends at once.) Each attempt
-# is noted in %TEMP%\claude-panel-browser.log. Kept to ASCII.
+# There is one Learn window. The server's `open learn` runs with CLAUDE_PANEL_LAUNCH=1 (through
+# wsl.exe from WSL, through node.exe on Windows itself: WebOpen.ps1), and answers either a
+# one-time link, opened here, or `existing`: a Learn page is already open and has gone to the
+# view and course asked for, and this brings its window forward. (Asking WSL to start the
+# browser fails when the wsl.exe it ran in ends at once.) Each attempt is noted in
+# %TEMP%\claude-panel-browser.log. Kept to ASCII.
 
 param(
   # Unused since Learn left its WPF window; kept so every caller's arguments still bind.
@@ -65,32 +66,20 @@ public static class ClaudeLearnLaunch {
 # Screen and window positions in real pixels on every monitor (per-monitor DPI aware).
 [void][ClaudeLearnLaunch]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
 
-# The distro and web.sh's WSL path, from where this script runs (\\wsl.localhost\<distro>\...\widget).
-function Get-WebScript {
-  $match = [regex]::Match([string]$PSScriptRoot, '^\\\\wsl(?:\.localhost|\$)\\([^\\]+)(\\.*)$', 'IgnoreCase')
-  if (-not $match.Success) { return $null }
-  return @{ distro = $match.Groups[1].Value; script = (($match.Groups[2].Value -replace '\\', '/') -replace '/widget$', '/web/web.sh') }
-}
+# How to ask the web server for a page (wsl.exe from WSL, node.exe on Windows itself).
+. (Join-Path $PSScriptRoot 'WebOpen.ps1')
 
-# `web.sh open learn ...` through wsl.exe: the server's last JSON line, or $null. `-New` asks for a
-# link even with a Learn page open (its window couldn't be found here).
+# The server's `open learn ...`: its last JSON line, or $null. `-New` asks for a link even with a
+# Learn page open (its window couldn't be found here).
 function Invoke-WebOpen([switch]$New) {
-  $web = Get-WebScript
-  if (-not $web) { Write-Log "not run from WSL ($PSScriptRoot)"; return $null }
   $extra = ''
   if ($VIEWS -contains $View) { $extra += " --view $View" }
   if ($CourseId -match '^[\w.-]{1,160}$') { $extra += " --course $CourseId" }
-  $reuse = if ($New) { ' CLAUDE_PANEL_NEW=1' } else { '' }
-  $start = New-Object System.Diagnostics.ProcessStartInfo
-  $start.FileName = 'wsl.exe'
-  $start.Arguments = "-d $($web.distro) -e env CLAUDE_PANEL_LAUNCH=1$reuse bash `"$($web.script)`" open learn$extra"
-  $start.UseShellExecute = $false
-  $start.CreateNoWindow = $true
-  $start.RedirectStandardOutput = $true
-  $start.WorkingDirectory = $env:TEMP
+  $start = New-WebOpenStart 'learn' $extra -New:$New
+  if (-not $start) { Write-Log (Get-WebOpenTrouble); return $null }
   $child = [System.Diagnostics.Process]::Start($start)
   $reading = $child.StandardOutput.ReadToEndAsync()
-  if (-not $child.WaitForExit($ANSWER_WAIT_MS)) { Write-Log 'no answer from WSL in 30 s'; return $null }
+  if (-not $child.WaitForExit($ANSWER_WAIT_MS)) { Write-Log 'no answer from the web server in 30 s'; return $null }
   $lines = @($reading.Result -split "`n" | Where-Object { $_.Trim() })
   if ($lines.Count -eq 0) { Write-Log 'WSL answered nothing'; return $null }
   try { return ($lines[-1] | ConvertFrom-Json) } catch { Write-Log "not JSON: $($lines[-1])"; return $null }

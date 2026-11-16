@@ -572,11 +572,13 @@ function Open-Sibling([string]$Id, [int64]$OwnerHwnd, [string]$SessionId, [strin
 }
 
 # Opens a page of the web version ('learn', 'games' or 'games/<name>') in the browser. The plugin's
-# web server runs inside WSL: wsl.exe runs web/web.sh, which starts (or finds) it and answers a
-# one-time link, and this window opens that link with Windows' own default browser. (Asking WSL to
-# start the browser fails when the wsl.exe it ran in ends at once, as it does here.) A timer waits
-# for the answer, so the window never blocks. These windows run from \\wsl.localhost\<distro>\...
-# \widget, which names the distro and the path. Each attempt is noted in %TEMP%\claude-panel-browser.log.
+# web server runs inside WSL or on Windows itself: WebOpen.ps1 starts `server.mjs open` (wsl.exe and
+# web/web.sh, or node.exe), which starts (or finds) it and answers a one-time link, and this window
+# opens that link with Windows' own default browser. (Asking WSL to start the browser fails when the
+# wsl.exe it ran in ends at once, as it does here.) A timer waits for the answer, so the window never
+# blocks. Each attempt is noted in %TEMP%\claude-panel-browser.log.
+. (Join-Path $PSScriptRoot 'WebOpen.ps1')
+
 # A one-time link for this machine's browser. An app window is Edge with no tabs or address bar:
 # every Windows has it, and it sits beside the Learn window. Any other way, the default browser.
 function Start-LaunchLink([string]$Link, [bool]$AppWindow) {
@@ -595,19 +597,10 @@ function Start-LaunchLink([string]$Link, [bool]$AppWindow) {
 
 function Open-InBrowser([string]$Page = 'learn', [string]$Extra = '', [switch]$AppWindow) {
   try {
-    $match = [regex]::Match([string]$PSScriptRoot, '^\\\\wsl(?:\.localhost|\$)\\([^\\]+)(\\.*)$', 'IgnoreCase')
-    if (-not $match.Success) { Write-UiBrowserLog "not run from WSL ($PSScriptRoot)"; return }
-    $distro = $match.Groups[1].Value
-    $webScript = ($match.Groups[2].Value -replace '\\', '/') -replace '/widget$', '/web/web.sh'
-    $start = New-Object System.Diagnostics.ProcessStartInfo
-    $start.FileName = 'wsl.exe'
-    $start.Arguments = "-d $distro -e env CLAUDE_PANEL_LAUNCH=1 bash `"$webScript`" open $Page $Extra"
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardOutput = $true
-    $start.WorkingDirectory = $env:TEMP
+    $start = New-WebOpenStart $Page $Extra
+    if (-not $start) { Write-UiBrowserLog (Get-WebOpenTrouble); return }
     $child = [System.Diagnostics.Process]::Start($start)
-    Write-UiBrowserLog "asked WSL for $Page (pid $($child.Id))"
+    Write-UiBrowserLog "asked the web server for $Page (pid $($child.Id))"
     $wait = New-Object System.Windows.Threading.DispatcherTimer
     $wait.Interval = [TimeSpan]::FromMilliseconds(200)
     $wait.Tag = @{ child = $child; until = [DateTime]::UtcNow.AddSeconds(30); app = [bool]$AppWindow }
@@ -617,7 +610,7 @@ function Open-InBrowser([string]$Page = 'learn', [string]$Extra = '', [switch]$A
       if (-not $state.child.HasExited -and [DateTime]::UtcNow -lt $state.until) { return }
       $sender.Stop()
       try {
-        if (-not $state.child.HasExited) { Write-UiBrowserLog 'no answer from WSL in 30 s'; return }
+        if (-not $state.child.HasExited) { Write-UiBrowserLog 'no answer from the web server in 30 s'; return }
         $lines = @($state.child.StandardOutput.ReadToEnd() -split "`n" | Where-Object { $_.Trim() })
         $answer = if ($lines.Count) { $lines[$lines.Count - 1] | ConvertFrom-Json } else { $null }
         # The link is <page>/?launch=<nonce> (a server older than 0.8.0 answers /launch/<nonce>).
@@ -625,7 +618,7 @@ function Open-InBrowser([string]$Page = 'learn', [string]$Extra = '', [switch]$A
           Start-LaunchLink ([string]$answer.launch) ([bool]$state.app)
           Write-UiBrowserLog "opened $($answer.url)"
         } else {
-          Write-UiBrowserLog ("no link from WSL: " + ($lines -join ' | '))
+          Write-UiBrowserLog ("no link from the web server: " + ($lines -join ' | '))
         }
       } catch { Write-UiBrowserLog "failed: $_" }
     })

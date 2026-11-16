@@ -12,7 +12,11 @@ works() { [ -x "$1" ] && "$1" -e 'process.exit(Number(process.versions.node.spli
 node_bin="$(command -v node 2>/dev/null)"
 if ! works "$node_bin"; then
   node_bin=""
-  for candidate in $(ls -d "$HOME"/.nvm/versions/node/v*/bin/node 2>/dev/null | sort -V -r) "$HOME/.volta/bin/node" /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
+  # nvm, Volta, fnm, asdf and mise keep their own; Homebrew's node@22 is keg-only (not on PATH).
+  for candidate in \
+    $(ls -d "$HOME"/.nvm/versions/node/v*/bin/node "$HOME"/.local/share/fnm/node-versions/v*/installation/bin/node \
+      "$HOME"/.asdf/installs/nodejs/*/bin/node "$HOME"/.local/share/mise/installs/node/*/bin/node 2>/dev/null | sort -V -r) \
+    "$HOME/.volta/bin/node" /opt/homebrew/bin/node /opt/homebrew/opt/node@2*/bin/node /usr/local/bin/node /usr/local/opt/node@2*/bin/node /usr/bin/node; do
     if works "$candidate"; then node_bin="$candidate"; break; fi
   done
 fi
