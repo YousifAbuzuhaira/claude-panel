@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { panelState, readEvents, readOwnerHwnd, widgetArgv, windowArgv } from '../hooks/widget'
-import { answerHost, COMMAND_RUN, PLAN } from './host'
+import {
+  panelState, readEvents, readOwnerHwnd, removeArgv, stateRoot, widgetArgv, widgetStatePath, windowArgv, windowsPowerShell, windowsTerminal,
+} from '../hooks/widget'
+import { answerHost, COMMAND_RUN, PLAN, WIN_STATE } from './host'
 
 describe('panel life', () => {
   test('a panel that never comes up says so once and is not retried until /phases', async ($, on) => {
@@ -157,5 +159,117 @@ describe('panel state: the chat title', () => {
   test("carries the chat's title when there is one, and leaves it out when not", () => {
     expect(JSON.parse(panelState('s', null, [], null, 'braxtone (6)')).title).toBe('braxtone (6)')
     expect('title' in JSON.parse(panelState('s', null, []))).toBe(false)
+  })
+})
+
+describe('Windows itself (Claude Code with Git Bash, no WSL)', () => {
+  test('the state folder is the temp folder with forward slashes, which Git Bash reads as the same place', () => {
+    expect(stateRoot()).toBe('/tmp/claude-progress')
+    expect(stateRoot('C:\\Users\\me\\AppData\\Local\\Temp\\')).toBe('C:/Users/me/AppData/Local/Temp/claude-progress')
+    expect(stateRoot('  ')).toBe('/tmp/claude-progress')
+    expect(widgetStatePath('s', stateRoot('C:\\T'))).toBe('C:/T/claude-progress/s/phases.json')
+  })
+
+  test('the panel follows WezTerm, mintty or Windows Terminal; any other terminal gets the pane', () => {
+    expect(windowsTerminal({ termProgram: 'WezTerm' })).toBe('wezterm')
+    expect(windowsTerminal({ termProgram: 'mintty' })).toBe('mintty')
+    expect(windowsTerminal({ wtSession: 'a1b2' })).toBe('wt')
+    // VS Code's terminal sets its own TERM_PROGRAM, even where WT_SESSION leaked in from a parent.
+    expect(windowsTerminal({ termProgram: 'vscode', wtSession: 'a1b2' })).toBeNull()
+    expect(windowsTerminal({})).toBeNull()
+  })
+
+  test('files are deleted with del on Windows, rm elsewhere', () => {
+    expect(removeArgv('C:/T/claude-progress/s/phases.json', true)).toEqual(['cmd.exe', '/d', '/c', 'del', '/f', '/q', 'C:\\T\\claude-progress\\s\\phases.json'])
+    expect(removeArgv('/tmp/claude-progress/s/phases.json', false)).toEqual(['rm', '-f', '/tmp/claude-progress/s/phases.json'])
+  })
+
+  test('the commands use Windows\' own PowerShell and plain Windows paths, no \\\\wsl.localhost', () => {
+    expect(windowsPowerShell('C:\\WINDOWS')).toBe('C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    expect(windowsPowerShell(undefined)).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    const panel = widgetArgv({
+      pluginRoot: 'C:\\Users\\me\\progress', sessionId: 's', root: 'C:\\Users\\me\\repo',
+      stateFile: 'C:/T/claude-progress/s/phases.json', powershell: 'PS.exe', terminal: 'mintty',
+    })
+    expect(panel[0]).toBe('PS.exe')
+    expect(panel).toEqual(expect.arrayContaining([
+      '-File', 'C:\\Users\\me\\progress\\widget\\PhasesWidget.ps1',
+      '-StateFile', 'C:\\T\\claude-progress\\s\\phases.json',
+      // WezTerm names a Windows pane's folder file:///C:/..., so the root goes with forward slashes.
+      '-Root', 'C:/Users/me/repo',
+      '-Terminal', 'mintty',
+    ]))
+    expect(panel.join(' ')).not.toContain('wsl.localhost')
+    const learn = windowArgv({ pluginRoot: 'C:\\Users\\me\\progress', script: 'Learn.ps1', sessionId: 's', view: 'review', powershell: 'PS.exe' })
+    expect(learn[0]).toBe('PS.exe')
+    expect(learn).toEqual(expect.arrayContaining(['-File', 'C:\\Users\\me\\progress\\widget\\Learn.ps1', '-View', 'review']))
+    // From WSL nothing changes: no -Terminal.
+    expect(widgetArgv({ distro: 'Ubuntu', pluginRoot: '/p', sessionId: 's' })).not.toContain('-Terminal')
+  })
+
+  test('in mintty the floating panel starts natively, reading the state from the temp folder', async ($, on) => {
+    const { clock, host } = answerHost(on, { panel: 'comes-up', windows: true, terminal: 'mintty' })
+    await $.tool.call({ tool: 'mcp__progress__phases_write', title: 'Ship it', phases: PLAN })
+    await clock.settle()
+    expect(host.writes.some(write => write.path === WIN_STATE)).toBe(true)
+    expect(host.spawned.length).toBe(1)
+    expect(host.spawned[0]?.[0]).toBe('C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    expect(host.spawned[0]).toEqual(expect.arrayContaining([
+      '-StateFile', 'C:\\Users\\yassa\\AppData\\Local\\Temp\\claude-progress\\sess-1\\phases.json', '-Terminal', 'mintty',
+    ]))
+    expect(host.opened).toEqual([])
+    expect(host.status.at(-1)).toBe('Phases 1/3')
+    // uname is never asked on Windows.
+    expect(host.runs.some(argv => argv[0] === 'uname')).toBe(false)
+  })
+
+  test('in a terminal it cannot follow (VS Code), the pane shows instead', async ($, on) => {
+    const { clock, host } = answerHost(on, { panel: 'comes-up', windows: true, terminal: 'vscode' })
+    await $.tool.call({ tool: 'mcp__progress__phases_write', title: 'Ship it', phases: PLAN })
+    await clock.settle()
+    expect(host.spawned).toEqual([])
+    expect(host.opened).toEqual(['progress'])
+  })
+
+  test('a panel that fails to start falls back to the pane', async ($, on) => {
+    const { clock, host } = answerHost(on, { panel: 'fails', windows: true, terminal: '', wtSession: 'a1b2' })
+    await $.tool.call({ tool: 'mcp__progress__phases_write', title: 'Ship it', phases: PLAN })
+    await clock.settle()
+    expect(host.spawned.length).toBe(1)
+    expect(host.spawned[0]).toEqual(expect.arrayContaining(['-Terminal', 'wt']))
+    await $.tool.call({ tool: 'mcp__progress__phases_write', title: 'Ship it', phases: PLAN })
+    await clock.settle()
+    expect(host.spawned.length).toBe(1)
+    expect(host.opened).toEqual(['progress'])
+  })
+
+  test('/learn and /games start the WPF windows through node detach.mjs, never bash', async ($, on) => {
+    const { host } = answerHost(on, { panel: 'comes-up', windows: true, terminal: 'mintty' })
+    await $.command.run({ command: 'learn', args: 'review', ...COMMAND_RUN })
+    await $.command.run({ command: 'games', args: 'sudoku', ...COMMAND_RUN })
+    expect(host.runs.some(argv => argv[0] === 'bash')).toBe(false)
+    const launched = host.runs.filter(argv => argv[0] === 'node')
+    expect(launched.length).toBe(2)
+    expect(launched[0]?.[1]).toMatch(/[\\/]web[\\/]detach\.mjs$/)
+    expect(launched[0]).toEqual(expect.arrayContaining(['-View', 'review']))
+    expect(launched[0]?.join(' ')).toContain('Learn.ps1')
+    expect(launched[1]?.join(' ')).toContain('Sudoku.ps1')
+    // A bare /games names the WPF games, as on WSL.
+    const games = await $.command.run({ command: 'games', args: '', ...COMMAND_RUN })
+    expect(games).toMatchObject({ text: expect.stringContaining('Try /games sudoku') })
+  })
+
+  test('a test command is tracked under Git Bash, its log in the temp folder', async ($, on) => {
+    const { host } = answerHost(on, { panel: 'comes-up', windows: true, terminal: 'mintty' })
+    let command = ''
+    on('tool.call', { tool: 'Bash' }, (_$, e) => {
+      command = e.command
+      return { result: { stdout: '', stderr: '', interrupted: false } }
+    })
+    await $.tool.call({ tool: 'Bash', command: 'pnpm test' })
+    expect(command).toContain("__kp_log='C:/Users/yassa/AppData/Local/Temp/claude-progress/sess-1/")
+    expect(host.panel()?.runs.length).toBe(1)
+    // The log is deleted with del, not rm.
+    expect(host.runs.some(argv => argv[0] === 'rm')).toBe(false)
   })
 })

@@ -3,6 +3,10 @@ import { mock } from 'claude-code/testing'
 
 export const STATE = '/tmp/claude-progress/sess-1/phases.json'
 export const LEARN_STATUS = '/home/yousif/.config/claude-learn/status.json'
+// On Windows itself (`windows: true`): the temp folder with forward slashes, and USERPROFILE as home.
+export const WIN_TEMP = 'C:\\Users\\yassa\\AppData\\Local\\Temp'
+export const WIN_STATE = 'C:/Users/yassa/AppData/Local/Temp/claude-progress/sess-1/phases.json'
+export const WIN_LEARN_STATUS = 'C:\\Users\\yassa/.config/claude-learn/status.json'
 
 // What the plugin's releases.json and plugin.json read as, unless a test says otherwise.
 export const RELEASES = JSON.stringify({
@@ -40,9 +44,10 @@ export type PanelState = {
 }
 
 /**
- * A session the test plays the world of: a WezTerm-on-WSL bash host, and a
- * panel that comes up (`ready`, naming the WezTerm window `hwnd` when given),
- * comes up and is closed with its ✕, fails to start, or the host isn't WezTerm.
+ * A session the test plays the world of: a WezTerm-on-WSL bash host (or, with
+ * `windows`, Windows itself: Claude Code with Git Bash, OS=Windows_NT, no SHELL or
+ * HOME), and a panel that comes up (`ready`, naming the terminal window `hwnd` when
+ * given), comes up and is closed with its ✕, fails to start, or the host isn't WezTerm.
  * `releases`/`manifest` are what the plugin's releases.json and plugin.json read
  * as; `store` seeds what earlier sessions kept.
  */
@@ -54,6 +59,8 @@ export function answerHost(
     learnStatus?: string
     off?: boolean
     mac?: boolean
+    windows?: boolean
+    wtSession?: string
     hwnd?: number
     releases?: string
     manifest?: string
@@ -61,11 +68,17 @@ export function answerHost(
   } = { panel: 'comes-up' },
 ) {
   const clock = mock.clock(on, { now: 1_000 })
+  const state = options.windows ? WIN_STATE : STATE
+  const learnStatus = options.windows ? WIN_LEARN_STATUS : LEARN_STATUS
   mock.env(on, {
-    TERM_PROGRAM: options.terminal ?? 'WezTerm',
-    ...(options.mac ? { ITERM_SESSION_ID: 'w0t1p0:ABC-123' } : { WSL_DISTRO_NAME: 'Ubuntu' }),
-    SHELL: '/bin/bash',
-    HOME: '/home/yousif',
+    ...(options.terminal === '' ? {} : { TERM_PROGRAM: options.terminal ?? 'WezTerm' }),
+    ...(options.windows
+      ? { OS: 'Windows_NT', TEMP: WIN_TEMP, USERPROFILE: 'C:\\Users\\yassa', SystemRoot: 'C:\\WINDOWS', ...(options.wtSession ? { WT_SESSION: options.wtSession } : {}) }
+      : {
+          ...(options.mac ? { ITERM_SESSION_ID: 'w0t1p0:ABC-123' } : { WSL_DISTRO_NAME: 'Ubuntu' }),
+          SHELL: '/bin/bash',
+          HOME: '/home/yousif',
+        }),
     ...(options.off ? { CLAUDE_PROGRESS_OFF: '1' } : {}),
   })
   mock.store(on, options.store)
@@ -78,21 +91,21 @@ export function answerHost(
     status: [],
     log: '',
     panel: () => {
-      const last = host.writes.filter(write => write.path === STATE).at(-1)
+      const last = host.writes.filter(write => write.path === state).at(-1)
       return last ? (JSON.parse(last.text) as PanelState) : undefined
     },
   }
   on('session.id', () => ({ value: 'sess-1' }))
-  on('session.root', () => ({ value: '/home/yousif/repo' }))
+  on('session.root', () => ({ value: options.windows ? 'C:\\Users\\yassa\\repo' : '/home/yousif/repo' }))
   on('fs.write', (_$, e) => {
-    if (e.path !== STATE) host.log = ''
+    if (e.path !== state) host.log = ''
     host.writes.push({ path: e.path, text: e.text })
     return { value: undefined }
   })
   // Learn's status file reads as the test set it (nothing by default), the plugin's
   // releases.json and plugin.json as above; every other read is the Bash log.
   on('fs.read', (_$, e) => {
-    if (e.path === LEARN_STATUS) return { value: options.learnStatus ?? '' }
+    if (e.path === learnStatus) return { value: options.learnStatus ?? '' }
     if (e.path.endsWith('/releases.json')) return { value: options.releases ?? RELEASES }
     if (e.path.endsWith('/.claude-plugin/plugin.json')) return { value: options.manifest ?? MANIFEST }
     return { value: host.log }

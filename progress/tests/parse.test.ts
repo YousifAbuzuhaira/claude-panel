@@ -33,6 +33,14 @@ describe('parse', () => {
     expect(progress.summary).toEqual({ total: 6, passed: 4, failed: 2, skipped: 0 })
   })
 
+  test('a Windows runner\'s CRLF lines read the same as plain ones', () => {
+    const crlf = feed(emptyProgress(), NODE_TAP_FAIL.replaceAll('\n', '\r\n'))
+    const plain = feed(emptyProgress(), NODE_TAP_FAIL)
+    expect(crlf.done).toBe(plain.done)
+    expect(crlf.failed).toBe(plain.failed)
+    expect(crlf.summary).toEqual(plain.summary)
+  })
+
   test('feeding line by line gives what feeding it whole gives', () => {
     const lines = VITEST_PASS.split('\n')
     let progress = emptyProgress()

@@ -20,6 +20,7 @@ const STATES = new Set(['running', 'waiting-picks', 'paused', 'failed', 'done'])
 // A finished build still shows for this long ("Ready: ...").
 const DONE_SHOWN_MS = 60 * 60_000
 
+// `home` is what Learn's helper calls home (Node's os.homedir()): HOME, or USERPROFILE on Windows.
 export const learnStatusPath = (home: string) => `${home}/.config/claude-learn/status.json`
 
 /** The views `/learn <view>` opens: Learn's own tabs. */
@@ -34,9 +35,11 @@ export const isLearnView = (name: string): name is LearnView => (LEARN_VIEWS as 
  * the chat's saved record; nothing is sent to this chat). Leading dashes are taken off, so the
  * focus can't be read as a flag.
  */
-export function courseArgv({ pluginRoot, sessionId, focus }: { pluginRoot: string; sessionId: string; focus: string }): string[] {
+export function courseArgv({ pluginRoot, sessionId, focus, isWindows = false }: { pluginRoot: string; sessionId: string; focus: string; isWindows?: boolean }): string[] {
   const what = focus.replace(/\s+/g, ' ').trim().replace(/^-+\s*/, '').slice(0, 300)
-  return ['bash', `${pluginRoot}/learn/learn.sh`, 'build', 'start', '--chat', sessionId, '--focus', what]
+  // On Windows `bash` is WSL's launcher (or missing): Node runs the helper straight, as the server does.
+  const helper = isWindows ? ['node', `${pluginRoot}/learn/learn.mjs`] : ['bash', `${pluginRoot}/learn/learn.sh`]
+  return [...helper, 'build', 'start', '--chat', sessionId, '--focus', what]
 }
 
 const text = (value: unknown, max = 120) => (typeof value === 'string' ? value.slice(0, max) : '')

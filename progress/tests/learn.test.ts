@@ -92,6 +92,12 @@ describe('/course', () => {
     ])
   })
 
+  test('on Windows itself Node runs the helper straight: bash there is WSL\'s launcher', () => {
+    expect(courseArgv({ pluginRoot: 'C:\\p', sessionId: 's', focus: '/api routes', isWindows: true })).toEqual([
+      'node', 'C:\\p/learn/learn.mjs', 'build', 'start', '--chat', 's', '--focus', '/api routes',
+    ])
+  })
+
   test('a focus that starts with dashes is not read as a flag; a long one is cut', () => {
     expect(courseArgv({ pluginRoot: '/p', sessionId: 's', focus: '--mode auto' }).at(-1)).toBe('mode auto')
     expect(courseArgv({ pluginRoot: '/p', sessionId: 's', focus: 'x'.repeat(500) }).at(-1)).toHaveLength(300)

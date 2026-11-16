@@ -183,9 +183,9 @@ function readLine(progress: Progress, raw: string): Progress {
   return progress
 }
 
-/** Feeds whole lines; a caller keeps any unfinished last line for later. */
+/** Feeds whole lines (a Windows runner's \r\n too); a caller keeps any unfinished last line for later. */
 export function feed(progress: Progress, text: string): Progress {
-  return text.split('\n').reduce(readLine, progress)
+  return text.split(/\r?\n/).reduce(readLine, progress)
 }
 
 /**

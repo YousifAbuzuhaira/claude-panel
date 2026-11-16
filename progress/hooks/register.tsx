@@ -18,17 +18,20 @@ import {
   releasesLabel, releasesName, SEEN_RELEASE_KEY,
 } from './releases'
 import type { Release } from './releases'
-import { macPanelArgv, panelState, readAppPath, readEvents, readOwnerHwnd, widgetArgv, widgetStatePath, windowArgv } from './widget'
+import {
+  macPanelArgv, panelState, readAppPath, readEvents, readOwnerHwnd, removeArgv, stateRoot, widgetArgv, widgetStatePath, windowArgv,
+  windowsPowerShell, windowsTerminal,
+} from './widget'
 import type { WidgetEvent } from './widget'
 import { isTestCommand, runKey, shortLabel, wrapCommand } from './wrap'
 
 // Everything shows in one place: on WezTerm-on-WSL, the floating panel over the
-// chat's WezTerm window (widget/PhasesWidget.ps1); anywhere else (macOS, Linux, any
-// terminal), a Claude Code pane drawn here, with the same Phases, Tests, Learn and
-// Releases tabs. Learn and the games open in the browser from web/server.mjs, wherever
-// there is no WPF.
+// chat's WezTerm window (widget/PhasesWidget.ps1); on Windows itself (Claude Code with
+// Git Bash), the same panel over WezTerm, Git Bash's mintty or Windows Terminal; on macOS
+// the window app's panel; anywhere else (Linux, any other terminal), a Claude Code pane
+// drawn here, with the same Phases, Tests, Learn and Releases tabs. Learn and the games
+// open in the browser from web/server.mjs, wherever there is no WPF.
 
-const LOG_ROOT = '/tmp/claude-progress'
 const POLL_MS = 500
 const QUIET_AFTER_EXIT_MS = 5_000
 const IDLE_LIMIT_MS = 15 * 60_000
@@ -97,6 +100,38 @@ let seenBefore: string | null = null
 let releasesRead: Promise<void> | null = null
 // macOS: whether this is a Mac that can draw the floating panel (else the pane).
 let isMacHost: Promise<boolean> | null = null
+// Windows itself, no WSL (Claude Code with Git Bash), and where its state and logs go.
+let isWinHost: Promise<boolean> | null = null
+let stateFolder: Promise<string> | null = null
+
+/** Windows itself: Windows sets OS in every process, and WSL has it only when passed through WSLENV. */
+function isWindowsHost($: EngineInterface): Promise<boolean> {
+  isWinHost ??= (async () => {
+    const [os, distro] = await Promise.all([$.env.get('OS').catch(() => undefined), $.env.get('WSL_DISTRO_NAME').catch(() => undefined)])
+    return os === 'Windows_NT' && !distro
+  })()
+  return isWinHost
+}
+
+/** The folder of state files and test logs (stateRoot): /tmp/claude-progress, or Windows' temp folder. */
+function stateRootOf($: EngineInterface): Promise<string> {
+  stateFolder ??= (async () => {
+    if (!(await isWindowsHost($))) return stateRoot()
+    const [temp, tmp, profile] = await Promise.all([
+      $.env.get('TEMP').catch(() => undefined),
+      $.env.get('TMP').catch(() => undefined),
+      $.env.get('USERPROFILE').catch(() => undefined),
+    ])
+    return stateRoot(temp || tmp || (profile ? `${profile}/AppData/Local/Temp` : null))
+  })()
+  return stateFolder
+}
+
+/** Learn's home, as its helper (Node's os.homedir()) sees it: USERPROFILE on Windows, else HOME. */
+async function learnHome($: EngineInterface): Promise<string | undefined> {
+  if (await isWindowsHost($)) return (await $.env.get('USERPROFILE').catch(() => undefined)) || (await $.env.get('HOME').catch(() => undefined))
+  return $.env.get('HOME')
+}
 
 /** The WezTerm-on-WSL distro the panel runs from; null anywhere else. */
 async function panelDistro($: EngineInterface): Promise<string | null> {
@@ -145,7 +180,7 @@ async function stopPanel($: EngineInterface) {
   }
   try {
     // The panel also leaves on its own within two seconds of its file going.
-    await $.process.run(['rm', '-f', widgetStatePath(await $.session.id())])
+    await $.process.run(removeArgv(widgetStatePath(await $.session.id(), await stateRootOf($)), await isWindowsHost($)))
   } catch {
     // nothing written for this session
   }
@@ -186,9 +221,32 @@ async function doSyncPanel($: EngineInterface) {
 
   // Contract 1: the state file is written on every setup, for any panel to read.
   const sessionId = await $.session.id()
-  await $.fs.write(widgetStatePath(sessionId), panelState(sessionId, plan, runs, learn, sessionTitle))
+  const stateFile = widgetStatePath(sessionId, await stateRootOf($))
+  await $.fs.write(stateFile, panelState(sessionId, plan, runs, learn, sessionTitle))
 
   const distro = await panelDistro($)
+  if (distro === null && (await isWindowsHost($))) {
+    // Windows itself: the WPF panel over a terminal it can follow, else (or if it failed) the pane.
+    const [termProgram, wtSession] = await Promise.all([$.env.get('TERM_PROGRAM').catch(() => undefined), $.env.get('WT_SESSION').catch(() => undefined)])
+    const terminal = windowsTerminal({ termProgram, wtSession })
+    if (terminal === null || (hasPanelFailed && panel === null)) {
+      await syncPane($, plan, runs)
+      return
+    }
+    $.ui.status(statusLine(plan, runs, learn))
+    if (isPaneOpen) {
+      isPaneOpen = false
+      await $.ui.close({ id: PANE_ID }).catch(() => undefined)
+    }
+    if (panel === null && !isDismissed) {
+      const [root, systemRoot] = await Promise.all([$.session.root().catch(() => undefined), $.env.get('SystemRoot').catch(() => undefined)])
+      const powershell = windowsPowerShell(systemRoot)
+      const argv = widgetArgv({ pluginRoot: $.plugin.root, sessionId, title: sessionTitle, root, stateFile, powershell, terminal })
+      panel = { stop: () => undefined, isReady: false }
+      panel.stop = launchPanel($, argv, event => void onPanelEvent($, event).catch(() => undefined))
+    }
+    return
+  }
   if (distro === null) {
     if (!(await macHost($)) || (hasPanelFailed && panel === null)) {
       await syncPane($, plan, runs)
@@ -246,10 +304,10 @@ async function syncPane($: EngineInterface, plan: PhasePlan | null, runs: readon
 }
 
 /**
- * Opens Learn (at one of its views, or a course), a game, or the games page. On WSL (any
- * terminal): a game's WPF window (owned by the WezTerm window once the panel has named it),
- * or Learn.ps1, which opens Learn in an Edge app window. Else the page from web/server.mjs,
- * in its own window on macOS or the browser.
+ * Opens Learn (at one of its views, or a course), a game, or the games page. On WSL or on
+ * Windows itself (any terminal): a game's WPF window (owned by the terminal window once the
+ * panel has named it), or Learn.ps1, which opens Learn in an Edge app window. Else the page
+ * from web/server.mjs, in its own window on macOS or the browser.
  * `courseTitle` only names the course in the message.
  */
 async function openPage(
@@ -259,13 +317,21 @@ async function openPage(
 ): Promise<string> {
   const { view, courseId } = deep
   const distro = await $.env.get('WSL_DISTRO_NAME').catch(() => undefined)
+  const isWindows = await isWindowsHost($)
   const script = windowScript(page)
-  if (distro && script) {
+  if ((distro || isWindows) && script) {
     try {
       const sessionId = await $.session.id()
-      const argv = windowArgv({ distro, pluginRoot: $.plugin.root, script, sessionId, ownerHwnd, view, courseId })
-      // Detached: the window stays when the session ends, as the panel's own launches do.
-      await $.process.run(['bash', '-c', 'nohup "$@" >/dev/null 2>&1 &', 'open-window', ...argv])
+      if (distro) {
+        const argv = windowArgv({ distro, pluginRoot: $.plugin.root, script, sessionId, ownerHwnd, view, courseId })
+        // Detached: the window stays when the session ends, as the panel's own launches do.
+        await $.process.run(['bash', '-c', 'nohup "$@" >/dev/null 2>&1 &', 'open-window', ...argv])
+      } else {
+        const powershell = windowsPowerShell(await $.env.get('SystemRoot').catch(() => undefined))
+        const argv = windowArgv({ pluginRoot: $.plugin.root, script, sessionId, ownerHwnd, view, courseId, powershell })
+        // Windows has no nohup: detach.mjs starts it on its own, hidden, and returns.
+        await $.process.run(['node', `${$.plugin.root}/web/detach.mjs`, ...argv])
+      }
       return openingText(page, deep, false)
     } catch (error) {
       return `Couldn't open it: ${error instanceof Error ? error.message : String(error)}`
@@ -276,7 +342,9 @@ async function openPage(
     const [terminal, itermSession] = await Promise.all([$.env.get('TERM_PROGRAM'), $.env.get('ITERM_SESSION_ID')])
     const follow = terminal ? ['--terminal', terminal, '--iterm-session', itermSession ?? ''] : []
     const toView = [...(view ? ['--view', view] : []), ...(courseId ? ['--course', courseId] : [])]
-    const ran = await $.process.run(['bash', `${$.plugin.root}/web/web.sh`, 'open', page, ...toView, ...follow])
+    // On Windows `bash` is WSL's launcher (or missing): Node runs the server straight.
+    const opener = isWindows ? ['node', `${$.plugin.root}/web/server.mjs`] : ['bash', `${$.plugin.root}/web/web.sh`]
+    const ran = await $.process.run([...opener, 'open', page, ...toView, ...follow])
     const answer = JSON.parse(ran.stdout.trim().split('\n').at(-1) ?? '{}') as { ok?: boolean; url?: string; error?: string; shown?: string }
     if (answer.ok && answer.shown === 'window') return openingText(page, deep, true)
     if (answer.ok && answer.url) return `Opened ${answer.url} in your browser.`
@@ -291,6 +359,7 @@ function macHost($: EngineInterface): Promise<boolean> {
   isMacHost ??= (async () => {
     try {
       if ((await $.env.get('CLAUDE_PANEL_PANE').catch(() => undefined)) === '1') return false
+      if (await isWindowsHost($)) return false
       return (await $.process.run(['uname', '-s'])).stdout.trim() === 'Darwin'
     } catch {
       return false
@@ -343,7 +412,7 @@ async function markReleasesSeen($: EngineInterface) {
 async function pollLearn($: EngineInterface) {
   let text = ''
   try {
-    const home = await $.env.get('HOME')
+    const home = await learnHome($)
     if (home) text = await $.fs.read(learnStatusPath(home))
   } catch {
     // Learn has never run here
@@ -388,7 +457,7 @@ function trackRun($: EngineInterface, run: { id: string; log: string; key: strin
     await syncPanel($)
   }
 
-  const removeLog = () => void $.process.run(['rm', '-f', run.log]).catch(() => undefined)
+  const removeLog = () => void (async () => $.process.run(removeArgv(run.log, await isWindowsHost($))))().catch(() => undefined)
 
   // Whole lines only while the run goes on: the read may end inside a line.
   const readLog = async (isFinal: boolean): Promise<boolean> => {
@@ -478,7 +547,7 @@ async function resumeRuns($: EngineInterface): Promise<void> {
   const sessionId = await $.session.id()
   const running = (await read($, testRuns)).filter(run => run.status === 'running')
   for (const run of running) {
-    const log = run.log ?? `${LOG_ROOT}/${sessionId}/${run.id.replace(/[^\w-]/g, '_')}.log`
+    const log = run.log ?? `${await stateRootOf($)}/${sessionId}/${run.id.replace(/[^\w-]/g, '_')}.log`
     const isLive = await $.fs.read(log).then(
       () => true,
       () => false,
@@ -568,12 +637,13 @@ export const register: Register = on => {
   // in a log, which a timer reads to move the panel's Tests tab.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     if (isOff) return next(e)
-    // The wrapper parses in bash and zsh (macOS's default) alike.
-    const isKnownShell = /(^|\/)(bash|zsh)$/.test((await $.env.get('SHELL')) ?? '')
+    // The wrapper parses in bash and zsh (macOS's default) alike. On Windows the Bash tool is
+    // Git Bash, whatever SHELL says (often nothing, or C:\...\bash.exe).
+    const isKnownShell = (await isWindowsHost($)) || /(^|[\\/])(bash|zsh)(\.exe)?$/.test((await $.env.get('SHELL')) ?? '')
     if (!isKnownShell || !isTestCommand(e.command)) return next(e)
 
     const id = e.tool_use_id ?? `run-${await $.clock.now()}`
-    const log = `${LOG_ROOT}/${await $.session.id()}/${id.replace(/[^\w-]/g, '_')}.log`
+    const log = `${await stateRootOf($)}/${await $.session.id()}/${id.replace(/[^\w-]/g, '_')}.log`
     const key = runKey(e.command)
     await $.fs.write(log, '')
 
@@ -671,7 +741,7 @@ export const register: Register = on => {
     const focus = e.args.trim()
     if (!focus) return { text: 'Say what the course should cover, as in: /course how we fixed the browser link' }
     const sessionId = await $.session.id()
-    const ran = await $.process.run(courseArgv({ pluginRoot: $.plugin.root, sessionId, focus }))
+    const ran = await $.process.run(courseArgv({ pluginRoot: $.plugin.root, sessionId, focus, isWindows: await isWindowsHost($) }))
     if (ran.exitCode !== 0) return { text: `Learn couldn't start the build: ${(ran.stderr.trim() || ran.stdout.trim()).split('\n').at(-1) || 'no answer'}` }
     return { text: `Building a Learn course about "${focus}" from this chat. Learn reads the chat's saved record (it asks this chat nothing). Its progress shows on the panel's Learn tab; /learn opens it.` }
   })
@@ -680,9 +750,10 @@ export const register: Register = on => {
     const name = e.args.trim().toLowerCase()
     const names = GAMES.map(game => game.id).join(', ')
     if (!name) {
-      // On WSL each game is its own WPF window, so name one; elsewhere the games page lists them.
+      // On WSL and Windows each game is its own WPF window, so name one; elsewhere the games page lists them.
       const distro = await $.env.get('WSL_DISTRO_NAME').catch(() => undefined)
-      return { text: distro ? `Games: ${names}. Try /games sudoku.` : await openPage($, 'games') }
+      const hasWpf = Boolean(distro) || (await isWindowsHost($))
+      return { text: hasWpf ? `Games: ${names}. Try /games sudoku.` : await openPage($, 'games') }
     }
     if (!isGame(name)) return { text: `No game called "${name}". Games: ${names}.` }
     return { text: await openPage($, `games/${name}`) }
