@@ -188,6 +188,8 @@ function onEvent(event) {
 
 // --- Keys ------------------------------------------------------------------------------------
 
+const IS_MAC = /Mac/.test(navigator.userAgentData?.platform || navigator.platform || '');
+
 const typing = target => target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 
 document.addEventListener('keydown', event => {
@@ -202,7 +204,8 @@ document.addEventListener('keydown', event => {
     setTextScale(S.textScale - 0.1);
     return;
   }
-  if (event.ctrlKey && !event.metaKey && /^[1-6]$/.test(event.key)) {
+  // The tabs: Ctrl+1 to 6, and Cmd on a Mac (Windows' Win+digit belongs to the taskbar).
+  if ((IS_MAC ? event.ctrlKey !== event.metaKey : event.ctrlKey && !event.metaKey) && /^[1-6]$/.test(event.key)) {
     event.preventDefault();
     showView(VIEW_NAMES[Number(event.key) - 1]);
     return;

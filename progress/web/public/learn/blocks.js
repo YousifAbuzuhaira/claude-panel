@@ -98,7 +98,14 @@ function renderCode(block) {
         await navigator.clipboard.writeText(block.text || '');
         copy.textContent = 'copied';
       } catch {
-        toast('Could not copy', 'error');
+        // The Mac window app's panel-style window may refuse the clipboard API: the old way.
+        const area = h('textarea', { style: 'position:fixed;opacity:0' }, block.text || '');
+        document.body.append(area);
+        area.select();
+        const done = document.execCommand('copy');
+        area.remove();
+        if (done) copy.textContent = 'copied';
+        else toast('Could not copy', 'error');
       }
       setTimeout(() => { copy.textContent = 'copy'; }, 1500);
     },

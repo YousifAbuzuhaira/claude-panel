@@ -122,6 +122,8 @@
   /* The hint is read, not glanced at: dim (faint is for labels). */
   .hint { margin-top: 2px; color: var(--dim); font-size: 11.5px; line-height: 1.3; }
   .act { margin-top: 6px; }
+  .glance { cursor: pointer; }
+  .glance .count { flex: none; margin-left: 8px; }
 
   /* A footer sits a little higher, clear of the grip in the corner below its first letters. */
   #foot { margin: 8px 0 2px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -167,8 +169,9 @@ const post = message => window.webkit?.messageHandlers?.panel?.postMessage(messa
 const T = globalThis.ClaudeTheme;
 // The open/closed mark: solid triangles, drawn small (U+FE0E keeps the right one from turning emoji).
 const G = { check: '✓', cross: '✗', live: '●', middot: '·', arrow: '→', course: '≡', collapse: '▼', expand: '▶︎' };
-// Learn and the games, as the panel's games mark lists them (widget/Chrome.ps1 $UI_SIBLINGS).
-const SIBLINGS = [['learn', 'Learn'], ['games/sudoku', 'Sudoku'], ['games/2048', '2048'], ['games/typing', 'Typing'], ['games/chess', 'Chess']];
+// Learn and the games, as the panel's games mark lists them (widget/Chrome.ps1 $UI_SIBLINGS), and
+// the games page that lists them all (the WPF panel's "Games in the browser").
+const SIBLINGS = [['learn', 'Learn'], ['games/sudoku', 'Sudoku'], ['games/2048', '2048'], ['games/typing', 'Typing'], ['games/chess', 'Chess'], ['games', 'All games']];
 const SEE_THROUGH = [['panel', 'Panel'], ['learn', 'Learn'], ['games', 'Games']];
 const MIN_OPACITY = T ? T.MIN_OPACITY : 0.15;
 const BAR_CELLS = 18;
@@ -362,11 +365,30 @@ function testsBody(foot) {
   });
 }
 
+// The plan in one line at the top of the Learn tab, as the WPF panel has it (Add-PlanGlance): the
+// phase at work (or the next, or all done) with its count and bar. A click opens Phases.
+function planGlance() {
+  if (!hasPlan()) return [];
+  const plan = state.plan;
+  const now = plan.items.find(item => item.status === 'in_progress');
+  const next = plan.items.find(item => item.status === 'todo');
+  let glyph = G.live;
+  let color = 'acc';
+  let name;
+  if (now) name = now.name;
+  else if (Number(plan.done) >= Number(plan.total)) [glyph, color, name] = [G.check, 'ok', 'All phases done'];
+  else if (next) [color, name] = ['dim', `Next: ${next.name}`];
+  else return [];
+  const row = el('div', { class: 'row' }, el('span', { class: `cell ${color}` }, glyph), el('div', { class: 'text trim ink' }, name), el('span', { class: 'count dim' }, `${plan.done}/${plan.total}`));
+  const glance = el('div', { class: 'glance', title: `${plan.title}: open Phases`, onclick: () => selectTab('phases') }, row, counts(Number(plan.done) / Math.max(1, Number(plan.total)), color));
+  return [glance, el('div', { class: 'rule' })];
+}
+
 function learnBody() {
   const b = build();
   const c = course();
-  if (!b && !c) return [...empty('No course yet', 'Courses Claude builds from free videos and docs, to read while it works.'), learnLink(`Open Learn ${G.arrow}`, '')];
-  const parts = [];
+  if (!b && !c) return [...planGlance(), ...empty('No course yet', 'Courses Claude builds from free videos and docs, to read while it works.'), learnLink(`Open Learn ${G.arrow}`, '')];
+  const parts = [...planGlance()];
   if (b) {
     const color = buildColor(b.state);
     const glyph = b.state === 'done' ? G.check : b.state === 'failed' ? G.cross : G.live;
@@ -647,7 +669,10 @@ function draw() {
     $('title-main').replaceChildren(...line.main.filter(Boolean));
     $('title-tail').textContent = line.tail;
   } else {
-    $('title-main').textContent = 'Progress';
+    // The chat's title, as the WPF panel shows it; Progress for a chat without one.
+    const title = state && typeof state.title === 'string' && state.title.trim() ? state.title.trim() : 'Progress';
+    $('title-main').textContent = title;
+    $('title').title = title === 'Progress' ? '' : title;
     $('title-tail').textContent = '';
   }
   $('look').classList.toggle('on', strip === 'look');
@@ -706,15 +731,24 @@ window.render = next => {
   pickTab();
   draw();
 };
+// A strip belongs to the open card: closing the card closes it. So does Releases, a look for the
+// open card: closed, the one line follows what is live, and no news is hidden behind it.
+function closeLooks() {
+  strip = '';
+  if (manualTab === 'releases') {
+    manualTab = null;
+    if (state) pickTab();
+  }
+}
 window.setCollapsed = value => {
   collapsed = !!value;
-  if (collapsed) strip = '';
+  if (collapsed) closeLooks();
   draw();
 };
 // The header's double-click (Swift's drag strip sees it): open or close, as the mark does.
 window.toggleCollapsed = () => {
   collapsed = !collapsed;
-  if (collapsed) strip = '';
+  if (collapsed) closeLooks();
   post({ type: 'collapsed', value: collapsed });
   draw();
 };

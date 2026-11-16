@@ -86,11 +86,13 @@ export function showSettings() {
     nav.setTextScale(S.textScale + delta);
     size.textContent = `${Math.round(S.textScale * 100)}%`;
   };
-  out.push(title('Text size', 'The page, its title and the chats. Also Ctrl+= and Ctrl+-.'),
+  // A Mac says Cmd (the page takes either).
+  const mod = /Mac/.test(navigator.userAgentData?.platform || navigator.platform || '') ? '⌘' : 'Ctrl+';
+  out.push(title('Text size', `The page, its title and the chats. Also ${mod}= and ${mod}-.`),
     h('div.size-row', null,
-      h('button.ui-btn', { type: 'button', title: 'Smaller (Ctrl+-)', 'aria-label': 'Smaller text', onclick: step(-0.1) }, 'A−'),
+      h('button.ui-btn', { type: 'button', title: `Smaller (${mod}-)`, 'aria-label': 'Smaller text', onclick: step(-0.1) }, 'A−'),
       size,
-      h('button.ui-btn', { type: 'button', title: 'Larger (Ctrl+=)', 'aria-label': 'Larger text', onclick: step(0.1) }, 'A+')));
+      h('button.ui-btn', { type: 'button', title: `Larger (${mod}=)`, 'aria-label': 'Larger text', onclick: step(0.1) }, 'A+')));
 
   ui.usage = h('p', null, usageText());
   out.push(title('Your Claude usage', 'Builds and chats run on your own Claude subscription, through your logged-in Claude Code. They count toward the same limits as your work.'), ui.usage);
