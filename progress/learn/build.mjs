@@ -3,9 +3,9 @@
 // steps: plan-page (for an added page), then pages. Each step is safe to run again, so a build stopped by a closed window, a
 // sleep or a reboot carries on from where it got to. Builds run as their own detached
 // process (`learn.mjs build run <id>`), so closing the window doesn't stop them.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { applyProposals, compactCatalogue, ensureCategory, findCategory, stateOf } from './catalogue.mjs';
@@ -29,7 +29,7 @@ import {
 } from './sources.mjs';
 import { ensureYtDlp } from './deps.mjs';
 import { MAX_DOCUMENT_BYTES, documentType, readDocument, uniqueHeadings } from './documents.mjs';
-import { CONFIG_DIR, toWslPath } from './settings.mjs';
+import { CONFIG_DIR, toLocalPath } from './settings.mjs';
 import { readJson, withLock, writeJson } from './store.mjs';
 
 const LEARN_MJS = fileURLToPath(new URL('./learn.mjs', import.meta.url));
@@ -129,7 +129,7 @@ export function createRefreshJob(lib, courseId) {
   // A document's stored copy moved with it.
   for (const source of usable) {
     const data = readJson(lib.paths.source(id, source.id));
-    if (data?.file && data.file.startsWith(`${from}/`)) writeJson(lib.paths.source(id, source.id), { ...data, file: data.file.replace(from, to) });
+    if (data?.file && data.file.startsWith(`${from}${sep}`)) writeJson(lib.paths.source(id, source.id), { ...data, file: data.file.replace(from, to) });
   }
   const category = readCatalogue(lib).categories.find(item => item.id === course.category)?.name || 'General';
   withLock(lib.root, () => writeJson(lib.paths.course(id), {
@@ -141,9 +141,9 @@ export function createRefreshJob(lib, courseId) {
   });
 }
 
-/** A document given to a build: its path here (a Windows path is turned into WSL's), and its name. */
+/** A document given to a build: its path here (inside WSL a Windows path is turned into WSL's), and its name. */
 function checkDocument(file, name) {
-  const path = resolve(toWslPath(String(file).trim()));
+  const path = resolve(toLocalPath(String(file).trim()));
   const fileName = String(name || basename(path)).trim().slice(0, 200);
   if (!documentType(fileName)) throw new Error(`Learn reads PDF, Word (.docx), Markdown, text and HTML files, not ${extname(fileName) || 'this file'}`);
   let size;
@@ -198,7 +198,7 @@ export function createJob(lib, { topic, category, mode = 'auto', link = null, fi
     // upload from the web page (in our config folder) is moved rather than copied.
     const stored = lib.paths.jobDocument(job.id, extname(document.fileName));
     mkdirSync(lib.paths.jobs, { recursive: true });
-    const upload = document.path.startsWith(`${resolve(CONFIG_DIR, 'uploads')}/`);
+    const upload = document.path.startsWith(`${resolve(CONFIG_DIR, 'uploads')}${sep}`);
     if (upload) {
       try {
         renameSync(document.path, stored);
@@ -216,7 +216,7 @@ export function createJob(lib, { topic, category, mode = 'auto', link = null, fi
 
 /** A job's leftovers once nothing needs them: its copy of a document, what was read from it. */
 export function dropJobFiles(lib, job) {
-  if (job.file && job.file.startsWith(`${lib.paths.jobs}/`)) rmSync(job.file, { force: true });
+  if (job.file && job.file.startsWith(`${lib.paths.jobs}${sep}`)) rmSync(job.file, { force: true });
   if (job.id) {
     rmSync(lib.paths.jobSections(job.id), { force: true });
     rmSync(lib.paths.jobChat(job.id), { recursive: true, force: true });
@@ -241,9 +241,23 @@ export function startDaemon(lib, id) {
     stdio: ['ignore', log, log],
     cwd: lib.root,
     env: { ...process.env, CLAUDE_PROGRESS_OFF: '1' },
+    // Hidden on Windows: else the build, and every claude it starts, opens a console window.
+    windowsHide: true,
   });
   child.unref();
   return child.pid;
+}
+
+/**
+ * Stops a build. Elsewhere SIGTERM lets it stop its own claude runs; Windows has no signals
+ * (kill ends the process at once and its children run on), so taskkill ends the whole tree.
+ */
+function stopBuild(pid) {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 15_000 });
+    return;
+  }
+  try { process.kill(pid, 'SIGTERM'); } catch {}
 }
 
 /** Jobs that were running when their process died (reboot, WSL shut down): start them again. */
@@ -282,9 +296,7 @@ export function cancelJob(lib, id) {
   const job = readJob(lib, id);
   if (!job) throw new Error('no such build');
   if (job.state === 'done' || job.state === 'failed') return;
-  if (job.pid && isAlive(job.pid)) {
-    try { process.kill(job.pid, 'SIGTERM'); } catch {}
-  }
+  if (job.pid && isAlive(job.pid)) stopBuild(job.pid);
   saveJob(lib, { ...readJob(lib, id), state: 'paused', message: 'Paused' });
 }
 

@@ -89,6 +89,8 @@ function startClaude({ prompt, model, effort, tools, schema, resume, systemFile,
     cwd: cwd || process.cwd(),
     env: { ...process.env, CLAUDE_PROGRESS_OFF: '1' },
     stdio: ['pipe', 'pipe', 'pipe'],
+    // On Windows a child of a process with no console would open one of its own.
+    windowsHide: true,
   });
   let stopped = false;
   const done = new Promise((resolve, reject) => {

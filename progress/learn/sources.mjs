@@ -94,7 +94,7 @@ export function condenseTranscript(chunks, maxChars) {
 
 function run(binary, args, timeoutMs = 120_000) {
   return new Promise(resolve => {
-    execFile(binary, args, { timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile(binary, args, { timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       resolve({ ok: !error, stdout: String(stdout), stderr: String(stderr), code: error?.code ?? 0 });
     });
   });

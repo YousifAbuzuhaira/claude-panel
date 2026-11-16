@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { basename, extname, join } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
 import { askStructured } from './claude.mjs';
-import { ensurePypdf } from './deps.mjs';
+import { ensurePypdf, pythonArgv } from './deps.mjs';
 import { decodeEntities, htmlToSections, textToSections } from './sources.mjs';
 
 export const MAX_DOCUMENT_BYTES = 64 * 1024 * 1024;
@@ -316,7 +316,8 @@ const PAGES_SCHEMA = {
 
 function runPython(script, args, timeoutMs = 300_000) {
   return new Promise((resolve, reject) => {
-    execFile('python3', ['-I', '-c', script, ...args], { timeout: timeoutMs, maxBuffer: 512 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const [command, ...first] = pythonArgv() ?? ['python3'];
+    execFile(command, [...first, '-I', '-c', script, ...args], { timeout: timeoutMs, maxBuffer: 512 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       if (error) reject(new Error(String(stderr || error.message).trim().split('\n').pop().slice(0, 300)));
       else resolve(stdout);
     });

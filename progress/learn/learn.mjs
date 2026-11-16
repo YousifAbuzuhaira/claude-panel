@@ -17,7 +17,7 @@ import { courseSummary, listCourses, openLibrary, readCatalogue, readStatus } fr
 import { serve } from './serve.mjs';
 import { listClaudeChats } from './chats.mjs';
 import { readDocument } from './documents.mjs';
-import { readSettings, toWslPath, writeSettings } from './settings.mjs';
+import { readSettings, toLocalPath, writeSettings } from './settings.mjs';
 import { transcriptText, youTubeId, ytCaptions } from './sources.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,7 +60,7 @@ try {
     for (const chat of listClaudeChats({ exclude: [lib.root] })) print(`${chat.id}  ${chat.at.slice(0, 16)}  ${chat.project.padEnd(20)} ${chat.title}`);
   } else if (command === 'extract') {
     if (!sub) fail('extract <file>');
-    const read = await readDocument(toWslPath(sub), { name: flags.name, model: readSettings().models.build, onProgress: message => console.error(message) });
+    const read = await readDocument(toLocalPath(sub), { name: flags.name, model: readSettings().models.build, onProgress: message => console.error(message) });
     print({ type: read.type, title: read.title, pages: read.pages, byClaude: read.byClaude, chars: read.chars, sections: read.sections.map(section => `${section.heading}  (${section.text.length} chars)`) });
   } else if (command === 'settings') {
     if (sub === 'set') {
@@ -70,7 +70,8 @@ try {
         const text = value.join('=');
         if (key === 'library') change.library = text;
         else if (key === 'build' || key === 'chat') change.models = { ...(change.models || {}), [key]: text };
-        else if (key === 'work') change.workFolders = text ? text.split(':') : [];
+        // Folders are joined like PATH: by ; on Windows (C:\a;D:\b), by : elsewhere.
+        else if (key === 'work') change.workFolders = text ? text.split(process.platform === 'win32' ? ';' : ':') : [];
         else if (key === 'claude') change.claudePath = text || null;
         else fail(`unknown setting ${key}`);
       }

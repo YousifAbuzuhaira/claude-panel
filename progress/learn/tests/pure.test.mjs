@@ -26,7 +26,7 @@ import { estimate, faultsBySection, flattenPage, hearing, isOldPage, plainScenes
 import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
-import { normalizeSettings, toWslPath } from '../settings.mjs';
+import { claudeBinary, isAbsoluteLocal, normalizeSettings, toLocalPath, toWslPath } from '../settings.mjs';
 import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
 
 describe('what you asked for', () => {
@@ -516,6 +516,35 @@ describe('settings', () => {
     assert.equal(settings.models.build, 'sonnet');
     assert.equal(settings.models.chat, 'opus');
     assert.deepEqual(settings.workFolders, ['/a']);
+  });
+
+  test('on Windows itself a Windows path stays one, so a settings change never moves the library', () => {
+    assert.equal(toLocalPath('C:\\Users\\me\\Learn\\', 'win32'), 'C:\\Users\\me\\Learn');
+    assert.equal(toLocalPath('C:\\', 'win32'), 'C:\\');
+    assert.equal(toLocalPath('C:\\Users\\me\\Learn', 'linux'), '/mnt/c/Users/me/Learn');
+    assert.ok(isAbsoluteLocal('C:\\a', 'win32'));
+    assert.ok(isAbsoluteLocal('D:/a', 'win32'));
+    assert.ok(isAbsoluteLocal('\\\\server\\share\\x', 'win32'));
+    assert.ok(!isAbsoluteLocal('/mnt/c/a', 'win32'));
+    assert.ok(!isAbsoluteLocal('C:\\a', 'linux'));
+    const settings = normalizeSettings({ library: 'C:\\Users\\me\\.claude\\learn', workFolders: ['D:\\code', 'rel'], claudePath: 'C:\\bin\\claude.exe' }, 'win32');
+    assert.equal(settings.library, 'C:\\Users\\me\\.claude\\learn');
+    assert.deepEqual(settings.workFolders, ['D:\\code']);
+    assert.equal(settings.claudePath, 'C:\\bin\\claude.exe');
+    // Read back and saved again (any settings.set): still the same folder.
+    assert.equal(normalizeSettings(settings, 'win32').library, settings.library);
+  });
+
+  test('claude is found as claude.exe on Windows, through npm\'s claude.cmd too', () => {
+    const files = new Set(['C:\\nvm\\claude.cmd', 'C:\\nvm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe']);
+    const exists = path => files.has(path);
+    const settings = { claudePath: null };
+    assert.equal(claudeBinary(settings, { platform: 'win32', path: 'C:\\Windows;C:\\nvm', exists, home: 'C:\\Users\\me' }), 'C:\\nvm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe');
+    files.add('C:\\Users\\me\\.local\\bin\\claude.exe');
+    assert.equal(claudeBinary(settings, { platform: 'win32', path: 'C:\\Windows', exists, home: 'C:\\Users\\me' }), 'C:\\Users\\me\\.local\\bin\\claude.exe');
+    // A Mac's Homebrew claude, when PATH (a bare launch) doesn't have it.
+    assert.equal(claudeBinary(settings, { platform: 'darwin', path: '/usr/bin', exists: path => path === '/opt/homebrew/bin/claude', home: '/Users/me' }), '/opt/homebrew/bin/claude');
+    assert.equal(claudeBinary(settings, { platform: 'linux', path: '/a:/b', exists: path => path === '/b/claude', home: '/home/me' }), '/b/claude');
   });
 
   test('videos have their own model, Opus unless a good one is chosen', () => {

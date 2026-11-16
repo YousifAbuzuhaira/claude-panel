@@ -14,15 +14,48 @@ const DIR = join(CACHE_DIR, 'yt-dlp');
 const INSTALLED = join(DIR, 'installed.json');
 const MAX_AGE_DAYS = 14;
 
-/** Python 3.9+ that really runs (not a stub that offers to install it): the yt-dlp zipapp and pypdf need it. */
-export function hasPython() {
+const runs = (argv, check = 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)') => {
   try {
-    execFileSync('python3', ['-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'], { stdio: 'ignore', timeout: 10_000 });
+    execFileSync(argv[0], [...argv.slice(1), '-c', check], { stdio: 'ignore', timeout: 10_000, windowsHide: true });
     return true;
   } catch {
     return false;
   }
+};
+
+/**
+ * The first python3 on PATH. On a Mac /usr/bin/python3 is a stub until Apple's developer tools
+ * are installed, and running it opens their "install" dialog, so it counts only once
+ * `xcode-select -p` (which never asks) says the tools are there.
+ */
+function macPython() {
+  const first = (process.env.PATH || '').split(':').filter(Boolean).map(dir => join(dir, 'python3')).find(path => existsSync(path));
+  if (!first) return null;
+  if (first === '/usr/bin/python3') {
+    try {
+      execFileSync('xcode-select', ['-p'], { stdio: 'ignore', timeout: 5_000 });
+    } catch {
+      return null;
+    }
+  }
+  return [first];
 }
+
+let python;
+
+/**
+ * How to start Python 3.9+ that really runs (not a stub that offers to install it), for pypdf
+ * and the yt-dlp zipapp: `python3`; on Windows the py launcher first (python.org's installer
+ * puts no python3 on PATH, and its python.exe may be the Store's stub); null without one.
+ */
+export function pythonArgv() {
+  if (python !== undefined) return python;
+  const candidates = process.platform === 'win32' ? [['py', '-3'], ['python'], ['python3']] : process.platform === 'darwin' ? [macPython()].filter(Boolean) : [['python3']];
+  python = candidates.find(argv => runs(argv)) ?? null;
+  return python;
+}
+
+export const hasPython = () => pythonArgv() !== null;
 
 export function installedYtDlp() {
   const info = readJson(INSTALLED);
@@ -54,8 +87,9 @@ export async function ensureYtDlp({ force = false, onProgress = () => {} } = {})
     writeJson(INSTALLED, { ...current, checkedAt: new Date().toISOString() });
     return current.path;
   }
-  // The standalone builds are per platform: Linux (and WSL) or macOS.
-  const name = hasPython() ? 'yt-dlp' : process.platform === 'darwin' ? 'yt-dlp_macos' : 'yt-dlp_linux';
+  // The standalone builds are per platform. A Mac always takes its own: its stock Python is older
+  // than yt-dlp wants. Linux (and WSL) takes the small zipapp when Python runs.
+  const name = process.platform === 'win32' ? 'yt-dlp.exe' : process.platform === 'darwin' ? 'yt-dlp_macos' : hasPython() ? 'yt-dlp' : 'yt-dlp_linux';
   const asset = release.assets.find(item => item.name === name);
   const sums = release.assets.find(item => item.name === 'SHA2-256SUMS');
   if (!asset || !sums) throw new Error(`yt-dlp ${version} has no ${name} download`);
@@ -66,7 +100,7 @@ export async function ensureYtDlp({ force = false, onProgress = () => {} } = {})
   if (!expected || expected !== actual) throw new Error(`yt-dlp ${version} failed its checksum`);
   const folder = join(DIR, version);
   mkdirSync(folder, { recursive: true });
-  const path = join(folder, 'yt-dlp');
+  const path = join(folder, process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
   writeFileSync(path, bytes);
   chmodSync(path, 0o755);
   writeJson(INSTALLED, { version, path, asset: name, sha256: actual, checkedAt: new Date().toISOString() });
@@ -90,7 +124,7 @@ export function installedPypdf() {
 
 /** The pypdf wheel's path, fetched when missing or old; throws when python3 can't run it. */
 export async function ensurePypdf({ onProgress = () => {} } = {}) {
-  if (!hasPython()) throw new Error('reading a PDF needs Python 3.9 or newer (python3)');
+  if (!hasPython()) throw new Error(`reading a PDF needs Python 3.9 or newer (${process.platform === 'win32' ? 'from python.org' : 'python3'})`);
   const current = installedPypdf();
   const ageDays = current ? (Date.now() - Date.parse(current.checkedAt)) / 86_400_000 : Infinity;
   if (current && ageDays < PYPDF_MAX_AGE_DAYS) return current.path;
