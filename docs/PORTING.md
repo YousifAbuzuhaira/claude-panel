@@ -1,6 +1,6 @@
 # Porting claude-panel to your setup
 
-> **Status (0.3.0):** steps 1 to 6 are built. Mahmood's macOS port (0.2.0) added the native floating panel and windows, the pane, Learn and the games in the browser, and zsh test tracking; 0.3.0 added the shared colour scheme and see-through (contract 3 in [CLAUDE.md](../CLAUDE.md)) and the Releases tab (`progress/releases.json`) to all of them. Since 0.8.0 the web Learn is the only Learn: Windows opens it in an Edge app window, and the WPF Learn window is gone. What's left is **step 7, native Windows without WSL**, and a first run on Linux. The rest of this guide is kept as the design notes behind those parts: a new front end also reads `appearance.json` and `releases.json`, as CLAUDE.md describes.
+> **Status (0.3.0):** steps 1 to 6 are built. Mahmood's macOS port (0.2.0) added the native floating panel and windows, the pane, Learn and the games in the browser, and zsh test tracking; 0.3.0 added the shared colour scheme and see-through (contract 3 in [CLAUDE.md](../CLAUDE.md)) and the Releases tab (`progress/releases.json`) to all of them. Since 0.8.0 the web Learn is the only Learn: Windows opens it in an Edge app window, and the WPF Learn window is gone. Step 7, native Windows without WSL, is built since 0.9.0 (the WPF windows started natively, Learn's helper and the video voice on Windows); what's left is a first run on Linux, and a run on a Mac of what 0.4.0 to 0.9.0 added. The rest of this guide is kept as the design notes behind those parts: a new front end also reads `appearance.json` and `releases.json`, as CLAUDE.md describes.
 
 This guide is for the Claude working in **your fork** of this repo. It was written to build the parts missing on a setup, so you end up with what the author has: the floating panel, Learn, and the games. Treat every step as "build it, then check it", in order, one at a time.
 
@@ -434,9 +434,9 @@ Pages in `progress/web/public/games/`. Port each game's pure logic to its own JS
 - Unit tests for each logic module, including chess perft counts and the Glicko-2 numbers.
 - A screenshot of each game.
 
-## 7. Native Windows (Claude Code in PowerShell, no WSL)
+## 7. Native Windows (Claude Code installed on Windows, no WSL)
 
-Steps 3 to 6 carry over. Then:
+Done in 0.9.0, and it went further than this plan: the WPF panel and games run natively (the panel follows WezTerm, Git Bash's mintty or Windows Terminal), and Learn opens in its Edge window. CLAUDE.md has how it works ("How it fits", "Rules that bite"). The notes below are what it had to solve:
 
 - **`hooks/widget.ts` and `register.tsx`:**
   - `/tmp/claude-progress` and `$.process.run(['rm', '-f', …])` assume a POSIX system.

@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.9.0",
+      "date": "2026-11-16",
+      "by": "Yousif",
+      "notes": [
+        "Windows without WSL: the panel, Learn, games and videos, in Git Bash",
+        "The panel follows Git Bash's window and Windows Terminal too",
+        "Mac: one video window, Learn keeps its place, no Xcode prompt"
+      ]
+    },
+    {
       "version": "0.8.1",
       "date": "2026-11-16",
       "by": "Yousif",
