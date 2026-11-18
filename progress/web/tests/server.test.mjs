@@ -36,6 +36,15 @@ test('a video page names its course and page, or it is no page', () => {
   assert.equal(pagePath('learn/video', { course: 'a-course', n: '3;rm' }), null);
 });
 
+test("an explainer's clip is a video page too, by its id and clip; a bad id is no page", () => {
+  const target = pagePath('learn/video', { explain: 'x202611181332459e', clip: 2 });
+  assert.equal(target.path, 'learn/video/?explain=x202611181332459e&clip=2');
+  assert.equal(target.explain, 'x202611181332459e');
+  assert.equal(pagePath('learn/video', { explain: 'x202611181332459e' }).path, 'learn/video/?explain=x202611181332459e');
+  assert.equal(pagePath('learn/video', { explain: '../x', clip: 1 }), null);
+  assert.equal(pagePath('learn/video', { explain: 'x202611181332459e', clip: '1;rm' }).path, 'learn/video/?explain=x202611181332459e');
+});
+
 test('no page, or slashes around one, is still that page', () => {
   assert.equal(pagePath('').path, 'learn/');
   assert.equal(pagePath(undefined).path, 'learn/');

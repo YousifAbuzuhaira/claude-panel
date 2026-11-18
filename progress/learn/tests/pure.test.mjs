@@ -23,6 +23,7 @@ import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, 
 import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from '../verify.mjs';
 import { voicePlatform } from '../voice.mjs';
 import { applyPlan, checkPlan, maskable } from '../video-plan.mjs';
+import { clipPage, clipPlan, explainInfo, explainPaths, explainProblems, insideFolder, nextClip, quotesInChat, readAnchors } from '../explain.mjs';
 import { estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, simulate, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
@@ -1744,5 +1745,108 @@ describe('a masked line, group questions and repeated patterns', () => {
     assert.ok(testSection('Gateway', { scenes: [q('a'), { masks: [{}], title: 'x', covers: [], beats: [] }, q('b')] }, material).some(problem => /stops 3 times/.test(problem)));
     const twoGuesses = videoQuiz([{ id: 'g1', guess: true, section: 'A' }, { id: 'g2', guess: true, section: 'A' }, { id: 'e', guess: false, section: 'A' }]);
     assert.deepEqual(twoGuesses.map(item => item.id), ['g1', 'e'], 'one guess a clip, however many the page has');
+  });
+});
+
+describe('an explainer: your session plans clips about code, Learn checks and makes them', () => {
+  const guess = (quote, right = 0) => ({ q: 'What happens?', options: ['One', 'Two', 'Three'].map((text, k) => ({ text, why: `Because ${k}.`, right: k === right })), quote });
+  const plan = () => ({
+    title: 'Tokens',
+    shape: 'parts',
+    boxes: [{ id: 'a', label: 'Minting', parent: null }, { id: 'b', label: 'Checking', parent: null }],
+    clips: [
+      { title: 'Minting', box: 'a', level: 1, facts: [{ text: 'The gateway mints a token for each request.', basis: 'code' }], anchors: [{ file: 'gw.js', from: 1, to: 4, expect: 'mint(request.user)' }], guess: guess('mints a token for each request') },
+      { title: 'Checking', box: 'b', level: 2, facts: [{ text: 'We decided the backend checks every token.', basis: 'session', quote: 'the backend checks every token' }], anchors: [], guess: guess('the backend checks every token', 1) },
+      { title: 'Edges', box: 'b', level: 3, facts: [{ text: 'An expired token is refused.', basis: 'code' }], anchors: [], guess: guess('An expired token is refused', 2), failure: [0] },
+    ],
+  });
+
+  test("a plan's shape is checked before anything is read: clip 1 is the mental model, session facts carry a quote, guesses have 3 options", () => {
+    assert.deepEqual(explainProblems(plan()), []);
+    const bad = plan();
+    bad.clips[0].level = 2;
+    bad.clips[1].facts[0].quote = 'too short';
+    bad.clips[2].guess.options.pop();
+    bad.clips[2].failure = [4];
+    bad.clips.push({ ...plan().clips[0], title: 'Minting' });
+    const problems = explainProblems(bad).join('\n');
+    assert.match(problems, /Clip 1 is the mental model/);
+    assert.match(problems, /needs a quote of 4 words or more/);
+    assert.match(problems, /3 options with a why each/);
+    assert.match(problems, /"failure" lists fact numbers/);
+    assert.match(problems, /its own title/);
+    const long = plan();
+    long.clips[0].anchors[0].to = 200;
+    assert.match(explainProblems(long).join(), /over 60 lines/);
+  });
+
+  test('code is read from disk inside the folder: a file outside it, lines past its end, or lines without "expect" are refused', () => {
+    const root = mkdtempSync(join(tmpdir(), 'explain-'));
+    mkdirSync(join(root, 'work'));
+    writeFileSync(join(root, 'work', 'gw.js'), 'function forward(request) {\n  const token = mint(request.user);\n  return send(request, token);\n}\n');
+    writeFileSync(join(root, 'secret.txt'), 'outside');
+    const cwd = join(root, 'work');
+    assert.equal(insideFolder(cwd, '../secret.txt'), null);
+    assert.ok(insideFolder(cwd, 'gw.js'));
+    const read = readAnchors(plan(), cwd);
+    assert.deepEqual(read.problems, []);
+    assert.match(read.clips[0].anchors[0].code, /const token = mint/);
+    assert.equal(read.clips[0].anchors[0].lang, 'js');
+    const moved = plan();
+    moved.clips[0].anchors.push({ file: 'gw.js', from: 1, to: 9, expect: 'x' }, { file: 'gw.js', from: 1, to: 2, expect: 'send(' }, { file: '../secret.txt', from: 1, to: 1, expect: 'outside' });
+    const problems = readAnchors(moved, cwd).problems.join('\n');
+    assert.match(problems, /the file has 5 lines/);
+    assert.match(problems, /"send\(" is not in those lines/);
+    assert.match(problems, /no such file in this project's folder/);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a session fact's quote must be in what the chat said or a tool returned, never in a tool call", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'chats-'));
+    const id = '11111111-2222-3333-4444-555555555555';
+    mkdirSync(join(dir, 'project'));
+    const lines = [
+      { type: 'user', message: { content: 'I think the backend checks every token, right?' } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'echo "a sentence typed into a command"' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', content: 'test failed: token expired at 10:02' }] } },
+    ];
+    writeFileSync(join(dir, 'project', `${id}.jsonl`), lines.map(line => JSON.stringify(line)).join('\n'));
+    const found = await quotesInChat(id, ['the backend checks every token', 'a sentence typed into a command', 'token expired at 10:02'], { dir });
+    assert.deepEqual([...found].sort(), ['the backend checks every token', 'token expired at 10:02']);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const explainer = () => ({ id: 'x202611181332459e', title: 'Tokens', map: { shape: 'none', boxes: [], clips: [] }, depth: null, at: 1, clips: plan().clips.map(clip => ({ ...clip, failure: clip.failure || [], anchors: clip.anchors.map(anchor => ({ ...anchor, lang: 'js', code: 'function forward(request) {\n  const token = mint(request.user);\n  return send(request, token);\n}' })) })) });
+
+  test('a clip is a page of one section: its facts, then its code; its plan has its guess, its failures and room for a masked line', () => {
+    const page = clipPage(explainer(), 1);
+    const material = flattenPage(page);
+    assert.deepEqual(material.sections, ['Minting']);
+    assert.ok(material.blocks.some(block => block.t === 'code' && /mint\(request\.user\)/.test(block.text)));
+    const made = clipPlan(explainer(), 3);
+    assert.equal(made.shape, 'none');
+    assert.deepEqual(made.clips[0].trap, [0]);
+    assert.equal(made.clips[0].mask, true);
+    const checked = checkPlan(clipPlan(explainer(), 1), material);
+    assert.ok(checked.plan.clips[0].guess, "the guess's quote is on the clip's page");
+  });
+
+  test('clips are made in order: clip 1 before you pick a depth, then only the depth picked, two ahead of the one you watch', () => {
+    const lib = { root: mkdtempSync(join(tmpdir(), 'lib-')) };
+    const one = { ...explainer(), clips: [...explainer().clips, ...explainer().clips.map((clip, k) => ({ ...clip, title: `More ${k}`, level: 2 }))] };
+    assert.deepEqual(nextClip(lib, one), { n: 1 });
+    const made = n => { mkdirSync(join(explainPaths(lib, one.id).dir, 'clips'), { recursive: true }); writeFileSync(`${explainPaths(lib, one.id).clip(n)}.json`, '{}'); };
+    made(1);
+    assert.deepEqual(nextClip(lib, one), { wait: true }, 'no depth picked yet');
+    assert.deepEqual(nextClip(lib, { ...one, depth: 2 }), { n: 2 });
+    made(2);
+    assert.deepEqual(nextClip(lib, { ...one, depth: 2 }), { n: 4 }, 'clip 3 is past depth 2');
+    made(4);
+    assert.deepEqual(nextClip(lib, { ...one, depth: 2 }), { wait: true }, 'clip 5 is more than two past clip 1');
+    assert.deepEqual(nextClip(lib, { ...one, depth: 2, at: 3 }), { n: 5 });
+    const info = explainInfo(lib, { ...one, depth: 2 });
+    assert.deepEqual(info.counts, [1, 5, 6]);
+    assert.deepEqual(info.clips.slice(0, 4).map(clip => clip.state), ['ready', 'ready', 'left out', 'ready']);
+    rmSync(lib.root, { recursive: true, force: true });
   });
 });

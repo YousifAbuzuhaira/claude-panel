@@ -103,7 +103,7 @@ const COURSE_ID = /^[\w.-]{1,160}$/;
  * and a course alone opens that course. A view or course that isn't well formed is left out, so
  * the page opens where it would anyway. Null for a page that doesn't exist.
  */
-export function pagePath(page, { view, course, n } = {}) {
+export function pagePath(page, { view, course, n, explain, clip } = {}) {
   const key = String(page ?? '').replace(/^\/+|\/+$/g, '') || 'learn';
   if (!Object.hasOwn(WINDOW_TITLES, key)) return null;
   const query = new URLSearchParams();
@@ -113,13 +113,17 @@ export function pagePath(page, { view, course, n } = {}) {
     else if (hasCourse) query.set('view', 'course');
     if (hasCourse) query.set('course', course);
   }
-  if (key === 'learn/video') {
+  // A page's video, or an explainer's clips (/explain): `explain` and, at a clip, `clip`.
+  if (key === 'learn/video' && typeof explain === 'string' && EXPLAIN_ID.test(explain)) {
+    query.set('explain', explain);
+    if (/^\d{1,2}$/.test(String(clip ?? ''))) query.set('clip', String(clip));
+  } else if (key === 'learn/video') {
     if (typeof course !== 'string' || !COURSE_ID.test(course) || !/^\d{1,4}$/.test(String(n))) return null;
     query.set('course', course);
     query.set('page', String(n));
   }
   const search = query.toString();
-  return { key, path: `${key}/${search ? `?${search}` : ''}`, view: query.get('view'), course: query.get('course'), n: query.get('page') };
+  return { key, path: `${key}/${search ? `?${search}` : ''}`, view: query.get('view'), course: query.get('course'), n: query.get('page'), explain: query.get('explain'), clip: query.get('clip') };
 }
 
 /**
@@ -127,6 +131,8 @@ export function pagePath(page, { view, course, n } = {}) {
  * window's place on the address without its port or query, so `--app=` windows of one page
  * reopen where they were left (a nonce in the path made every launch a stranger).
  */
+const EXPLAIN_ID = /^x[0-9a-f]{12,20}$/;
+
 export const launchPath = (key, nonce) => `${key}/?launch=${nonce}`;
 
 /**
@@ -599,8 +605,8 @@ function serve() {
       // `reuse` (the Windows launcher): with a Learn page open, that page goes to the place asked
       // for and the launcher brings its window forward, so there is one Learn window.
       if (path === '/api/launch' && req.method === 'POST') {
-        const { page, view, course, n, reuse } = JSON.parse((await readBody(req)) || '{}') || {};
-        const target = typeof page === 'string' && page ? pagePath(page, { view, course, n }) : null;
+        const { page, view, course, n, explain, clip, reuse } = JSON.parse((await readBody(req)) || '{}') || {};
+        const target = typeof page === 'string' && page ? pagePath(page, { view, course, n, explain, clip }) : null;
         if (!target) return send(400, { error: 'no such page' });
         const open = target.key === 'learn' && reuse === true ? learnPages() : [];
         if (open.length) {
@@ -697,7 +703,10 @@ function serve() {
       // A video's sound, for the player to play from a Blob. The helper says where it is, so this
       // server learns nothing about how a library is laid out.
       if (path === '/api/video-audio' && req.method === 'GET') {
-        const answer = await helper.ask({ cmd: 'video.audio', courseId: url.searchParams.get('course'), n: Number(url.searchParams.get('page')) });
+        const explain = url.searchParams.get('explain');
+        const answer = explain
+          ? await helper.ask({ cmd: 'explain.audio', id: explain, n: Number(url.searchParams.get('clip')) })
+          : await helper.ask({ cmd: 'video.audio', courseId: url.searchParams.get('course'), n: Number(url.searchParams.get('page')) });
         if (!answer.ok) return send(404, { error: answer.error });
         return send(200, readFileSync(answer.result.path), 'audio/mpeg');
       }
@@ -966,7 +975,7 @@ function readRecord() {
  * A server older than launchPath answers only a nonce: its /launch/<nonce> still works.
  */
 async function launchLink(record, target, { reuse = false } = {}) {
-  const answer = await postJson(record, '/api/launch', { page: target.key, view: target.view, course: target.course, n: target.n, reuse });
+  const answer = await postJson(record, '/api/launch', { page: target.key, view: target.view, course: target.course, n: target.n, explain: target.explain, clip: target.clip, reuse });
   if (answer.existing === true) return { existing: true };
   if (typeof answer.nonce !== 'string') throw new Error('the server gave no launch link');
   const path = typeof answer.path === 'string' ? answer.path : `launch/${answer.nonce}`;
@@ -1251,7 +1260,7 @@ if (isMain) {
   // `open learn --view <library|course|learned|ask|settings> --course <id>`: where Learn opens.
   const flag = name => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
   const terminal = { program: flag('--terminal') || process.env.TERM_PROGRAM, itermSession: flag('--iterm-session') || process.env.ITERM_SESSION_ID };
-  const deep = { view: flag('--view'), course: flag('--course'), n: flag('--page') };
+  const deep = { view: flag('--view'), course: flag('--course'), n: flag('--page'), explain: flag('--explain'), clip: flag('--clip') };
   if (mode === 'serve') serve();
   else if (mode === 'app-path') {
     // The plugin's floating panel on macOS runs this binary (in panel mode); null: no Swift here.

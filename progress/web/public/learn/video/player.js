@@ -6,6 +6,7 @@
 import { onEvents, rpc, token } from '../../shared/api.js';
 import { buildCameras, buildStates, sceneAt as sceneIndex } from './model.mjs';
 import { applyState, initStage, stepObjects } from './stage.js';
+import { loadExplainer, recall, remember } from './explain.js';
 
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -28,6 +29,9 @@ const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}
 const query = new URLSearchParams(location.search);
 const courseId = query.get('course');
 const pageN = Number(query.get('page'));
+// An explainer's clip (/explain): ?explain=<id>&clip=<n>. Each clip is its own video; the next opens when one ends.
+const explainId = query.get('explain');
+const clipN = Number(query.get('clip') || 1);
 
 /** Stops here with a plain sentence where the video would be. */
 function giveUp(text) {
@@ -38,6 +42,15 @@ function giveUp(text) {
 }
 
 async function load() {
+  if (explainId) {
+    if (!/^x[0-9a-f]{12,20}$/.test(explainId) || !Number.isInteger(clipN) || clipN < 1) giveUp('This link names no explainer.');
+    onEvents(() => {});
+    try {
+      return await loadExplainer({ id: explainId, n: clipN, gate: $('gate') });
+    } catch (error) {
+      return giveUp(`This explainer can't play: ${error.message}`);
+    }
+  }
   if (!courseId || !Number.isInteger(pageN)) giveUp('This link names no video.');
   onEvents(() => {});
   try {
@@ -50,7 +63,12 @@ async function load() {
   }
 }
 
-const { video: V, blob } = await load();
+const { video: V, blob, outer = null } = await load();
+// An explainer's playlist: its clips in the depth picked, the map they share, what you did in it.
+const inDepth = outer ? outer.clips.filter(c => c.level <= (outer.depth || 1)) : [];
+const nextOuter = outer ? inDepth.find(c => c.n > clipN) || null : null;
+const goToClip = n => { location.href = `${location.pathname}?explain=${encodeURIComponent(explainId)}&clip=${n}`; };
+if (outer) V.plan = outer.map;
 const { scenes, assets, quiz, sections, audio: track } = V;
 const quizById = new Map(quiz.map(q => [q.id, q]));
 const total = track.mainEnd;
@@ -104,7 +122,7 @@ function syncTo(t, instant) {
 }
 function showHead(scene) {
   const head = $('head');
-  $('section').textContent = `${clipAt(scene.start) + 1} of ${clips.length} · ${scene.section}`;
+  $('section').textContent = outer ? `${inDepth.findIndex(c => c.n === clipN) + 1} of ${inDepth.length} · ${scene.section}` : `${clipAt(scene.start) + 1} of ${clips.length} · ${scene.section}`;
   $('title').textContent = scene.title;
   head.classList.remove('swap'); void head.offsetWidth; head.classList.add('swap');
   showWrongTurn(Boolean(scene.trap));
@@ -112,7 +130,7 @@ function showHead(scene) {
 }
 function showClip(k) {
   shownClip = k;
-  $('nowChapter').textContent = `${k + 1}/${clips.length} · ${clips[k].name}`;
+  $('nowChapter').textContent = outer ? `${inDepth.findIndex(c => c.n === clipN) + 1}/${inDepth.length} · ${clips[k].name}` : `${k + 1}/${clips.length} · ${clips[k].name}`;
   showClipBar(k);
   showRail();
   drawMap(k);
@@ -125,8 +143,14 @@ function showWrongTurn(on) {
 }
 
 // --- The map: where this clip sits in the whole ----------------------------------------------
+/** The clips the map counts: this video's, or an explainer's whole playlist with what you did in it. */
+function mapClips() {
+  if (!outer) return clips;
+  const kept = recall(explainId);
+  return inDepth.map(c => ({ name: c.title, done: Boolean(kept.done?.[c.n]) || (c.n === clipN && Boolean(clips[0]?.done)), skipped: Boolean(kept.skipped?.[c.n]) }));
+}
 function clipsInBox(id) {
-  return clips.filter(c => { const box = planClip(c.name)?.box; return box === id || plan.boxes.find(b => b.id === box)?.parent === id; });
+  return mapClips().filter(c => { const box = planClip(c.name)?.box; return box === id || plan.boxes.find(b => b.id === box)?.parent === id; });
 }
 function drawMap(k) {
   const node = $('map');
@@ -277,7 +301,7 @@ function seek(t, keepPlaying = true) {
 /** Jumps within the clip playing now: a clip's edges are where it stops, not places to slip past. */
 function seekInClip(t) { const c = clips[shownClip]; seek(clamp(t, c.from, c.to - 0.1)); }
 /** Goes to a clip you picked, and plays it. */
-function jump(t) { $('cover').hidden = true; seek(t); if (!playing) setPlaying(true, true); }
+function jump(t) { $('cover').hidden = true; coverAction = null; seek(t); if (!playing) setPlaying(true, true); }
 function watch(t) {
   if (mode === 'extra' && sound.currentTime >= extra.end - 0.03) { sound.pause(); mode = 'held'; }
   if (mode === 'opener' && !dragging && sound.currentTime >= openerScene.end - 0.03) { endOpener(); return; }
@@ -293,6 +317,7 @@ function watch(t) {
 function endClip(k) {
   clips[k].done = true;
   clips[k].skipped = false;
+  if (outer && k >= clips.length - 1) return endExplainerClip(false);
   if (k >= clips.length - 1) { showRail(); return finish(); }
   setPlaying(false, true);
   const next = clips[k + 1];
@@ -305,6 +330,28 @@ function endClip(k) {
   $('coverAgain').hidden = false;
   $('cover').hidden = false;
 }
+/** An explainer's clip done (or skipped): the card names the next one, which opens on play. */
+function endExplainerClip(skipped) {
+  remember(explainId, now => (skipped ? { skipped: { ...(now.skipped || {}), [clipN]: true } } : { done: { ...(now.done || {}), [clipN]: true }, skipped: { ...(now.skipped || {}), [clipN]: false } }));
+  setPlaying(false, true);
+  showRail();
+  if (!nextOuter) {
+    $('coverTitle').textContent = 'That is the whole explainer.';
+    $('coverMeta').textContent = `${inDepth.length} clip${inDepth.length === 1 ? '' : 's'}`;
+    coverAction = () => goToClip(inDepth[0].n);
+    $('coverPlay').title = 'From the first clip';
+  } else {
+    if (skipped) return goToClip(nextOuter.n);
+    $('coverTitle').textContent = `Next: ${nextOuter.title}`;
+    $('coverMeta').textContent = `${inDepth.findIndex(c => c.n === nextOuter.n) + 1} of ${inDepth.length}${nextOuter.state === 'ready' ? '' : ' · still being made'}`;
+    coverAction = () => goToClip(nextOuter.n);
+    $('coverPlay').title = 'Play the next clip (Enter)';
+  }
+  againClip = 0;
+  $('coverAgain').hidden = false;
+  $('cover').hidden = false;
+}
+let coverAction = null;
 function finish() {
   setPlaying(false, true);
   const right = [...answers.entries()].filter(([id, k]) => quizById.get(id).options[k]?.right).length;
@@ -398,6 +445,7 @@ function skipClip() {
   const k = clipAt(scenes[shownScene].start);
   clips[k].skipped = true;
   mode = 'main';
+  if (outer) return endExplainerClip(true);
   if (k >= clips.length - 1) { showRail(); return finish(); }
   jump(clips[k + 1].from);
 }
@@ -565,6 +613,23 @@ function wireScrub() {
 }
 /** The clips drawer: each clip with its length, the one playing, and those you've watched. */
 function buildClips() {
+  if (outer) {
+    // An explainer's playlist: every clip in the depth picked, each opening its own video.
+    const kept = recall(explainId);
+    inDepth.forEach(c => {
+      const button = document.createElement('button');
+      button.className = 'chapter';
+      button.classList.toggle('now', c.n === clipN);
+      button.classList.toggle('done', Boolean(kept.done?.[c.n]));
+      button.classList.toggle('skipped', Boolean(kept.skipped?.[c.n]));
+      const state = document.createElement('small'); state.textContent = c.state === 'ready' ? String(c.n) : `${c.n} ·`;
+      const text = document.createElement('span'); text.textContent = c.title + (c.state === 'ready' ? '' : ` (${c.state === 'making' ? 'being made' : 'waiting'})`);
+      button.append(state, text);
+      button.addEventListener('click', () => goToClip(c.n));
+      $('chapters').append(button);
+    });
+    return;
+  }
   clips.forEach((c, k) => {
     const button = document.createElement('button');
     button.className = 'chapter';
@@ -577,6 +642,7 @@ function buildClips() {
   });
 }
 function showRail() {
+  if (outer) { if (shownClip >= 0) drawMap(shownClip); return; }
   document.querySelectorAll('.chapter').forEach(node => {
     const k = Number(node.dataset.clip);
     node.classList.toggle('now', k === shownClip);
@@ -630,9 +696,9 @@ if (V.stale) {
 }
 $('full').hidden = !document.fullscreenEnabled;
 $('coverTitle').textContent = V.title;
-$('coverMeta').textContent = `${clips.length} clips, ${Math.round(total / 60)} minutes, ${quiz.length} questions`;
+$('coverMeta').textContent = outer ? `Clip ${inDepth.findIndex(c => c.n === clipN) + 1} of ${inDepth.length} · ${timeText(total)}` : `${clips.length} clips, ${Math.round(total / 60)} minutes, ${quiz.length} questions`;
 $('coverPlay').innerHTML = icon('play');
-$('coverPlay').addEventListener('click', () => setPlaying(true));
+$('coverPlay').addEventListener('click', () => (coverAction ? coverAction() : setPlaying(true)));
 $('coverAgain').addEventListener('click', () => { if (againClip >= 0) jump(clips[againClip].from); });
 $('play').innerHTML = icon('play');
 $('back').innerHTML = icon('back');
@@ -687,7 +753,7 @@ document.addEventListener('keydown', event => {
   else if (key === '<') nudgeRate(-1);
   else if (key === ']') { if (shownClip < clips.length - 1) jump(clips[shownClip + 1].from); }
   else if (key === '[') { const c = clips[shownClip]; jump(clockNow() - c.from > 3 || !shownClip ? c.from : clips[shownClip - 1].from); }
-  else if (key === 'enter' && !$('cover').hidden) setPlaying(true);
+  else if (key === 'enter' && !$('cover').hidden) (coverAction ? coverAction() : setPlaying(true));
   else if (key === 'enter') document.getElementById('continue')?.click();
   else if (activeMask && !maskPicks.has(maskKey(activeMask.scene, activeMask.mask.id)) && /^[1-3]$/.test(key)) pickMask(Number(key) - 1);
   else if (asking && picked.has(scene.check) && (key === '1' || key === '2')) settle(key === '1');
@@ -701,6 +767,14 @@ wireScrub();
 buildClips();
 syncTo(0, true);
 loadPrefs();
+// A guess answered while this clip was being made: played out now, from where it leads.
+const keptGuess = outer ? recall(explainId).guesses?.[clipN] : null;
+const firstGuess = quiz.find(q => q.guess);
+if (keptGuess && firstGuess && scenes[shownScene]?.check === firstGuess.id) {
+  if (keptGuess.unsure) { answers.set(firstGuess.id, null); leaveQuestion(); }
+  else { sure.set(firstGuess.id, Boolean(keptGuess.knew)); answer(keptGuess.k); }
+  setPlaying(true);
+}
 loop();
 
 // For stills of a moment: tools/shoot.mjs --eval "player.hold(120)".

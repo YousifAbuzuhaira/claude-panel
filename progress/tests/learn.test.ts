@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { EXPLAIN_TOOL, explainArgv, explainBrief, readExplainAnswer, refusalText } from '../hooks/explain'
 import { courseArgv, isLearnBusy, learnStatusPath, readLearnStatus } from '../hooks/learn'
 import { panelState } from '../hooks/widget'
 import { answerHost, PLAN, STATE } from './host'
@@ -107,5 +108,28 @@ describe('/course', () => {
   test('a focus that starts with dashes is not read as a flag; a long one is cut', () => {
     expect(courseArgv({ pluginRoot: '/p', sessionId: 's', focus: '--mode auto' }).at(-1)).toBe('mode auto')
     expect(courseArgv({ pluginRoot: '/p', sessionId: 's', focus: 'x'.repeat(500) }).at(-1)).toHaveLength(300)
+  })
+})
+
+describe('/explain', () => {
+  test('asks this session to plan the clips and hand them to Learn, not to explain in text', () => {
+    const brief = explainBrief('  how the gateway\nmints tokens ')
+    expect(brief).toContain('"how the gateway mints tokens"')
+    expect(brief).toContain(`mcp__progress__${EXPLAIN_TOOL}`)
+    expect(brief).toContain("Don't explain it here in text")
+    expect(explainBrief('')).toContain('what we are working on')
+  })
+
+  test('the plan goes to the helper with this chat and its folder; on Windows Node runs it', () => {
+    expect(explainArgv({ pluginRoot: '/p', sessionId: 's', cwd: '/work' })).toEqual(['bash', '/p/learn/learn.sh', 'explain', 'start', '--session', 's', '--cwd', '/work'])
+    expect(explainArgv({ pluginRoot: 'C:\\p', sessionId: 's', cwd: 'C:\\w', isWindows: true })[0]).toBe('node')
+  })
+
+  test("the helper's last line says the explainer started, or what to fix; anything else is no answer", () => {
+    expect(readExplainAnswer('checking\n{"ok":true,"id":"x202611181332459e","clips":3}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 3 })
+    expect(readExplainAnswer('{"ok":false,"problems":["Clip 2: moved",3]}')).toEqual({ ok: false, problems: ['Clip 2: moved'] })
+    expect(readExplainAnswer('{"ok":true,"id":"../x"}')).toBeNull()
+    expect(readExplainAnswer('learn: that is not a chat id')).toBeNull()
+    expect(refusalText(['a', 'b'])).toBe(`Learn refused the plan. Fix these and call ${EXPLAIN_TOOL} again:\n- a\n- b`)
   })
 })

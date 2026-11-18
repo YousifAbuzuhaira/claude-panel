@@ -3,6 +3,7 @@
 //   learn.sh serve                                   the window's JSON-lines channel
 //   learn.sh build start --topic "DevOps" --category DevOps [--mode pick|auto] | --link <url> | --file <path>
 //                        | --chat <session id> --focus "what the course covers" [--audience self|team]   (a course from a Claude chat)
+//   learn.sh explain start --session <id> --cwd <dir>  clips explaining code, from a plan on stdin (/explain)
 //   learn.sh chats                                   your recent Claude chats
 //   learn.sh extract <file>                          what Learn reads from a document (no build)
 //   learn.sh build run|pick|resume|cancel <job> [s1,s3]
@@ -10,7 +11,7 @@
 //   learn.sh settings get | set key=value ...        (library=, build=, chat=, work=a:b)
 //   learn.sh deps install                             yt-dlp, fetched and checked
 //   learn.sh library | status | transcript <url> | ping
-import { cancelJob, createJob, listJobs, pickSources, resumeJob, runJob, startDaemon } from './build.mjs';
+import { cancelJob, createJob, listJobs, pickSources, resumeJob, runJob, startDaemon, startExplainer } from './build.mjs';
 import { runClaude } from './claude.mjs';
 import { ensureYtDlp } from './deps.mjs';
 import { courseSummary, listCourses, openLibrary, readCatalogue, readStatus } from './library.mjs';
@@ -55,6 +56,20 @@ try {
     } else if (sub === 'list') {
       for (const job of listJobs(lib)) print(`${job.id}  ${job.state.padEnd(13)} ${job.step.padEnd(9)} ${job.done}/${job.total}  ${job.topic}  ${job.message || ''}`);
     } else fail('build start|run|pick|resume|cancel|list');
+  } else if (command === 'explain') {
+    if (sub !== 'start') fail('explain start --session <id> --cwd <dir>, the plan on stdin');
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    let plan;
+    try {
+      plan = JSON.parse(input);
+    } catch {
+      fail('the plan on stdin is not JSON');
+    }
+    // One line of JSON, read by the /explain tool: the explainer started, or what the session must fix.
+    const started = await startExplainer(openLibrary(), { plan, sessionId: flags.session, cwd: flags.cwd });
+    console.log(JSON.stringify(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips }));
+    process.exit(0);
   } else if (command === 'chats') {
     const lib = openLibrary();
     for (const chat of listClaudeChats({ exclude: [lib.root] })) print(`${chat.id}  ${chat.at.slice(0, 16)}  ${chat.project.padEnd(20)} ${chat.title}`);

@@ -3,7 +3,7 @@
 // watches answers the questions, and a check compares the script with the page, both ways.
 import { READER_SCHEMA, readerPrompt } from './prompts.mjs';
 import { faultsBySection, firstTaught, flattenPage, hearing, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
-import { OPENER_SCHEMA, OPENER_WORDS, applyPlan, makePlan } from './video-plan.mjs';
+import { OPENER_SCHEMA, OPENER_WORDS, applyPlan, checkPlan, makePlan } from './video-plan.mjs';
 
 const REPAIRS = 2;
 
@@ -188,15 +188,19 @@ function watcherRequest(page, { quiz, allQuiz }, heard) {
   });
 }
 
-/** `ask(prompt, schema)` is one Claude call. Returns the script `narrate.py` records. */
-export async function writeScript({ page, ask, onStep = () => {} }) {
+/**
+ * `ask(prompt, schema)` is one Claude call. Returns the script `narrate.py` records. `plan`, when
+ * given, is the plan already made (an explainer's clip, from your session): it is checked and used
+ * instead of asking for one.
+ */
+export async function writeScript({ page, ask, onStep = () => {}, plan = null }) {
   const started = Date.now();
   // The page's sections are the video's clips, tiny ones joined to a neighbour. The plan adds the
   // map, a guess question opening each clip and the failures a clip opens on; without one (it
   // failed), the clips play as they are.
   let material = mergeTiny(flattenPage(page));
   onStep('planning the clips', 0.02);
-  const planned = await makePlan({ page, material, ask }).catch(error => ({ error }));
+  const planned = plan ? (({ plan: checked, problems }) => ({ plan: checked, firstProblems: problems, problemsLeft: problems }))(checkPlan(plan, material)) : await makePlan({ page, material, ask }).catch(error => ({ error }));
   let map = null;
   if (planned.plan) ({ material, map } = applyPlan(page, material, planned.plan));
   material.taught = firstTaught(page.terms, material.blocks);

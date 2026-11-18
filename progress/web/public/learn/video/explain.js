@@ -1,0 +1,115 @@
+// An explainer's clips (/explain): each clip is its own short video, played as a page's video is,
+// and the next opens when one ends. Before a clip is ready: pick how deep to go (once), then answer
+// the clip's guess question while it's being made, so the wait isn't dead time.
+import { rpc, token } from '../../shared/api.js';
+
+const STORE = id => `claude-learn-explain:${id}`;
+
+/** What you did in this explainer, kept for the tab's life: guesses made while waiting, clips watched or skipped. */
+export function recall(id) {
+  try {
+    return JSON.parse(sessionStorage.getItem(STORE(id)) || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+export function remember(id, change) {
+  const next = { ...recall(id), ...change(recall(id)) };
+  try { sessionStorage.setItem(STORE(id), JSON.stringify(next)); } catch {}
+  return next;
+}
+
+const make = (tag, cls, text) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+const sleep = ms => new Promise(done => setTimeout(done, ms));
+
+/** How deep to go: the mental model, the mechanism with its code, or everything. Asked once. */
+function askDepth(info, gate) {
+  return new Promise(resolve => {
+    gate.replaceChildren(make('div', 'gate-title', info.title), make('div', 'gate-ask', 'How deep should it go?'));
+    const choices = [
+      ['The idea', 'the mental model'],
+      ['The mechanism', 'and the code that does it'],
+      ['Everything', 'with failure modes and edges'],
+    ];
+    choices.forEach(([label, sub], k) => {
+      const count = info.counts[k];
+      if (k && count === info.counts[k - 1]) return; // a depth that adds no clip isn't a choice
+      const button = make('button', 'gate-choice');
+      button.append(make('span', 'key', String(k + 1)), make('b', '', label), make('span', 'gate-sub', `${sub} · ${count} clip${count === 1 ? '' : 's'}`));
+      button.addEventListener('click', async () => resolve(await rpc('explain.at', { id: info.id, depth: k + 1 })));
+      gate.append(button);
+    });
+    gate.hidden = false;
+  });
+}
+
+/** While a clip is made: its guess question, answered now and played out when it's ready. */
+function showWaiting(info, n, gate, id) {
+  const clip = info.clips[n - 1];
+  const kept = recall(id).guesses?.[n];
+  gate.replaceChildren(make('div', 'gate-meta', `Clip ${n} of ${info.clips.filter(item => item.level <= (info.depth || 1)).length}`), make('div', 'gate-title', clip.title));
+  const status = make('div', 'gate-status', info.message || 'Being made: usually 2 to 4 minutes');
+  status.id = 'gateStatus';
+  gate.append(status);
+  if (kept) {
+    gate.append(make('div', 'gate-ask', kept.unsure ? 'It will start from the beginning.' : 'Your answer is kept: the clip starts from it.'));
+  } else {
+    const box = make('div', 'gate-quiz');
+    box.append(make('div', 'quiz-tag', 'Guess first, while you wait'), make('div', 'gate-q', clip.guess.q));
+    const keep = guess => { remember(id, now => ({ guesses: { ...(now.guesses || {}), [n]: guess } })); showWaiting(info, n, gate, id); };
+    clip.guess.options.forEach((option, k) => {
+      const button = make('button', 'option');
+      button.append(make('span', 'key', String(k + 1)), make('span', '', option.text));
+      button.addEventListener('click', () => {
+        box.querySelectorAll('button').forEach(other => { other.disabled = true; });
+        button.classList.add('picked');
+        const sure = make('div', 'quiz-foot');
+        const ask = (label, knew) => { const node = make('button', 'quiet', label); node.addEventListener('click', () => keep({ k, knew })); sure.append(node); };
+        sure.append(make('div', 'quiz-ask', 'How sure were you?'));
+        ask('I knew it', true);
+        ask('I guessed', false);
+        box.append(sure);
+      });
+      box.append(button);
+    });
+    const unsure = make('button', 'option unsure');
+    unsure.append(make('span', 'key', 'N'), make('span', '', 'Not sure'));
+    unsure.addEventListener('click', () => keep({ unsure: true }));
+    box.append(unsure);
+    gate.append(box);
+  }
+  gate.hidden = false;
+}
+
+/**
+ * The clip asked for, once it's made: `{ video, blob, outer }`, `outer` the explainer's playlist and
+ * map. Picks the depth first when none is picked; while the clip is being made, shows its guess.
+ */
+export async function loadExplainer({ id, n, gate }) {
+  let info = await rpc('explain.get', { id });
+  if (!info.clips[n - 1]) throw new Error('it has no such clip');
+  if (!info.depth) info = { ...info, ...(await askDepth(info, gate)) };
+  if (info.clips[n - 1].state !== 'ready') {
+    await rpc('explain.at', { id, n });
+    showWaiting(info, n, gate, id);
+    for (;;) {
+      await sleep(3000);
+      info = await rpc('explain.get', { id });
+      const clip = info.clips[n - 1];
+      if (clip.state === 'ready') break;
+      const status = document.getElementById('gateStatus');
+      if (status) status.textContent = clip.state === 'left out' ? 'This clip is past the depth you picked.' : info.message || 'Waiting its turn';
+    }
+  }
+  const outer = { ...info, ...(await rpc('explain.at', { id, n })) };
+  const video = await rpc('explain.video', { id, n });
+  const response = await fetch(`/api/video-audio?explain=${encodeURIComponent(id)}&clip=${n}`, { headers: { 'X-Learn-Token': token } });
+  if (!response.ok) throw new Error('its sound is missing');
+  gate.hidden = true;
+  return { video, blob: new Blob([await response.arrayBuffer()], { type: 'audio/mpeg' }), outer };
+}

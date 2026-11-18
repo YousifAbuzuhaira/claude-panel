@@ -3,6 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PhasePlan, TestRun } from '../types'
 import { courseArgv, isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus } from './learn'
+import { EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, readExplainAnswer, refusalText } from './explain'
 import type { LearnStatus } from './learn'
 import { GAMES, isGame, openingText, windowScript } from './pages'
 import {
@@ -313,9 +314,9 @@ async function syncPane($: EngineInterface, plan: PhasePlan | null, runs: readon
 async function openPage(
   $: EngineInterface,
   page: string,
-  deep: { view?: string; courseId?: string; courseTitle?: string } = {},
+  deep: { view?: string; courseId?: string; courseTitle?: string; explain?: string } = {},
 ): Promise<string> {
-  const { view, courseId } = deep
+  const { view, courseId, explain } = deep
   const distro = await $.env.get('WSL_DISTRO_NAME').catch(() => undefined)
   const isWindows = await isWindowsHost($)
   const script = windowScript(page)
@@ -341,7 +342,7 @@ async function openPage(
     // The window sticks to this session's terminal window (macOS).
     const [terminal, itermSession] = await Promise.all([$.env.get('TERM_PROGRAM'), $.env.get('ITERM_SESSION_ID')])
     const follow = terminal ? ['--terminal', terminal, '--iterm-session', itermSession ?? ''] : []
-    const toView = [...(view ? ['--view', view] : []), ...(courseId ? ['--course', courseId] : [])]
+    const toView = [...(view ? ['--view', view] : []), ...(courseId ? ['--course', courseId] : []), ...(explain ? ['--explain', explain] : [])]
     // On Windows `bash` is WSL's launcher (or missing): Node runs the server straight.
     const opener = isWindows ? ['node', `${$.plugin.root}/web/server.mjs`] : ['bash', `${$.plugin.root}/web/web.sh`]
     const ran = await $.process.run([...opener, 'open', page, ...toView, ...follow])
@@ -591,6 +592,17 @@ export const register: Register = on => {
       argumentHint: '<what the course should cover>',
       immediate: true,
     })
+    await $.tool.register({
+      name: EXPLAIN_TOOL,
+      description: EXPLAIN_TOOL_DESCRIPTION,
+      inputSchema: EXPLAIN_TOOL_SCHEMA,
+      isDeferred: true,
+    })
+    await $.command.register({
+      name: 'explain',
+      description: 'Have Claude explain code from this chat as short video clips in Learn: /explain how the gateway mints tokens',
+      argumentHint: '<what to explain>',
+    })
     await $.command.register({
       name: 'games',
       description: 'Open a game while Claude works: sudoku, 2048, typing or chess',
@@ -747,6 +759,31 @@ export const register: Register = on => {
     if (ran.exitCode !== 0) return { text: `Learn couldn't start the build: ${(ran.stderr.trim() || ran.stdout.trim()).split('\n').at(-1) || 'no answer'}` }
     return { text: `Building a Learn course about "${focus}" from this chat. Learn reads the chat's saved record (it asks this chat nothing). Its progress shows on the panel's Learn tab; /learn opens it.` }
   })
+
+  // /explain: this session plans the clips (it has the code and the context), Learn makes them.
+  on('command.run', { command: 'explain' }, async ($, e) => {
+    const what = e.args.trim()
+    void $.prompt.submit({ text: explainBrief(what) })
+    return { text: `Planning short video clips${what ? ` about "${what}"` : ''}. Claude reads the code first, then Learn makes the clips and opens the player.` }
+  })
+
+  // By pattern: the typed list of MCP tools is the one saved with the mod, made before this tool.
+  on('tool.call', { tool: new RegExp(`^mcp__progress__${EXPLAIN_TOOL}$`) }, async ($, e) => {
+    if (e.agentId !== undefined) return { deny: 'Only the main session hands Learn an explainer.' }
+    const { tool, tool_use_id, consent, ...plan } = e as unknown as Record<string, unknown>
+    void tool
+    void tool_use_id
+    void consent
+    for (const key of Object.keys(plan)) if (!['title', 'shape', 'boxes', 'clips'].includes(key)) delete plan[key]
+    const [sessionId, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
+    // Learn checks the plan against the files and this chat, with one Claude call: up to a few minutes.
+    const ran = await $.process.run(explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($) }), { stdin: JSON.stringify(plan), timeoutMs: 6 * 60_000 })
+    const answer = readExplainAnswer(ran.stdout)
+    if (!answer) return { deny: `Learn couldn't take the plan: ${(ran.stderr.trim() || ran.stdout.trim()).split('\n').at(-1) || 'no answer'}` }
+    if (!answer.ok) return { deny: refusalText(answer.problems) }
+    const opened = await openPage($, 'learn/video', { explain: answer.id })
+    return { result: `Learn accepted the plan: ${answer.clips} clip${answer.clips === 1 ? '' : 's'}, made in order, the first in about 2 to 4 minutes. ${opened}` }
+  }).catch(() => ({ deny: 'Learn failed to take the plan; tell the person, and explain in text instead if they want.' }))
 
   on('command.run', { command: 'games' }, async ($, e) => {
     const name = e.args.trim().toLowerCase()

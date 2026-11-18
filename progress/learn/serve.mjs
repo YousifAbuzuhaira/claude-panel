@@ -18,6 +18,7 @@ import { chatKey, clearChat, listAdvisorChats, readChat, removeAdvisorChat, send
 import { cancelJob, createJob, createPageJob, createRefreshJob, dropJobFiles, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon, startVideos, videoJob } from './build.mjs';
 import { videoStamp } from './video-check.mjs';
 import { clearQueue, courseVideos, queueVideos, swapVideo, videoInfo } from './video.mjs';
+import { explainInfo, explainPaths, readExplainer, updateExplainer } from './explain.mjs';
 import { voiceStatus } from './voice.mjs';
 import { ensureYtDlp, installedYtDlp } from './deps.mjs';
 import {
@@ -196,6 +197,35 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       const page = readPage(lib, courseId, number);
       const review = readReview();
       return { ...video, stats: undefined, courseTitle: course.title, stale: !page || video.stamp !== videoStamp(page), quiz: video.quiz.filter(q => !isFlagged(review, itemKey(courseId, number, q.id))) };
+    },
+    // An explainer's clips (/explain): the playlist with each clip's state, a clip's script and
+    // sound, and where you are in it, which says how far ahead clips are made.
+    'explain.get': ({ id }) => {
+      const explainer = readExplainer(lib, safeId(id));
+      if (!explainer) throw new Error('no such explainer');
+      const job = listJobs(lib).find(item => item.kind === 'explain' && item.explain === explainer.id && item.state === 'running');
+      return { ...explainInfo(lib, explainer, job?.making ?? null), message: job?.message || null };
+    },
+    'explain.video': ({ id, n }) => {
+      const explainer = readExplainer(lib, safeId(id));
+      const clip = Number(n);
+      const video = explainer && Number.isInteger(clip) ? readJson(`${explainPaths(lib, explainer.id).clip(clip)}.json`) : null;
+      if (!video) throw new Error('this clip has not been made yet');
+      return { ...video, stats: undefined, courseTitle: explainer.title, stale: false };
+    },
+    'explain.audio': ({ id, n }) => {
+      const explainer = readExplainer(lib, safeId(id));
+      const path = explainer && Number.isInteger(Number(n)) ? `${explainPaths(lib, explainer.id).clip(Number(n))}.mp3` : null;
+      if (!path || !existsSync(path)) throw new Error('this clip has not been made yet');
+      return { path };
+    },
+    'explain.at': ({ id, n, depth }) => {
+      const explainer = updateExplainer(lib, safeId(id), now => ({
+        at: Number.isInteger(Number(n)) && Number(n) >= 1 && Number(n) <= now.clips.length ? Number(n) : now.at,
+        depth: [1, 2, 3].includes(Number(depth)) ? Number(depth) : now.depth,
+        seenAt: new Date().toISOString(),
+      }));
+      return explainInfo(lib, explainer);
     },
     'video.audio': ({ courseId, n }) => {
       const path = `${lib.paths.videoBase(courseId, Number(n))}.mp3`;

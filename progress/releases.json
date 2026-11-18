@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.16.0",
+      "date": "2026-11-18",
+      "by": "Yousif",
+      "notes": [
+        "/explain: Claude explains the code you're on as short video clips",
+        "Every line shown is read from disk and every quote found in the chat",
+        "Pick how deep to go; answer clip 1's guess while it's being made"
+      ]
+    },
+    {
       "version": "0.15.0",
       "date": "2026-11-18",
       "by": "Yousif",

@@ -20,6 +20,7 @@ import {
 } from './prompts.mjs';
 import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, placeChecks, quoteState, pageMap, tidyAids } from './teach.mjs';
 import { makeVideos, readQueue } from './video.mjs';
+import { checkExplainer, makeExplainer, saveExplainer } from './explain.mjs';
 import { MAX_DISPUTES, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from './verify.mjs';
 import { ensureVoice, record } from './voice.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
@@ -81,6 +82,30 @@ export function startVideos(lib) {
   });
   startDaemon(lib, job.id);
   return job;
+}
+
+/**
+ * An explainer from your session's plan (/explain): checked first, all of it (`{ problems }` go back
+ * to the session), then made by a job of its own, so the clips you wait on never queue behind a
+ * course's videos. Only one voice records at a time: a course's video job pauses, its script kept,
+ * and goes on when the explainer is done.
+ */
+export async function startExplainer(lib, { plan, sessionId, cwd, io = defaultIo }) {
+  if (!SESSION_ID.test(String(sessionId || ''))) throw new Error('that is not a chat id');
+  if (!cwd || !existsSync(cwd)) throw new Error("the session's folder is not on this computer");
+  const checked = await checkExplainer({ plan, sessionId, cwd, io, model: lib.settings.models.video });
+  if (checked.problems) return { problems: checked.problems };
+  const explainer = saveExplainer(lib, checked.explainer);
+  const videos = videoJob(lib);
+  const paused = videos?.state === 'running';
+  if (paused) cancelJob(lib, videos.id);
+  const stamp = now().replace(/[-:T]/g, '').slice(0, 12);
+  const job = saveJob(lib, {
+    v: 1, id: `j${stamp}${randomBytes(2).toString('hex')}`, kind: 'explain', explain: explainer.id, topic: explainer.title, courseTitle: 'Explainer', link: null, category: null, mode: 'page', courseId: null, summary: null,
+    step: 'voice', state: 'running', message: 'Getting ready', done: 0, total: explainer.clips.length, working: [], leftMinutes: null, candidates: null, picks: null, pid: null, error: null, startedAt: now(),
+  });
+  startDaemon(lib, job.id);
+  return { id: explainer.id, clips: explainer.clips.length, job: job.id };
 }
 
 /** Rewrite one page (`n`, with an optional note), or add one on `topic` after page `after`. */
@@ -323,6 +348,22 @@ export async function runJob(lib, id, io = defaultIo) {
   process.once('SIGTERM', onStop);
   save({ pid: process.pid, state: 'running', error: null });
   try {
+    if (job.kind === 'explain') {
+      writeJson(lib.paths.explaining, { pid: process.pid, id: job.explain });
+      try {
+        if (job.step === 'voice') {
+          await io.ensureVoice({ onProgress: message => save({ message }) });
+          save({ step: 'clips' });
+        }
+        const made = await makeExplainer({ lib, io, id: job.explain, save, isStopping: () => stopping });
+        save({ step: 'done', state: 'done', making: null, message: made === 1 ? 'Your clip is ready' : `${made} clips ready`, done: made, total: made });
+      } finally {
+        rmSync(lib.paths.explaining, { force: true });
+      }
+      // A course's videos, paused for this, go on.
+      if (readQueue(lib).length) startVideos(lib);
+      return job;
+    }
     if (job.kind === 'video') {
       if (job.step === 'voice') {
         await io.ensureVoice({ onProgress: message => save({ message }) });

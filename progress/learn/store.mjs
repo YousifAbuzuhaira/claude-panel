@@ -112,6 +112,8 @@ export function libraryPaths(root) {
     catalogue: join(root, 'catalogue.json'),
     review: join(root, 'review.json'),
     videoQueue: join(root, 'videos-queue.json'),
+    // While an explainer's clips are made: { pid, id }. A course's videos don't record meanwhile.
+    explaining: join(root, 'explaining.json'),
     courses: join(root, 'courses'),
     course: id => join(course(id), 'course.json'),
     source: (id, sourceId) => join(course(id), 'sources', `${safeId(sourceId)}.json`),

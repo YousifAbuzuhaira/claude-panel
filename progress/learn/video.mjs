@@ -143,6 +143,19 @@ function dropNew(lib, courseId, n) {
   for (const name of [`${base}.new.json`, `${base}.new.mp3`, `${base}.new.mp3.tmp`, `${base}.new.json.tmp`]) rmSync(name, { force: true });
 }
 
+/** An explainer's clips are being made (its job is alive): a course's video waits to record. */
+function explaining(lib) {
+  const now = readJson(lib.paths.explaining);
+  if (!now?.pid) return false;
+  try {
+    process.kill(now.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+const sleep = ms => new Promise(done => setTimeout(done, ms));
+
 /** A page's share of its making taken up by the script; recording is the rest. */
 const scriptShare = ({ scriptMinutes, recordingMinutes }) => scriptMinutes / Math.max(scriptMinutes + recordingMinutes, 1);
 
@@ -260,6 +273,13 @@ export async function makeVideos({ lib, io, save, isStopping }) {
       await scriptFor(next);
       if (after) scriptFor(after);
       const entry = entryFor(next);
+      // Only one voice at a time: an explainer you're waiting on records first.
+      while (explaining(lib)) {
+        if (isStopping()) throw new Error('stopped');
+        entry.note = 'waiting while an explainer records';
+        refresh();
+        await sleep(5000);
+      }
       const started = Date.now();
       entry.stage = 'recording';
       entry.note = 'recording';
