@@ -61,6 +61,16 @@ const clips = sections.map(name => scenes.filter(scene => scene.section === name
 const clipAt = t => { let found = 0; clips.forEach((c, k) => { if (c.from <= t + 0.001) found = k; }); return found; };
 const endsClip = scene => scene.end >= clips[clipAt(scene.start)].to - 0.01;
 let shownClip = -1;
+
+// The map, drawn once for the whole video in the title band, and each clip's place on it. Openers:
+// a wrong guess played out, past the main track, one per wrong option of a clip's guess.
+const plan = V.plan && V.plan.shape !== 'none' && (V.plan.boxes || []).length ? V.plan : null;
+const planClip = name => plan?.clips.find(entry => entry.clip === name);
+const openersOf = V.openers || {};
+for (const byOption of Object.values(openersOf)) for (const scene of Object.values(byOption)) {
+  scene.states = buildStates(scene);
+  scene.cameras = buildCameras(scene, scene.states, assets);
+}
 initStage({ objects: $('objects'), wires: $('wires'), assets });
 
 // --- Every moment is worked out from the time alone, so any jump lands on the right picture ---
@@ -76,6 +86,7 @@ let shownScene = -1, shownCue = -1;
 let cam = { x: 560, y: 298, zoom: 1 }, camFrom = cam, camTo = cam, camT0 = 0;
 
 function syncTo(t, instant) {
+  if (mode === 'opener') return syncOpener(t, instant);
   const s = sceneAt(t);
   const scene = scenes[s];
   let c = 0;
@@ -96,6 +107,7 @@ function showHead(scene) {
   $('section').textContent = `${clipAt(scene.start) + 1} of ${clips.length} · ${scene.section}`;
   $('title').textContent = scene.title;
   head.classList.remove('swap'); void head.offsetWidth; head.classList.add('swap');
+  showWrongTurn(Boolean(scene.trap));
   showQuiz(scene);
 }
 function showClip(k) {
@@ -103,6 +115,88 @@ function showClip(k) {
   $('nowChapter').textContent = `${k + 1}/${clips.length} · ${clips[k].name}`;
   showClipBar(k);
   showRail();
+  drawMap(k);
+  if (playing) showHandoff(k);
+}
+/** A real failure, or a wrong guess played out: marked by the player, never left to a script. */
+function showWrongTurn(on) {
+  $('stage').classList.toggle('wrong', on);
+  $('wrongTurn').hidden = !on;
+}
+
+// --- The map: where this clip sits in the whole ----------------------------------------------
+function clipsInBox(id) {
+  return clips.filter(c => { const box = planClip(c.name)?.box; return box === id || plan.boxes.find(b => b.id === box)?.parent === id; });
+}
+function drawMap(k) {
+  const node = $('map');
+  $('head').classList.toggle('with-map', Boolean(plan));
+  node.hidden = !plan;
+  if (!plan) return;
+  const here = planClip(clips[k].name)?.box;
+  const box = plan.boxes.find(b => b.id === here);
+  const parent = box?.parent ? plan.boxes.find(b => b.id === box.parent) : null;
+  // Two levels: inside a part, its own boxes stand in for the whole, so no more than 4 show at once.
+  const row = parent ? plan.boxes.filter(b => b.parent === parent.id) : plan.boxes.filter(b => !b.parent);
+  node.replaceChildren();
+  if (parent) node.append(div('map-crumb', `${parent.label} ›`));
+  row.forEach((b, i) => {
+    if (i && plan.shape === 'flow') node.append(div('map-arrow', '→'));
+    const mine = clipsInBox(b.id);
+    const cell = div('map-box', b.label);
+    cell.dataset.box = b.id;
+    cell.classList.toggle('now', b.id === here || b.id === parent?.id);
+    cell.classList.toggle('done', mine.length > 0 && mine.every(c => c.done || c.skipped));
+    cell.classList.toggle('skipped', mine.length > 0 && mine.every(c => c.skipped));
+    node.append(cell);
+  });
+}
+/** Going into a clip of the next box, what passes between them slides along the map: shown, not said. */
+function showHandoff(k) {
+  const entry = planClip(clips[k]?.name);
+  const before = k > 0 ? planClip(clips[k - 1].name) : null;
+  if (!plan || plan.shape !== 'flow' || !entry?.handoff || !before || before.box === entry.box) return;
+  const map = $('map');
+  const to = map.querySelector(`[data-box="${CSS.escape(entry.box)}"]`);
+  if (!to) return;
+  const from = map.querySelector(`[data-box="${CSS.escape(before.box)}"]`);
+  const centre = cell => cell.offsetLeft + cell.offsetWidth / 2;
+  map.querySelectorAll('.map-chip').forEach(chip => chip.remove());
+  const chip = div('map-chip', entry.handoff);
+  chip.style.left = `${from ? centre(from) : 0}px`;
+  map.append(chip);
+  requestAnimationFrame(() => requestAnimationFrame(() => { chip.style.left = `${centre(to)}px`; chip.classList.add('go'); }));
+  setTimeout(() => chip.remove(), 2600);
+}
+
+// --- Openers ------------------------------------------------------------------------------
+let openerScene = null, openerCue = -1;
+function syncOpener(t, instant) {
+  let c = 0;
+  while (c < (openerScene.cues || []).length && openerScene.cues[c].t <= t) c += 1;
+  if (c === openerCue) return;
+  openerCue = c;
+  applyState(openerScene.states[c], instant);
+  camFrom = instant ? openerScene.cameras[c] : { ...cam };
+  camTo = openerScene.cameras[c];
+  camT0 = performance.now();
+  if (instant) cam = camTo;
+}
+function playOpener(scene) {
+  openerScene = scene;
+  openerCue = -1;
+  mode = 'opener';
+  $('quiz').hidden = true;
+  $('title').textContent = scene.title;
+  showWrongTurn(true);
+  sound.currentTime = scene.start;
+  syncOpener(scene.start, true);
+  if (playing) sound.play().catch(() => {});
+}
+function endOpener() {
+  openerScene = null;
+  showWrongTurn(false);
+  leaveQuestion();
 }
 
 // --- Sound and time --------------------------------------------------------------------
@@ -110,17 +204,21 @@ const sound = new Audio(URL.createObjectURL(blob));
 sound.preload = 'auto';
 sound.preservesPitch = true;
 let playing = false, rate = 1, dragging = false, mode = 'main', pinned = 0, extra = null, sleepTimer = 0, againClip = -1;
-const answers = new Map();
-const clockNow = () => (mode === 'main' && !dragging ? sound.currentTime : pinned);
+const answers = new Map(); // question id: the option picked, or null for "Not sure"
+const picked = new Map(); // a guess picked, waiting on how sure you were
+const sure = new Map();
+const clockNow = () => ((mode === 'main' || mode === 'opener') && !dragging ? sound.currentTime : pinned);
 
 function setPlaying(on, quiet = false) {
   playing = on;
   $('play').innerHTML = icon(on ? 'pause' : 'play');
   if (on) { $('cover').hidden = true; if (mode !== 'held') sound.play().catch(() => setPlaying(false)); } else sound.pause();
   if (!quiet) flash(on);
+  if (on && mode === 'main' && shownClip >= 0 && clockNow() - clips[shownClip].from < 0.6) showHandoff(shownClip);
   wake();
 }
 function seek(t, keepPlaying = true) {
+  if (openerScene) { openerScene = null; showWrongTurn(false); }
   mode = 'main';
   pinned = clamp(t, 0, total - 0.05);
   sound.currentTime = pinned;
@@ -134,6 +232,7 @@ function seekInClip(t) { const c = clips[shownClip]; seek(clamp(t, c.from, c.to 
 function jump(t) { $('cover').hidden = true; seek(t); if (!playing) setPlaying(true, true); }
 function watch(t) {
   if (mode === 'extra' && sound.currentTime >= extra.end - 0.03) { sound.pause(); mode = 'held'; }
+  if (mode === 'opener' && !dragging && sound.currentTime >= openerScene.end - 0.03) { endOpener(); return; }
   if (!playing || mode !== 'main' || dragging) return;
   const scene = scenes[shownScene];
   if (scene.skip) { if (endsClip(scene)) endClip(clipAt(scene.start)); else sound.currentTime = scene.end + 0.02; return; }
@@ -143,6 +242,7 @@ function watch(t) {
 /** A clip's end: it stops, waiting on the next clip's first picture until you say go. */
 function endClip(k) {
   clips[k].done = true;
+  clips[k].skipped = false;
   if (k >= clips.length - 1) { showRail(); return finish(); }
   setPlaying(false, true);
   const next = clips[k + 1];
@@ -157,9 +257,11 @@ function endClip(k) {
 }
 function finish() {
   setPlaying(false, true);
-  const right = [...answers.entries()].filter(([id, k]) => quizById.get(id).options[k].right).length;
+  const right = [...answers.entries()].filter(([id, k]) => quizById.get(id).options[k]?.right).length;
   answers.clear();
-  clips.forEach(c => { c.done = false; });
+  picked.clear();
+  sure.clear();
+  clips.forEach(c => { c.done = false; c.skipped = false; });
   seek(0, false);
   $('coverTitle').textContent = 'That is everything on this page.';
   $('coverMeta').textContent = `${right} of ${quiz.length} questions right`;
@@ -178,43 +280,90 @@ function showQuiz(scene) {
   box.append(div('quiz-tag', q.guess ? 'Guess first' : 'Quick check'), div('quiz-q', q.q));
   const order = q.order || (q.order = q.options.map((_, k) => k).sort(() => Math.random() - 0.5));
   const answered = answers.get(q.id);
+  const done = answers.has(q.id);
+  const waiting = picked.get(q.id);
+  const button = (cls, keyText, label, onClick) => {
+    const node = document.createElement('button');
+    node.className = cls;
+    const key = document.createElement('span'); key.className = 'key'; key.textContent = keyText;
+    const text = document.createElement('span'); text.textContent = label;
+    node.append(key, text);
+    if (onClick) node.addEventListener('click', onClick); else node.disabled = true;
+    box.append(node);
+    return { node, text };
+  };
   order.forEach((k, place) => {
     const option = q.options[k];
-    const button = document.createElement('button');
-    button.className = 'option';
-    const key = document.createElement('span'); key.className = 'key'; key.textContent = String(place + 1);
-    const text = document.createElement('span'); text.textContent = option.text;
-    button.append(key, text);
-    if (answered !== undefined) {
-      button.disabled = true;
-      if (option.right) button.classList.add('right');
-      if (k === answered && !option.right) button.classList.add('wrong');
-      if (option.right || k === answered) { const why = document.createElement('span'); why.className = 'why'; why.textContent = option.why; text.append(why); }
-    } else button.addEventListener('click', () => answer(k));
-    box.append(button);
+    const { node, text } = button('option', String(place + 1), option.text, done || waiting !== undefined ? null : () => (q.guess ? pick(k) : answer(k)));
+    if (waiting === k) node.classList.add('picked');
+    if (!done) return;
+    if (option.right) node.classList.add('right');
+    if (k === answered && !option.right) node.classList.add('wrong');
+    if (option.right || k === answered) { const why = document.createElement('span'); why.className = 'why'; why.textContent = option.why; text.append(why); }
   });
+  // Not sure is an answer too: the clip plays from its start, nothing played out.
+  if (q.guess && !done && waiting === undefined) button('option unsure', 'N', 'Not sure', notSure);
   const foot = div('quiz-foot');
-  if (answered === undefined) {
-    const skip = document.createElement('button'); skip.className = 'quiet'; skip.textContent = 'Skip'; skip.addEventListener('click', leaveQuestion);
-    foot.append(skip);
-  } else {
-    const go = document.createElement('button'); go.className = 'primary'; go.textContent = 'Continue'; go.id = 'continue'; go.addEventListener('click', leaveQuestion);
+  const primary = (label, onClick) => { const go = document.createElement('button'); go.className = 'primary'; go.textContent = label; go.id = 'continue'; go.addEventListener('click', onClick); foot.append(go); };
+  const quiet = (label, onClick) => { const node = document.createElement('button'); node.className = 'quiet'; node.textContent = label; node.addEventListener('click', onClick); foot.append(node); };
+  if (waiting !== undefined) {
+    foot.append(div('quiz-ask', 'How sure were you?'));
+    quiet('1 · I knew it', () => settle(true));
+    quiet('2 · I guessed', () => settle(false));
+  } else if (!done) quiet('Skip', leaveQuestion);
+  else if (answered === null) primary('Continue', leaveQuestion);
+  else {
     const right = q.options[answered].right;
-    foot.append(go, div(`quiz-result ${right ? 'good' : 'bad'}`, right ? 'Right' : 'Not quite'));
+    // Right, and you knew it: the clip is offered to skip. It stays in the list, one click back.
+    if (q.guess && right && sure.get(q.id)) { primary('Skip this clip', skipClip); quiet('Watch it anyway', leaveQuestion); }
+    else primary('Continue', leaveQuestion);
+    foot.append(div(`quiz-result ${right ? 'good' : 'bad'}`, right ? 'Right' : 'Not quite'));
   }
   box.append(foot);
+}
+/** A guess: the pick first, then how sure you were, and only then whether it was right. */
+function pick(k) {
+  const q = quizById.get(scenes[shownScene].check);
+  if (!q || answers.has(q.id)) return;
+  picked.set(q.id, k);
+  showQuiz(scenes[shownScene]);
+}
+function settle(knew) {
+  const q = quizById.get(scenes[shownScene].check);
+  if (!q || !picked.has(q.id)) return;
+  sure.set(q.id, knew);
+  const k = picked.get(q.id);
+  picked.delete(q.id);
+  answer(k);
+}
+function notSure() {
+  const q = quizById.get(scenes[shownScene].check);
+  if (!q || answers.has(q.id)) return;
+  answers.set(q.id, null);
+  leaveQuestion();
+}
+function skipClip() {
+  const k = clipAt(scenes[shownScene].start);
+  clips[k].skipped = true;
+  mode = 'main';
+  if (k >= clips.length - 1) { showRail(); return finish(); }
+  jump(clips[k + 1].from);
 }
 function answer(k) {
   const scene = scenes[shownScene];
   const q = quizById.get(scene.check);
   if (!q || answers.has(q.id)) return;
   answers.set(q.id, k);
-  // Counted as on the page. A question gone since the video was made just isn't recorded.
-  rpc('check.answer', { courseId, n: pageN, id: q.id, choice: k }).catch(() => {});
+  // Counted as on the page. A question gone since the video was made just isn't recorded; a
+  // clip's own guess is the video's alone and never goes to Review.
+  if (!q.videoOnly) rpc('check.answer', { courseId, n: pageN, id: q.id, choice: k }).catch(() => {});
   showQuiz(scene);
   const right = q.options[k].right;
   const tick = document.querySelector(`.tick[data-scene="${shownScene}"]`);
   if (tick) tick.classList.add(right ? 'right' : 'wrong');
+  pinned = scene.end - 0.06;
+  // Wrong: your answer played out, when the clip has it.
+  if (q.guess && !right && openersOf[q.id]?.[k]) return playOpener(openersOf[q.id][k]);
   extra = track.extras[q.id][right ? 'right' : 'wrong'];
   pinned = scene.end - 0.06;
   mode = 'extra';
@@ -254,7 +403,8 @@ function drawPhrase(index) {
   cc.replaceChildren(p);
 }
 function showCaption(t) {
-  if (scenes[shownScene]?.check || !$('cover').hidden) { if (shownPhrase !== -1) drawPhrase(-1); return; }
+  const current = mode === 'opener' ? openerScene : scenes[shownScene];
+  if (current?.check || !$('cover').hidden) { if (shownPhrase !== -1) drawPhrase(-1); return; }
   let low = 0, high = phrases.length - 1, found = -1;
   while (low <= high) { const mid = (low + high) >> 1; if (phrases[mid].s - 0.06 <= t) { found = mid; low = mid + 1; } else high = mid - 1; }
   if (found >= 0 && t > phrases[found].e + 0.55) found = -1;
@@ -274,7 +424,7 @@ function showCaption(t) {
 function showFrame(t) {
   const now = performance.now();
   stepObjects(now);
-  const scene = scenes[shownScene];
+  const scene = mode === 'opener' ? openerScene : scenes[shownScene];
   const kc = ease(clamp((now - camT0) / 1000, 0, 1));
   cam = { x: camFrom.x + (camTo.x - camFrom.x) * kc, y: camFrom.y + (camTo.y - camFrom.y) * kc, zoom: camFrom.zoom + (camTo.zoom - camFrom.zoom) * kc };
   // A slow push-in through every scene, so the picture is never quite still.
@@ -283,7 +433,7 @@ function showFrame(t) {
   const zoom = cam.zoom * (still ? 1 : 1 + 0.02 * clamp((t - scene.start) / span, 0, 1));
   $('camera').style.transform = `translate(${560 - cam.x * zoom}px, ${298 - cam.y * zoom}px) scale(${zoom})`;
   showCaption(t);
-  showClock(t);
+  showClock(mode === 'opener' ? pinned : t);
 }
 function loop() {
   const t = clockNow();
@@ -329,7 +479,8 @@ function showClipBar(k) {
     const tick = div('tick');
     tick.dataset.scene = index;
     tick.style.left = `${((scene.start - c.from) / (c.to - c.from)) * 100}%`;
-    if (answers.has(scene.check)) tick.classList.add(quizById.get(scene.check).options[answers.get(scene.check)].right ? 'right' : 'wrong');
+    const option = quizById.get(scene.check).options[answers.get(scene.check)];
+    if (option) tick.classList.add(option.right ? 'right' : 'wrong');
     box.append(tick);
   });
 }
@@ -378,7 +529,9 @@ function showRail() {
     const k = Number(node.dataset.clip);
     node.classList.toggle('now', k === shownClip);
     node.classList.toggle('done', clips[k].done);
+    node.classList.toggle('skipped', Boolean(clips[k].skipped));
   });
+  if (shownClip >= 0) drawMap(shownClip);
 }
 function toggleDrawer(open) { $('drawer').classList.toggle('open', open ?? !$('drawer').classList.contains('open')); wake(); }
 function setRate(value, save = true) {
@@ -483,8 +636,10 @@ document.addEventListener('keydown', event => {
   else if (key === ']') { if (shownClip < clips.length - 1) jump(clips[shownClip + 1].from); }
   else if (key === '[') { const c = clips[shownClip]; jump(clockNow() - c.from > 3 || !shownClip ? c.from : clips[shownClip - 1].from); }
   else if (key === 'enter' && !$('cover').hidden) setPlaying(true);
-  else if (key === 'enter' && scene.check && answers.has(scene.check)) leaveQuestion();
-  else if (asking && /^[1-5]$/.test(key)) { const q = quizById.get(scene.check); const k = q.order?.[Number(key) - 1]; if (k !== undefined) answer(k); }
+  else if (key === 'enter') document.getElementById('continue')?.click();
+  else if (asking && picked.has(scene.check) && (key === '1' || key === '2')) settle(key === '1');
+  else if (asking && !picked.has(scene.check) && key === 'n' && quizById.get(scene.check)?.guess) notSure();
+  else if (asking && !picked.has(scene.check) && /^[1-5]$/.test(key)) { const q = quizById.get(scene.check); const k = q.order?.[Number(key) - 1]; if (k !== undefined) (q.guess ? pick(k) : answer(k)); }
 });
 
 new ResizeObserver(fit).observe(frame);
@@ -497,4 +652,6 @@ loop();
 
 // For stills of a moment: tools/shoot.mjs --eval "player.hold(120)".
 // player.endClip(k) shows the card at the end of clip k.
-window.player = { hold: t => { $('cover').hidden = true; dragging = true; pinned = t; syncTo(t, true); showFrame(t); }, endClip, scenes, clips, sound };
+window.player = { hold: t => { $('cover').hidden = true; dragging = true; pinned = t; syncTo(t, true); showFrame(t); }, endClip, scenes, clips, sound, plan, openers: openersOf,
+  // player.opener(qid, k, t): a moment of an opener, for stills.
+  opener: (id, k, t) => { const scene = openersOf[id][k]; $('cover').hidden = true; dragging = true; openerScene = scene; openerCue = -1; mode = 'opener'; $('quiz').hidden = true; showWrongTurn(true); pinned = scene.start + t; syncOpener(scene.start + t, true); showFrame(scene.start + t); } };

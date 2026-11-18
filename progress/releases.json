@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.14.0",
+      "date": "2026-11-18",
+      "by": "Yousif",
+      "notes": [
+        "Each clip opens with a guess: knew it, and you can skip the clip",
+        "A wrong guess is played out before the clip teaches the answer",
+        "A map in the video's title band shows where each clip sits"
+      ]
+    },
+    {
       "version": "0.13.0",
       "date": "2026-11-18",
       "by": "Yousif",

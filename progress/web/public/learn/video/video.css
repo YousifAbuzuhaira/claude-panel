@@ -24,6 +24,26 @@ h1 { margin: 0; font-family: var(--mono); font-size: 17px; font-weight: 700; col
 .stage-section { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
 .stage-title { margin-top: 3px; font-size: 26px; font-weight: 600; line-height: 1.2; }
 .stage-head.swap { animation: head .45s ease-out both; }
+/* With a map, it stays put in the title band (above a question too), and the title shrinks under it. */
+.stage-head { z-index: 3; }
+.stage-head.with-map .stage-section { display: none; }
+.stage-head.with-map .stage-title { margin-top: 6px; font-size: 19px; }
+.stage-head.with-map.swap { animation: none; }
+.stage-head.with-map.swap .stage-title { animation: head .45s ease-out both; }
+.map { position: relative; display: flex; align-items: center; gap: 8px; height: 34px; }
+.map[hidden] { display: none; }
+.map-box { padding: 6px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-family: var(--mono); font-size: 15px; line-height: 1.2; white-space: nowrap; color: var(--dim); transition: background .3s, border-color .3s, color .3s, opacity .3s; }
+.map-box.done { color: var(--ink); }
+.map-box.now { border-color: var(--accent); background: var(--selected); color: var(--ink); }
+.map-box.skipped { opacity: .45; }
+.map-arrow { font-family: var(--mono); color: var(--faint); }
+.map-crumb { font-family: var(--mono); font-size: 13px; color: var(--dim); white-space: nowrap; }
+.map-chip { position: absolute; top: 6px; z-index: 1; padding: 3px 9px; border-radius: 11px; background: var(--accent); color: var(--on-accent); font-size: 13px; white-space: nowrap; transform: translateX(-50%); opacity: 0; transition: left 1.2s cubic-bezier(.3, .7, .2, 1), opacity .35s; }
+.map-chip.go { opacity: 1; }
+/* A wrong turn: a real failure, or a wrong guess played out. */
+.stage.wrong::after { content: ''; position: absolute; inset: 0; box-shadow: inset 0 0 0 3px var(--red); pointer-events: none; }
+.wrong-turn { position: absolute; right: 40px; top: 100px; z-index: 3; padding: 3px 10px; border: 1px solid var(--red); border-radius: var(--radius); background: var(--red-soft); color: var(--red); font-family: var(--mono); font-size: 14px; }
+.wrong-turn[hidden] { display: none; }
 
 /* Objects */
 .ob { position: absolute; left: 0; top: 0; will-change: transform, opacity; --tone: var(--ink); }
@@ -96,7 +116,7 @@ tr.now td { color: var(--ink); background: var(--selected); }
 .cc i.on { color: var(--accent); }
 
 /* A question stops the picture */
-.quiz { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; justify-content: center; gap: 9px; padding: 44px 110px; background: var(--card-fill); animation: head .3s ease-out both; }
+.quiz { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; justify-content: center; gap: 9px; padding: 96px 110px 44px; background: var(--card-fill); animation: head .3s ease-out both; }
 .quiz[hidden] { display: none; }
 .quiz-tag { font-family: var(--mono); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--gold); }
 .quiz-q { font-size: 26px; font-weight: 600; line-height: 1.28; margin-bottom: 8px; }
@@ -107,6 +127,9 @@ tr.now td { color: var(--ink); background: var(--selected); }
 .option .why { display: block; margin-top: 3px; font-size: 15px; color: var(--ink); }
 .option.right { background: var(--green-soft); border-color: var(--green); }
 .option.wrong { background: var(--red-soft); border-color: var(--red); }
+.option.picked { border-color: var(--accent); background: var(--selected); }
+.option.unsure { background: transparent; border-style: dashed; color: var(--dim); font-size: 16px; }
+.quiz-ask { font-size: 16px; font-weight: 600; margin-right: 4px; }
 .quiz-foot { display: flex; align-items: center; gap: 12px; min-height: 40px; margin-top: 4px; }
 .primary { padding: 8px 20px; border-radius: var(--radius); background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 16px; }
 .quiet { padding: 7px 12px; border-radius: var(--radius); color: var(--dim); font-size: 15px; }
@@ -170,6 +193,8 @@ tr.now td { color: var(--ink); background: var(--selected); }
 .chapter:hover { background: var(--hover); color: var(--ink); }
 .chapter.now { background: var(--selected); color: var(--ink); }
 .chapter.done small::after { content: ' ✓'; color: var(--green); }
+.chapter.skipped { opacity: .5; }
+.chapter.skipped small::after { content: ' skipped'; }
 
 @keyframes head { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
 @keyframes pop { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }

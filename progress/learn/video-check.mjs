@@ -324,6 +324,22 @@ function sceneProblems(scene, label, assets, pageText, problems) {
   simulate(scene, label, assets, problems);
 }
 
+/**
+ * What's wrong with an opener: one scene playing out a wrong guess before the clip teaches. It's
+ * drawn like any scene, says 15 to 60 words, and shows no code, table or diagram, so nothing made up
+ * there ever looks like the project's own code.
+ */
+export function testOpener(scene, label, assets, pageText, { least = 15, most = 60 } = {}) {
+  const problems = [];
+  const said = spokenWords([scene]);
+  if (said < least || said > most) problems.push(`${label}: it says ${said} words: say ${least} to ${most}`);
+  const beats = (scene.beats || []).length;
+  if (beats < 2 || beats > 5) problems.push(`${label}: it has ${beats} beats: give it 2 to 5`);
+  if ((scene.objects || []).some(hasAsset)) problems.push(`${label}: no code, table or diagram in an opener: draw it with boxes, labels, rows and arrows`);
+  sceneProblems(scene, label, assets, pageText, problems);
+  return [...new Set(problems)];
+}
+
 /** What's wrong with one section's scenes; empty means it can be recorded. */
 export function testSection(section, result, { blocks, assets, quiz, pageText }) {
   const problems = [];
@@ -554,7 +570,8 @@ export function faultsBySection({ claims, reading, blocks, quiz, sections }, reb
     if (block) add(block.section, `The page says this and the video dropped it. Teach it, and cover block ${block.n}: "${item.fact}"`);
   }
   const answers = new Map((reading?.answers || []).map(answer => [answer.id, answer.choice]));
-  for (const q of quiz.filter(item => !item.guess)) {
+  // A page's guess may ask before the page teaches it; a clip's own guess is always taught by its clip.
+  for (const q of quiz.filter(item => !item.guess || item.videoOnly)) {
     if (q.options[answers.get(q.id)]?.right) continue;
     add(q.section, `Someone who only watched could not answer this question, so teach its answer before it: "${q.q}" The answer is: ${q.options.find(option => option.right)?.text}`);
   }

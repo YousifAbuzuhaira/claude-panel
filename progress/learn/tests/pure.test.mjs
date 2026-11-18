@@ -22,7 +22,8 @@ import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
 import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from '../verify.mjs';
 import { voicePlatform } from '../voice.mjs';
-import { estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleScenes, simulate, spokenBudget, spokenWords, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
+import { applyPlan, checkPlan } from '../video-plan.mjs';
+import { estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleScenes, simulate, spokenBudget, spokenWords, testOpener, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
@@ -1515,5 +1516,128 @@ describe('a video as clips', () => {
     const scene = { ...told(), covers: material.blocks.filter(item => item.section === 'Long one').map(item => item.n), quote: block.text.split(' ').slice(0, 6).join(' '), check: null };
     assert.equal(keptOnScreen([scene]).length, 1);
     assert.ok(!testSection('Long one', { scenes: [scene] }, material).some(problem => /off screen/.test(problem)));
+  });
+});
+
+describe("a video's plan: the map, each clip's guess, the failures it opens on", () => {
+  const many = (word, n) => `${Array.from({ length: n }, (_, k) => `${word}${k}`).join(' ')}.`;
+  const pageCheck = (id, guess = false) => ({ t: 'check', id, guess, q: parseInline(`Question ${id}?`), concepts: [], options: [{ inlines: parseInline('Right'), why: parseInline('Yes.'), right: 1 }, { inlines: parseInline('Wrong'), why: parseInline('No.') }] });
+  const page = {
+    title: 'Requests',
+    markdown: 'x',
+    stats: {},
+    terms: [],
+    blocks: [
+      ...markdownToBlocks(`## Browser\n\nThe browser sends the request to the edge first. ${many('alpha', 80)}\n\n## Edge\n\nThe edge forwards the request to the api server. ${many('beta', 80)}`),
+      pageCheck('p1'),
+      ...markdownToBlocks(`## Api\n\nThe api reads the record and answers in one hop. ${many('gamma', 80)}`),
+    ],
+  };
+  const material = mergeTiny(flattenPage(page));
+  const guess = (quote, right = 0) => ({ q: 'Where does the request go first?', options: ['The edge', 'The api', 'The database'].map((text, k) => ({ text, why: `Because ${k}.`, right: k === right })), quote });
+  const good = () => ({
+    shape: 'flow',
+    boxes: [{ id: 'b', label: 'Browser', parent: null }, { id: 'e', label: 'Edge', parent: null }, { id: 'a', label: 'Api server', parent: null }],
+    clips: [
+      { clip: 'Browser', box: 'b', handoff: null, handoffQuote: null, guess: guess('The browser sends the request to the edge first'), trap: [] },
+      { clip: 'Edge', box: 'e', handoff: 'the request', handoffQuote: 'sends the request to the edge', guess: guess('The edge forwards the request to the api server', 1), trap: [] },
+      { clip: 'Api', box: 'a', handoff: 'the request', handoffQuote: 'forwards the request to the api server', guess: guess('The api reads the record and answers', 2), trap: [] },
+    ],
+    splits: [],
+  });
+
+  test('a plan that holds stands whole', () => {
+    const { problems, plan } = checkPlan(good(), material);
+    assert.deepEqual(problems, []);
+    assert.equal(plan.shape, 'flow');
+    assert.deepEqual(plan.clips.map(entry => entry.box), ['b', 'e', 'a']);
+    assert.equal(plan.clips[1].handoff, 'the request');
+    assert.ok(plan.clips.every(entry => entry.guess));
+  });
+
+  test('a map that breaks the rules goes, and the rest of the plan stays', () => {
+    const wide = good();
+    wide.boxes.push(...['w', 'x'].map(id => ({ id, label: id.toUpperCase(), parent: null })));
+    const { problems, plan } = checkPlan(wide, material);
+    assert.match(problems.join(), /5 top boxes/);
+    assert.equal(plan.shape, 'none');
+    assert.deepEqual(plan.boxes, []);
+    assert.ok(plan.clips.every(entry => entry.box === null && entry.handoff === null));
+    assert.ok(plan.clips.every(entry => entry.guess), "the guesses don't depend on the map");
+    const deep = good();
+    deep.boxes.push({ id: 'c', label: 'Child', parent: 'a' }, { id: 'g', label: 'Grandchild', parent: 'c' });
+    assert.match(checkPlan(deep, material).problems.join(), /third level/);
+    const wordy = good();
+    wordy.boxes[0].label = 'The browser that the user has open';
+    assert.match(checkPlan(wordy, material).problems.join(), /1 to 3 words/);
+  });
+
+  test("a guess needs 3 options, one right, and a quote from its own clip; one that fails leaves that clip ungated", () => {
+    const bad = good();
+    bad.clips[0].guess.options.pop();
+    bad.clips[2].guess.quote = 'The browser sends the request to the edge first';
+    const { problems, plan } = checkPlan(bad, material);
+    assert.match(problems.join(), /exactly 3 options and one right/);
+    assert.match(problems.join(), /Clip "Api": the guess's quote is not word for word from this clip's blocks/);
+    assert.equal(plan.clips[0].guess, null);
+    assert.ok(plan.clips[1].guess);
+    assert.equal(plan.clips[2].guess, null);
+  });
+
+  test('a clip with a guess of its own needs none; a handoff needs its quote; a trap stays inside its clip', () => {
+    const withGuess = mergeTiny(flattenPage({ ...page, blocks: [...page.blocks.slice(0, 2), pageCheck('g1', true), ...page.blocks.slice(2)] }));
+    const plan = good();
+    plan.clips[0].guess = null;
+    plan.clips[1].handoffQuote = 'words nowhere on the page at all';
+    plan.clips[2].trap = [0, 999];
+    const checked = checkPlan(plan, withGuess);
+    const browserBlocks = withGuess.blocks.filter(block => block.section === 'Browser').map(block => block.n);
+    assert.ok(!checked.problems.some(problem => /Clip "Browser" needs a guess/.test(problem)));
+    assert.match(checked.problems.join(), /the handoff's quote/);
+    assert.equal(checked.plan.clips[1].handoff, null);
+    assert.ok(checked.plan.clips[2].trap.every(n => !browserBlocks.includes(n)));
+  });
+
+  test('fewer than 3 clips: no map', () => {
+    const two = mergeTiny(flattenPage({ ...page, blocks: page.blocks.slice(0, 4) }));
+    const plan = good();
+    plan.clips = plan.clips.filter(entry => two.sections.includes(entry.clip));
+    const checked = checkPlan(plan, two);
+    assert.equal(checked.plan.shape, 'none');
+  });
+
+  test("each clip's guess joins the quiz as the video's own, asked first in its clip, and watching must answer it", () => {
+    const { material: planned, map } = applyPlan(page, material, checkPlan(good(), material).plan);
+    const own = planned.allQuiz.filter(q => q.videoOnly);
+    assert.equal(own.length, 3);
+    assert.ok(own.every(q => q.guess && /^v[0-9a-f]{10}$/.test(q.id)));
+    for (const section of planned.sections) assert.equal(planned.quiz.find(q => q.section === section)?.videoOnly, true, `${section} opens on its own guess`);
+    assert.ok(planned.quiz.some(q => q.id === 'p1'), "the page's own quick check is still asked");
+    assert.deepEqual(map.clips.map(entry => entry.box), ['b', 'e', 'a']);
+    for (const section of planned.sections) assert.deepEqual(testSection(section, { scenes: plainScenes(section, planned) }, planned), []);
+    const missed = faultsBySection({ claims: {}, reading: { answers: [] }, blocks: planned.blocks, quiz: planned.allQuiz, sections: planned.sections });
+    assert.ok([...missed.values()].flat().some(text => /Where does the request go first/.test(text)), 'a clip must teach the answer to its own guess');
+  });
+
+  test('a long clip may be split where its second idea starts; a short one never is', () => {
+    const long = mergeTiny(flattenPage({ ...page, blocks: markdownToBlocks(`## One\n\n${many('a', 250)}\n\n${many('b', 250)}\n\n## Two\n\n${many('c', 90)}\n\n## Three\n\n${many('d', 90)}`) }));
+    const second = long.blocks.find(block => block.section === 'One' && /^b0/.test(block.text)).n;
+    const plan = { shape: 'none', boxes: [], clips: long.sections.map(clip => ({ clip, box: null, handoff: null, handoffQuote: null, guess: null, trap: [] })), splits: [{ clip: 'One', at: second, title: 'One, part two' }, { clip: 'Two', at: second, title: 'Nope' }] };
+    const checked = checkPlan(plan, long);
+    assert.deepEqual(checked.plan.splits.map(split => split.title), ['One, part two']);
+    const { material: split } = applyPlan(page, long, checked.plan);
+    assert.deepEqual(split.sections, ['One', 'One, part two', 'Two', 'Three']);
+    assert.equal(split.blocks.find(block => block.n === second).section, 'One, part two');
+  });
+
+  test('an opener says 15 to 60 words, in 2 to 5 beats, with no code, table or diagram', () => {
+    const quote = 'The browser sends the request to the edge first';
+    const box = { id: 'x', shape: 'box', x: 100, y: 200, w: 300, h: 120, text: 'Edge', show: true };
+    const opener = beats => ({ title: 'Straight to the api', covers: [], quote, check: null, objects: [box], beats });
+    const say = text => ({ say: text, do: [{ on: null, set: { x: { fade: false } } }] });
+    const fine = opener([say('Say the browser went straight to the api, skipping the edge entirely.'), say('Then nothing would stand between the user and the server at all.')]);
+    assert.deepEqual(testOpener(fine, 'Opener', material.assets, material.pageText), []);
+    assert.match(testOpener(opener([say('Too short.'), say('Really.')]), 'Opener', material.assets, material.pageText).join(), /say 15 to 60/);
+    assert.match(testOpener({ ...fine, objects: [{ id: 'k', shape: 'code', x: 40, y: 100, w: 540, h: 396, asset: 0, show: true }] }, 'Opener', { code: [{ text: 'x' }], table: [], diagram: [] }, material.pageText).join(), /no code, table or diagram/);
   });
 });

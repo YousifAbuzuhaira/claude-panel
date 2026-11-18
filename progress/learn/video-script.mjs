@@ -2,7 +2,8 @@
 // is tested as the player would draw it, repaired, or rebuilt from the page. Then someone who only
 // watches answers the questions, and a check compares the script with the page, both ways.
 import { READER_SCHEMA, readerPrompt } from './prompts.mjs';
-import { faultsBySection, firstTaught, flattenPage, hearing, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleScenes, spokenBudget, spokenWords, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
+import { faultsBySection, firstTaught, flattenPage, hearing, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleScenes, spokenBudget, spokenWords, testOpener, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
+import { OPENER_SCHEMA, OPENER_WORDS, applyPlan, makePlan } from './video-plan.mjs';
 
 const REPAIRS = 2;
 
@@ -18,6 +19,7 @@ export const SCENE_SCHEMA = {
           covers: { type: 'array', items: { type: 'integer' } },
           quote: { type: ['string', 'null'] },
           check: { type: ['string', 'null'] },
+          trap: { type: 'boolean' },
           objects: { type: 'array', items: { type: 'object' } },
           beats: { type: 'array', items: { type: 'object', properties: { say: { type: 'string' }, do: { type: 'array', items: { type: 'object' } } }, required: ['say', 'do'] } },
         },
@@ -40,6 +42,29 @@ export const CLAIM_SCHEMA = {
   },
   required: ['added', 'dropped'],
 };
+
+const PRONUNCIATION = `PRONUNCIATION. A text-to-speech voice will read "say" aloud. In "pronounce", list every word it would get wrong, with "written" exactly as it appears in "say" and "spoken" as it should be read: an ID or exact value read digit by digit or in full, a letter-by-letter acronym, a name from code. For example {"written":"1917","spoken":"1 thousand 9 hundred and 17"} or {"written":"cl100k_base","spoken":"C L 100 K base"}. Leave out ordinary words and acronyms said as words. An empty list is fine.`;
+
+const DRAWING = `THE STAGE is 1120 wide and 630 high. Keep everything inside x 40 to 1080 and y 96 to 500. The title sits above and subtitles below. Do not let objects overlap unless one is an outline around another or a label inside a box.
+
+OBJECTS. Each has a unique "id", a "shape", and starts hidden unless "show" is true. Optional on most: "tone" (ink, dim, accent, green, red, gold, blue), "fade" (true dims it), "spawnAt" (the id of an object it comes out of).
+- box: x, y, w, h, text, sub (small line under it), style ("solid", "fill" for a bright filled box, "outline" for an empty frame around something).
+- label: x, y, w, text, size (s, m, l, xl), align (left, center), mono (true for values).
+- number: x, y, w, value, sub, size (m, l, xl), suffix. Changing "value" counts up or down on screen.
+- bar: x, y, w, h. Changing w or h grows it smoothly, and it grows from nothing when shown.
+- dot: x, y, w (its diameter). Good for something travelling along a path.
+- arrow: "from" and "to" (object ids), or x, y, x2, y2. "flow" true makes it move. "text" for a very short label.
+- row: x, y, w, items [{label, sub}], mark [positions to light up]. Boxes in a line, sized for you. Setting a new "items" animates the change, so a merge really collapses on screen.
+- code: x, y, w, h, asset (which code block), lines [first, last] lights up lines, from 0.
+- table: x, y, w, asset (which table), rows [body rows shown so far], now [rows lit].
+- diagram: x, y, w, h, asset (which diagram), nodes [node numbers shown so far]. Give the whole list each time. Show one or two more per beat.
+
+BEATS. {"say": one sentence, "do": [actions]}. An action fires when the voice reaches the word in "on" (null means the start of the sentence): {"on": "word", "show": [ids], "hide": [ids], "set": {"id": {changed fields}}, "camera": {"x": 560, "y": 315, "zoom": 1.5}}. x and y are the point to centre; zoom 1 at the centre is the normal view. "on" must be one exact word from "say". A sentence may have several actions.
+
+A SCENE. Example, on another subject:
+{"title":"Adding two numbers","covers":[3],"quote":"exact words from the block","check":null,
+"objects":[{"id":"a","shape":"box","x":120,"y":200,"w":200,"h":130,"text":"12","sub":"first"},{"id":"b","shape":"box","x":360,"y":200,"w":200,"h":130,"text":"30","sub":"second"},{"id":"go","shape":"arrow","from":"b","to":"sum","flow":true},{"id":"sum","shape":"number","x":740,"y":210,"w":280,"value":0,"sub":"total","tone":"accent","size":"xl"}],
+"beats":[{"say":"Start with 12.","do":[{"on":"12","show":["a"]}]},{"say":"Bring in 30 beside it.","do":[{"on":"30","show":["b"]}]},{"say":"Now watch the total climb to 42.","do":[{"on":"total","show":["go","sum"]},{"on":"climb","set":{"sum":{"value":42},"a":{"fade":true},"b":{"fade":true}}}]},{"say":"Look closer at the result.","do":[{"on":"closer","camera":{"x":880,"y":270,"zoom":1.6}}]}]}`;
 
 const RULES = `You write one section of a narrated, animated explainer video for a page of a course. It sits beside the page and teaches ALL of it: someone who only watches must learn everything in the blocks below. The learner is a strong software engineer who knows nothing of this subject.
 
@@ -67,28 +92,9 @@ COVERAGE:
 VOICE: a good teacher sitting beside the learner, in your own spoken words, not the page's sentences. Plain words. Talk about what is on screen. Never read code or symbols out character by character. Say what a technical word means the first time in the video, using the glossary, but not a word an earlier section already explained. Never say "the page", "this scene" or "the video". Write numbers as digits.
 SAY EACH FACT ONCE. No signposting ("now let's look at", "here's the key idea"), no summary at the end of a section, no saying again what the voice just said. A block that repeats an earlier one is covered in one sentence. Teaching everything does not mean saying it twice.
 
-PRONUNCIATION. A text-to-speech voice will read "say" aloud. In "pronounce", list every word it would get wrong, with "written" exactly as it appears in "say" and "spoken" as it should be read: an ID or exact value read digit by digit or in full, a letter-by-letter acronym, a name from code. For example {"written":"1917","spoken":"1 thousand 9 hundred and 17"} or {"written":"cl100k_base","spoken":"C L 100 K base"}. Leave out ordinary words and acronyms said as words. An empty list is fine.
+${PRONUNCIATION}
 
-THE STAGE is 1120 wide and 630 high. Keep everything inside x 40 to 1080 and y 96 to 500. The title sits above and subtitles below. Do not let objects overlap unless one is an outline around another or a label inside a box.
-
-OBJECTS. Each has a unique "id", a "shape", and starts hidden unless "show" is true. Optional on most: "tone" (ink, dim, accent, green, red, gold, blue), "fade" (true dims it), "spawnAt" (the id of an object it comes out of).
-- box: x, y, w, h, text, sub (small line under it), style ("solid", "fill" for a bright filled box, "outline" for an empty frame around something).
-- label: x, y, w, text, size (s, m, l, xl), align (left, center), mono (true for values).
-- number: x, y, w, value, sub, size (m, l, xl), suffix. Changing "value" counts up or down on screen.
-- bar: x, y, w, h. Changing w or h grows it smoothly, and it grows from nothing when shown.
-- dot: x, y, w (its diameter). Good for something travelling along a path.
-- arrow: "from" and "to" (object ids), or x, y, x2, y2. "flow" true makes it move. "text" for a very short label.
-- row: x, y, w, items [{label, sub}], mark [positions to light up]. Boxes in a line, sized for you. Setting a new "items" animates the change, so a merge really collapses on screen.
-- code: x, y, w, h, asset (which code block), lines [first, last] lights up lines, from 0.
-- table: x, y, w, asset (which table), rows [body rows shown so far], now [rows lit].
-- diagram: x, y, w, h, asset (which diagram), nodes [node numbers shown so far]. Give the whole list each time. Show one or two more per beat.
-
-BEATS. {"say": one sentence, "do": [actions]}. An action fires when the voice reaches the word in "on" (null means the start of the sentence): {"on": "word", "show": [ids], "hide": [ids], "set": {"id": {changed fields}}, "camera": {"x": 560, "y": 315, "zoom": 1.5}}. x and y are the point to centre; zoom 1 at the centre is the normal view. "on" must be one exact word from "say". A sentence may have several actions.
-
-A SCENE. Example, on another subject:
-{"title":"Adding two numbers","covers":[3],"quote":"exact words from the block","check":null,
-"objects":[{"id":"a","shape":"box","x":120,"y":200,"w":200,"h":130,"text":"12","sub":"first"},{"id":"b","shape":"box","x":360,"y":200,"w":200,"h":130,"text":"30","sub":"second"},{"id":"go","shape":"arrow","from":"b","to":"sum","flow":true},{"id":"sum","shape":"number","x":740,"y":210,"w":280,"value":0,"sub":"total","tone":"accent","size":"xl"}],
-"beats":[{"say":"Start with 12.","do":[{"on":"12","show":["a"]}]},{"say":"Bring in 30 beside it.","do":[{"on":"30","show":["b"]}]},{"say":"Now watch the total climb to 42.","do":[{"on":"total","show":["go","sum"]},{"on":"climb","set":{"sum":{"value":42},"a":{"fade":true},"b":{"fade":true}}}]},{"say":"Look closer at the result.","do":[{"on":"closer","camera":{"x":880,"y":270,"zoom":1.6}}]}]}
+${DRAWING}
 
 QUESTIONS. Add each quiz question below once, as its own scene: {"title":"Quick check","covers":[],"quote":null,"check":"its id","objects":[],"beats":[{"say":"","do":[]}]}. The player reads it out. It must come after the voice has fully taught its answer, except GUESS FIRST ones, which come before.`;
 
@@ -110,13 +116,14 @@ function sectionRequest(page, material, section, repair) {
     ...(earlierTerms(material, section).length ? [`ALREADY EXPLAINED IN EARLIER SECTIONS (use these words, don't explain them again): ${earlierTerms(material, section).join('; ')}`, ''] : []),
     'BLOCKS OF THIS SECTION:',
     ...mine.flatMap(block => [describe(block), block.text, '']),
+    ...(material.traps?.[section]?.length ? [`REAL FAILURE: blocks ${material.traps[section].join(', ')} describe something that really went wrong. Open this clip by showing that failure as it happened (after any GUESS FIRST question) and give the scenes that show it "trap": true. A trap scene shows only what went wrong, never the fix; the player marks it as a wrong turn. Then teach the rest.`, ''] : []),
     'QUIZ:',
     ...(questions.length ? questions.flatMap(q => [`[${q.id}] ${q.guess ? 'GUESS FIRST, before this is taught' : `after block ${q.after} is taught`}: ${q.q}`, `  Answer: ${q.options.find(option => option.right)?.text}`]) : ['(none in this section)']),
     ...(repair ? ['', 'YOUR LAST ANSWER:', JSON.stringify(repair.result), '', 'IT FAILED THESE CHECKS. Return all of it with these fixed and everything else kept:', ...repair.problems.map(problem => `- ${problem}`)] : []),
   ].join('\n');
 }
 
-function claimRequest(page, { blocks }, heard) {
+function claimRequest(page, { blocks }, heard, openersHeard = '') {
   return [
     'Below are a page of a course and the script of a video made from it. Compare them, both ways. Use no outside knowledge to correct either text: only compare them.',
     '',
@@ -132,6 +139,34 @@ function claimRequest(page, { blocks }, heard) {
     '',
     'THE SCRIPT:',
     heard,
+    ...(openersHeard ? [
+      '',
+      'OPENERS: each plays out a wrong answer to a question before a clip teaches, taking it as true for a moment to show where it breaks; the screen marks it as a wrong turn. Taking the wrong answer as true is not a claim. List in "added" only what an opener states as fact that the page does not support, giving its [opener ...] heading as the section.',
+      openersHeard,
+    ] : []),
+  ].join('\n');
+}
+
+const OPENER_RULES = `You write short opening scenes for one clip of a narrated, animated explainer video. The learner has just been asked the guess question below and picked a WRONG option. Before the clip teaches, play their answer out: take it as true for a moment, show it running into what the blocks say, and stop where it breaks. The clip itself teaches the right answer straight after, so don't teach the whole clip here.
+- One scene per wrong option: 2 to 4 beats, 25 to 50 words in all.
+- Start from their answer, in plain words ("Say the second call just waits."). Never say "wrong", "you picked" or "incorrect": the screen already marks it as a wrong turn.
+- Use only facts from the blocks below and add nothing. The scene's "quote" is copied word for word from a block and backs where the answer breaks.
+- Draw it with boxes, labels, rows, numbers, bars, dots and arrows. No code, tables or diagrams.
+- Voice: a good teacher beside the learner, plain words, numbers as digits.`;
+
+function openerRequest(page, material, section, question, wrong, repair) {
+  const mine = material.blocks.filter(block => block.section === section);
+  return [
+    OPENER_RULES, '', PRONUNCIATION, '', DRAWING, '',
+    `PAGE: ${page.title}`,
+    `THIS CLIP: ${section}`, '',
+    `THE GUESS QUESTION: ${question.q}`,
+    ...question.options.map((option, k) => `  option ${k}${option.right ? ' (right)' : ' (WRONG: write an opener for it)'}: ${option.text}. Why: ${option.why}`),
+    '',
+    'BLOCKS OF THIS CLIP:',
+    ...mine.flatMap(block => [describe(block), block.text, '']),
+    `Give one opener for each of options ${wrong.map(({ k }) => k).join(' and ')}, with "option" its number.`,
+    ...(repair ? ['', 'YOUR LAST ANSWER:', JSON.stringify(repair.result), '', 'IT FAILED THESE CHECKS. Return all of it with these fixed and everything else kept:', ...repair.problems.map(problem => `- ${problem}`)] : []),
   ].join('\n');
 }
 
@@ -153,8 +188,14 @@ function watcherRequest(page, { quiz, allQuiz }, heard) {
 /** `ask(prompt, schema)` is one Claude call. Returns the script `narrate.py` records. */
 export async function writeScript({ page, ask, onStep = () => {} }) {
   const started = Date.now();
-  // The page's sections are the video's clips, tiny ones joined to a neighbour.
-  const material = mergeTiny(flattenPage(page));
+  // The page's sections are the video's clips, tiny ones joined to a neighbour. The plan adds the
+  // map, a guess question opening each clip and the failures a clip opens on; without one (it
+  // failed), the clips play as they are.
+  let material = mergeTiny(flattenPage(page));
+  onStep('planning the clips', 0.02);
+  const planned = await makePlan({ page, material, ask }).catch(error => ({ error }));
+  let map = null;
+  if (planned.plan) ({ material, map } = applyPlan(page, material, planned.plan));
   material.taught = firstTaught(page.terms, material.blocks);
   const { sections, blocks, assets, quiz, allQuiz } = material;
   const written = new Map();
@@ -167,6 +208,39 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
   const shortened = [];
   const polished = [];
   const firstSoft = {};
+  const openers = new Map(); // question id: { scenes: { option: scene }, pronounce }
+  const openerStats = { asked: 0, made: 0, dropped: 0, droppedByCheck: 0 };
+  // A wrong guess played out before its clip: one try, one repair, then what still fails is dropped.
+  const makeOpeners = async (section, question) => {
+    const wrong = question.options.map((option, k) => ({ option, k })).filter(({ option }) => !option.right);
+    if (!wrong.length) return;
+    openerStats.asked += wrong.length;
+    const judge = result => {
+      const kept = {};
+      const problems = [];
+      for (const { k } of wrong) {
+        const item = (result?.openers || []).find(entry => entry.option === k);
+        if (!item?.scene) { problems.push(`There is no opener for option ${k}`); continue; }
+        const [scene] = settleScenes({ scenes: [{ covers: [], check: null, ...item.scene }] }, assets).scenes;
+        const wrongs = testOpener(scene, `Opener for option ${k}`, assets, material.pageText, OPENER_WORDS);
+        if (wrongs.length) problems.push(...wrongs);
+        else kept[k] = scene;
+      }
+      return { kept, problems, pronounce: result?.pronounce || [] };
+    };
+    let result = await ask(openerRequest(page, material, section, question, wrong, null), OPENER_SCHEMA);
+    let judged = judge(result);
+    const pronounce = [...judged.pronounce];
+    if (judged.problems.length) {
+      result = await ask(openerRequest(page, material, section, question, wrong, { result, problems: judged.problems.slice(0, 10) }), OPENER_SCHEMA);
+      const again = judge(result);
+      judged = { ...judged, kept: { ...again.kept, ...judged.kept } };
+      pronounce.push(...again.pronounce);
+    }
+    openerStats.made += Object.keys(judged.kept).length;
+    openerStats.dropped += wrong.length - Object.keys(judged.kept).length;
+    if (Object.keys(judged.kept).length) openers.set(question.id, { scenes: judged.kept, pronounce });
+  };
   const rebuild = (section, problems) => {
     rebuilt.add(section);
     whyRebuilt[section] = problems.slice(0, 8);
@@ -213,13 +287,27 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
     } else {
       written.set(section, { scenes: plainScenes(section, material), pronounce: [] }); // questions alone
     }
+    const guess = quiz.find(q => q.section === section && q.guess);
+    if (guess) await makeOpeners(section, guess).catch(() => {});
     finished++;
     onStep(`writing the script, section ${finished} of ${sections.length}`, (finished / sections.length) * 0.8);
   }));
   const allScenes = () => sections.flatMap(section => written.get(section).scenes.map(scene => ({ ...scene, section })));
+  const openerScenes = () => [...openers].flatMap(([id, made]) => Object.entries(made.scenes).map(([k, scene]) => ({ ...scene, section: `opener ${id} ${k}` })));
+  // An opener the claim check doubts is dropped, never mended: its clip plays without it.
+  const dropDoubted = claims => {
+    for (const item of claims?.added || []) {
+      const [, id, k] = /^opener (\S+) (\d+)/.exec(item.section || '') || [];
+      if (!id || !openers.get(id)?.scenes[k]) continue;
+      delete openers.get(id).scenes[k];
+      openerStats.droppedByCheck++;
+    }
+    return { ...claims, added: (claims?.added || []).filter(item => !/^opener /.test(item.section || '')) };
+  };
   const review = async () => {
     const heard = hearing(allScenes(), assets);
-    const [reading, claims] = await Promise.all([ask(watcherRequest(page, material, heard), READER_SCHEMA), ask(claimRequest(page, material, heard), CLAIM_SCHEMA)]);
+    const [reading, rawClaims] = await Promise.all([ask(watcherRequest(page, material, heard), READER_SCHEMA), ask(claimRequest(page, material, heard, hearing(openerScenes(), assets)), CLAIM_SCHEMA)]);
+    const claims = dropDoubted(rawClaims);
     return { reading, claims, faults: faultsBySection({ claims, reading, blocks, quiz: allQuiz, sections }, rebuilt) };
   };
   onStep('checking it against the page', 0.82);
@@ -230,8 +318,13 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
     await Promise.all([...checked.faults].map(async ([section, problems]) => {
       const result = await attempt(section, { result: written.get(section), problems });
       const left = testSection(section, result, material);
-      if (left.length) rebuild(section, left);
-      else written.set(section, result);
+      // A fix that breaks the drawing is mended like a first try: the scenes that pass stay.
+      const mend = left.length ? mendSection(section, result, material) : null;
+      if (!left.length) written.set(section, result);
+      else if (mend && !testSection(section, mend, material).length) {
+        written.set(section, mend);
+        if (!mended.includes(section)) mended.push(section);
+      } else rebuild(section, left);
     }));
     onStep('checking it against the page again', 0.93);
     checked = await review();
@@ -248,6 +341,7 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
   }
   const scenes = allScenes();
   const teaching = scenes.filter(scene => !scene.check);
+  const madeOpeners = Object.fromEntries([...openers].map(([id, made]) => [id, made.scenes]).filter(([, made]) => Object.keys(made).length));
   const beats = teaching.flatMap(scene => scene.beats);
   const actions = beats.flatMap(beat => beat.do || []);
   const answers = new Map((checked.reading?.answers || []).map(answer => [answer.id, answer.choice]));
@@ -257,7 +351,9 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
     scenes,
     assets,
     quiz,
-    pronounce: tidyPronounce([...written.values()].flatMap(result => result.pronounce || []), scenes),
+    plan: map,
+    openers: madeOpeners,
+    pronounce: tidyPronounce([...[...written.values()].flatMap(result => result.pronounce || []), ...[...openers.values()].flatMap(made => made.pronounce)], [...scenes, ...openerScenes()]),
     stats: {
       minutes: Math.round((Date.now() - started) / 6000) / 10,
       pageWords: String(page.markdown).split(/\s+/).length,
@@ -269,6 +365,16 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
       blocks: blocks.length,
       sections: sections.length,
       clips: sections.length,
+      plan: planned.plan ? {
+        shape: planned.plan.shape,
+        boxes: planned.plan.boxes.length,
+        guesses: allQuiz.filter(q => q.videoOnly).length,
+        traps: Object.keys(material.traps || {}).length,
+        splits: planned.plan.splits.length,
+        firstProblems: planned.firstProblems.length,
+        problemsLeft: planned.problemsLeft.slice(0, 12),
+      } : { failed: String(planned.error?.message || planned.error || 'no plan').slice(0, 200) },
+      openers: openerStats,
       clipWords: sections.map(section => spokenWords(scenes.filter(scene => scene.section === section))),
       longClips: longClips(sections, scenes),
       rebuilt: [...rebuilt],

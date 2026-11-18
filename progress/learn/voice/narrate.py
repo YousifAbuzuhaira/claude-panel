@@ -96,6 +96,29 @@ def cue_time(action, words, cursor, beat_start):
     return words[hit]['s'], hit, True
 
 
+def tell(speaker, scene, all_words):
+    """A teaching scene into the track: its start, its cues on their words, its end. Returns the cues missed."""
+    missed = 0
+    scene['start'] = round(speaker.at, 3)
+    scene['cues'] = []
+    for beat in scene['beats']:
+        beat_start = speaker.at
+        words = speaker.speak(beat['say'])
+        all_words.extend(words)
+        cursor = 0
+        for action in beat.get('do') or []:
+            t, cursor, found = cue_time(action, words, cursor, beat_start)
+            missed += 0 if found else 1
+            cue = {key: action[key] for key in ('show', 'hide', 'set', 'camera') if action.get(key)}
+            cue['t'] = round(max(beat_start, t - 0.1), 3)
+            scene['cues'].append(cue)
+        # A plain scene's code or table stays up long enough to be read.
+        speaker.silence(BEAT_GAP + float(beat.get('hold') or 0))
+    scene['cues'].sort(key=lambda cue: cue['t'])
+    scene['end'] = round(speaker.at, 3)
+    return missed
+
+
 def main():
     model_dir, script_file, out, voice = sys.argv[1:5]
     # Low priority where there is nice; on Windows the helper lowers this process itself.
@@ -111,6 +134,8 @@ def main():
     total += sum(len(split(q['q'])) for q in script['quiz'])
     # What follows an answer is said too, so a percentage of this is a true percentage.
     total += sum(len(split(f"Right. {o['why']}")) + len(split(f"Not quite. The answer is: {o['text'].rstrip('.')}. {o['why']}")) for q in script['quiz'] for o in q['options'] if o['right'])
+    openers = script.get('openers') or {}
+    total += sum(len(split(b['say'])) for by_option in openers.values() for s in by_option.values() for b in s.get('beats') or [])
     print(json.dumps({'sentences': total}), flush=True)
     speaker = Speaker(model_dir, voice, script.get('pronounce') or [])
     all_words = []
@@ -124,21 +149,7 @@ def main():
             scene['end'] = round(speaker.at, 3)
             speaker.silence(SCENE_GAP)
             continue
-        for beat in scene['beats']:
-            beat_start = speaker.at
-            words = speaker.speak(beat['say'])
-            all_words.extend(words)
-            cursor = 0
-            for action in beat.get('do') or []:
-                t, cursor, found = cue_time(action, words, cursor, beat_start)
-                missed += 0 if found else 1
-                cue = {key: action[key] for key in ('show', 'hide', 'set', 'camera') if action.get(key)}
-                cue['t'] = round(max(beat_start, t - 0.1), 3)
-                scene['cues'].append(cue)
-            # A plain scene's code or table stays up long enough to be read.
-            speaker.silence(BEAT_GAP + float(beat.get('hold') or 0))
-        scene['cues'].sort(key=lambda cue: cue['t'])
-        scene['end'] = round(speaker.at, 3)
+        missed += tell(speaker, scene, all_words)
         speaker.silence(SCENE_GAP - BEAT_GAP)
     main_end = speaker.at
     # What follows an answer: heard only by someone who answered, past the end of the main track.
@@ -153,6 +164,11 @@ def main():
             parts[name] = {'start': round(start, 3), 'end': round(speaker.at, 3)}
             speaker.silence(0.2)
         extras[question['id']] = parts
+    # A wrong guess played out, picture and all: also past the main track, played only for that pick.
+    for by_option in openers.values():
+        for scene in by_option.values():
+            speaker.silence(0.3)
+            missed += tell(speaker, scene, all_words)
     audio_file = out + '.mp3'
     # Constant bitrate: the player seeks by time, and a variable one seeks only roughly.
     sf.write(audio_file + '.tmp', np.concatenate(speaker.pieces), RATE, format='MP3', subtype='MPEG_LAYER_III', compression_level=0.6, bitrate_mode='CONSTANT')
