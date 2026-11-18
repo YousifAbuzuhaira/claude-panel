@@ -22,7 +22,7 @@ import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
 import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from '../verify.mjs';
 import { voicePlatform } from '../voice.mjs';
-import { estimate, faultsBySection, flattenPage, hearing, isOldPage, plainScenes, settleScenes, simulate, testSection, tidyPronounce, videoStamp, withBlockRead } from '../video-check.mjs';
+import { estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, mendSection, plainScenes, settleScenes, simulate, spokenBudget, spokenWords, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
@@ -1150,7 +1150,7 @@ describe('a page as a video', () => {
 
   test('an estimate grows with the words', () => {
     assert.ok(estimate(2000).minutes > estimate(1000).minutes);
-    assert.ok(estimate(2529).minutes > 21 && estimate(2529).minutes < 24);
+    assert.ok(estimate(1673).minutes > 9 && estimate(1673).minutes < 12, 'the measured page made a 9.5 min video');
     assert.equal(estimate(2529).totalMinutes, estimate(2529).scriptMinutes + estimate(2529).recordingMinutes);
   });
 });
@@ -1377,5 +1377,72 @@ describe('the shape of a page', () => {
     const cut = outlineExcerpt([{ heading: 'Long', text: 'word '.repeat(5000) }], 1000);
     assert.ok(cut.length <= 1000);
     assert.ok(cut.startsWith('[sec: Long] (5000 words) '));
+  });
+});
+
+describe('a video retells a page once', () => {
+  const check = (id, guess = false) => ({ t: 'check', id, guess, q: parseInline(`Question ${id}?`), concepts: [], options: [{ inlines: parseInline('Right'), why: parseInline('Yes.'), right: 1 }, { inlines: parseInline('Wrong'), why: parseInline('No.') }] });
+  const page = {
+    title: 'Volumes',
+    markdown: 'x',
+    stats: {},
+    terms: [{ term: 'volume', aka: ['volumes'], def: 'Storage that outlives a container.' }, { term: 'bind mount', aka: [], def: 'A host folder.' }],
+    blocks: [
+      ...markdownToBlocks('Why your data vanishes when a container goes.\n\n## Volumes\n\nVolumes keep your data safe when a container is removed.\n\nA second paragraph explains named volumes in more depth.'),
+      check('q1', true), check('q2'), check('q3'),
+      ...markdownToBlocks('## Bind mounts\n\nA bind mount maps a host folder into the container, unlike volumes.'),
+      check('q4'), check('q5'),
+      ...markdownToBlocks('## Recap\n\n- Volumes keep data.\n- Bind mounts map folders.'),
+      check('q6'),
+    ],
+  };
+
+  test('the recap is left out; its blocks and its section are not in the video', () => {
+    const { blocks, sections } = flattenPage(page);
+    assert.ok(!sections.includes('Recap'));
+    assert.ok(!blocks.some(block => /Volumes keep data\./.test(block.text)));
+  });
+
+  test('the video asks the guess and at most 3 others, spread out; watching must still answer all of them', () => {
+    const { quiz, allQuiz } = flattenPage(page);
+    assert.deepEqual(allQuiz.map(q => q.id), ['q1', 'q2', 'q3', 'q4', 'q5', 'q6']);
+    assert.equal(quiz[0].id, 'q1');
+    assert.equal(quiz.filter(q => !q.guess).length, 3);
+    assert.deepEqual(videoQuiz(allQuiz.slice(0, 3)).map(q => q.id), ['q1', 'q2', 'q3'], 'few enough are all asked');
+    assert.equal(allQuiz.find(q => q.id === 'q6').section, 'Bind mounts', "a question under the recap stays with the section before it");
+  });
+
+  test('a word is explained in the first section that uses it', () => {
+    const { blocks } = flattenPage(page);
+    const taught = firstTaught(page.terms, blocks);
+    assert.equal(taught.get('volume'), 'Volumes');
+    assert.equal(taught.get('bind mount'), 'Bind mounts');
+  });
+
+  test('a section is budgeted at its prose once, plus a little for code, tables and diagrams', () => {
+    const { blocks } = flattenPage(page);
+    const mine = blocks.filter(block => block.section === 'Volumes');
+    assert.equal(spokenBudget(mine), mine.reduce((total, block) => total + block.text.split(/\s+/).length, 0));
+    assert.equal(spokenBudget([{ t: 'code', text: 'a\nb' }, { t: 'p', text: 'two words' }]), 62);
+    assert.equal(spokenWords([{ check: 'q1', beats: [{ say: 'not counted here' }] }, { beats: [{ say: 'one two' }, { say: 'three' }] }]), 3);
+  });
+
+  test('length never fails a section: a long but correct one passes', () => {
+    const material = flattenPage(page);
+    const scenes = plainScenes('Volumes', material).map(scene => (scene.check ? scene : { ...scene, beats: [...scene.beats, ...scene.beats, ...scene.beats] }));
+    assert.deepEqual(testSection('Volumes', { scenes }, material), []);
+  });
+
+  test('a section whose repairs ran out keeps its good scenes and reads out only what a failing one taught', () => {
+    const material = flattenPage(page);
+    const [first, second] = material.blocks.filter(block => block.section === 'Volumes');
+    const good = { title: 'Kept', covers: [first.n], quote: 'Volumes keep your data safe when a container is removed', check: null, objects: [{ id: 'a', shape: 'box', x: 120, y: 200, w: 320, h: 130, text: 'Volumes' }], beats: [{ say: 'Volumes keep your data.', do: [{ on: 'Volumes', show: ['a'] }] }] };
+    const bad = { title: 'Broken', covers: [second.n], quote: 'a sentence the page never says anywhere', check: null, objects: [], beats: [{ say: 'Named ones.', do: [] }] };
+    const mended = mendSection('Volumes', { scenes: [good, bad], pronounce: [] }, material);
+    assert.equal(mended.scenes.filter(scene => !scene.check)[0].title, 'Kept');
+    assert.ok(mended.scenes.some(scene => scene.plain && scene.covers.includes(second.n)), 'the failing scene\'s block is read out');
+    assert.deepEqual(mended.scenes.filter(scene => scene.check).map(scene => scene.check), material.quiz.filter(q => q.section === 'Volumes').map(q => q.id));
+    assert.deepEqual(testSection('Volumes', mended, material), []);
+    assert.equal(mendSection('Volumes', { scenes: [bad] }, material), null, 'no good scene: the whole section is rebuilt');
   });
 });

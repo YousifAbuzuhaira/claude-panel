@@ -2,7 +2,7 @@
 // is tested as the player would draw it, repaired, or rebuilt from the page. Then someone who only
 // watches answers the questions, and a check compares the script with the page, both ways.
 import { READER_SCHEMA, readerPrompt } from './prompts.mjs';
-import { faultsBySection, flattenPage, hearing, plainScenes, settleScenes, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
+import { faultsBySection, firstTaught, flattenPage, hearing, mendSection, plainScenes, settleScenes, spokenBudget, spokenWords, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
 
 const REPAIRS = 2;
 
@@ -63,7 +63,8 @@ COVERAGE:
 - Never invent an example, sample text, ID, count or split that the blocks do not give. If a block gives no real values, draw it with words or shapes instead of made-up values.
 - A block marked "disputed" corrects the block before it. Teach what the correction says, and never state the disputed claim as fact.
 
-VOICE: a good teacher sitting beside the learner, in your own spoken words, not the page's sentences. Plain words. Talk about what is on screen. Never read code or symbols out character by character. Say what a technical word means the first time, using the glossary. Never say "the page", "this scene" or "the video". Write numbers as digits.
+VOICE: a good teacher sitting beside the learner, in your own spoken words, not the page's sentences. Plain words. Talk about what is on screen. Never read code or symbols out character by character. Say what a technical word means the first time in the video, using the glossary, but not a word an earlier section already explained. Never say "the page", "this scene" or "the video". Write numbers as digits.
+SAY EACH FACT ONCE. No signposting ("now let's look at", "here's the key idea"), no summary at the end of a section, no saying again what the voice just said. A block that repeats an earlier one is covered in one sentence. Teaching everything does not mean saying it twice.
 
 PRONUNCIATION. A text-to-speech voice will read "say" aloud. In "pronounce", list every word it would get wrong, with "written" exactly as it appears in "say" and "spoken" as it should be read: an ID or exact value read digit by digit or in full, a letter-by-letter acronym, a name from code. For example {"written":"1917","spoken":"1 thousand 9 hundred and 17"} or {"written":"cl100k_base","spoken":"C L 100 K base"}. Leave out ordinary words and acronyms said as words. An empty list is fine.
 
@@ -92,7 +93,11 @@ QUESTIONS. Add each quiz question below once, as its own scene: {"title":"Quick 
 
 const describe = block => `[${block.n}] (${block.t}${block.asset !== undefined ? ` ${block.asset}` : ''}${block.callout ? `, ${block.callout}` : ''})`;
 
-function sectionRequest(page, { blocks, quiz, sections }, section, repair) {
+/** Glossary words a section before this one already explains. */
+const earlierTerms = ({ taught, sections }, section) => [...(taught || [])].filter(([, at]) => sections.indexOf(at) < sections.indexOf(section)).map(([term]) => term);
+
+function sectionRequest(page, material, section, repair) {
+  const { blocks, quiz, sections } = material;
   const mine = blocks.filter(block => block.section === section);
   const questions = quiz.filter(q => q.section === section);
   return [
@@ -101,6 +106,7 @@ function sectionRequest(page, { blocks, quiz, sections }, section, repair) {
     `SECTIONS OF THE PAGE: ${sections.join(' / ')}`,
     `THIS SECTION: ${section}`, '',
     'GLOSSARY:', ...(page.terms || []).map(term => `- ${term.term}: ${term.def}`), '',
+    ...(earlierTerms(material, section).length ? [`ALREADY EXPLAINED IN EARLIER SECTIONS (use these words, don't explain them again): ${earlierTerms(material, section).join('; ')}`, ''] : []),
     'BLOCKS OF THIS SECTION:',
     ...mine.flatMap(block => [describe(block), block.text, '']),
     'QUIZ:',
@@ -130,7 +136,9 @@ function claimRequest(page, { blocks }, heard) {
 
 const recapOf = page => (page.blocks || []).at(-1)?.items?.map(item => (item.inlines || []).filter(part => !part.added).map(part => part.s).join('')) || [];
 
-function watcherRequest(page, { quiz }, heard) {
+function watcherRequest(page, { quiz, allQuiz }, heard) {
+  // Watching alone must answer every question on the page, not only those the video asks.
+  quiz = allQuiz || quiz;
   return readerPrompt({
     // What the page set out to teach; an older page, saved without its subtopics, falls back to its recap.
     page: { title: page.title, subtopics: [...(page.outcomes || []), ...((page.subtopics || []).length ? page.subtopics : recapOf(page))] },
@@ -145,13 +153,16 @@ function watcherRequest(page, { quiz }, heard) {
 export async function writeScript({ page, ask, onStep = () => {} }) {
   const started = Date.now();
   const material = flattenPage(page);
-  const { sections, blocks, assets, quiz } = material;
+  material.taught = firstTaught(page.terms, material.blocks);
+  const { sections, blocks, assets, quiz, allQuiz } = material;
   const written = new Map();
   const rebuilt = new Set();
   const firstProblems = {};
   const forClaude = {};
   const whyRebuilt = {};
   const readOut = [];
+  const mended = [];
+  const shortened = [];
   const rebuild = (section, problems) => {
     rebuilt.add(section);
     whyRebuilt[section] = problems.slice(0, 8);
@@ -162,15 +173,30 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
   let finished = 0;
   await Promise.all(sections.map(async section => {
     if (blocks.some(block => block.section === section)) {
+      // Length is a hint, never a failure: a long section is asked to say less, and kept as it is when that doesn't pass.
+      const limit = spokenBudget(blocks.filter(block => block.section === section));
+      const lengthHint = result => (spokenWords(result?.scenes) > limit * 1.3 ? [`The narration runs ${spokenWords(result.scenes)} words for about ${limit} words of page: say each fact once, cut signposts and summaries, and keep every block covered.`] : []);
       let result = await attempt(section, null);
       let problems = testSection(section, result, material);
       firstProblems[section] = problems.length;
       if (problems.length) forClaude[section] = problems.slice(0, 8);
       for (let round = 0; round < REPAIRS && problems.length; round++) {
-        result = await attempt(section, { result, problems });
+        result = await attempt(section, { result, problems: [...problems, ...lengthHint(result)] });
         problems = testSection(section, result, material);
       }
-      if (problems.length) rebuild(section, problems);
+      if (!problems.length && lengthHint(result).length) {
+        const shorter = await attempt(section, { result, problems: lengthHint(result) });
+        if (!testSection(section, shorter, material).length && spokenWords(shorter.scenes) < spokenWords(result.scenes)) {
+          result = shorter;
+          shortened.push(section);
+        }
+      }
+      // Repairs ran out: keep the scenes that pass, and read out only what the failing ones taught.
+      const mend = problems.length ? mendSection(section, result, material) : null;
+      if (mend && !testSection(section, mend, material).length) {
+        written.set(section, mend);
+        mended.push(section);
+      } else if (problems.length) rebuild(section, problems);
       else written.set(section, result);
     } else {
       written.set(section, { scenes: plainScenes(section, material), pronounce: [] }); // questions alone
@@ -182,7 +208,7 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
   const review = async () => {
     const heard = hearing(allScenes(), assets);
     const [reading, claims] = await Promise.all([ask(watcherRequest(page, material, heard), READER_SCHEMA), ask(claimRequest(page, material, heard), CLAIM_SCHEMA)]);
-    return { reading, claims, faults: faultsBySection({ claims, reading, blocks, quiz, sections }, rebuilt) };
+    return { reading, claims, faults: faultsBySection({ claims, reading, blocks, quiz: allQuiz, sections }, rebuilt) };
   };
   onStep('checking it against the page', 0.82);
   let checked = await review();
@@ -201,7 +227,7 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
     // Something wrong takes the section's scenes with it. Something only left out doesn't: that
     // block is read out where it belongs, so one small gap costs a section none of its motion.
     const { added = [], dropped = [] } = checked.claims;
-    for (const [section, problems] of faultsBySection({ claims: { added }, reading: checked.reading, blocks, quiz, sections }, rebuilt)) rebuild(section, problems);
+    for (const [section, problems] of faultsBySection({ claims: { added }, reading: checked.reading, blocks, quiz: allQuiz, sections }, rebuilt)) rebuild(section, problems);
     for (const block of dropped.map(item => blocks.find(other => other.n === item.block)).filter(block => block && !rebuilt.has(block.section))) {
       const kept = written.get(block.section);
       written.set(block.section, { ...kept, scenes: withBlockRead(kept.scenes, block) });
@@ -232,13 +258,17 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
       sections: sections.length,
       rebuilt: [...rebuilt],
       whyRebuilt,
+      mended,
+      shortened,
+      quizShown: quiz.length,
+      quizAll: allQuiz.length,
       readOut,
       firstProblems,
       forClaude,
       firstClaims,
       claimsLeft: { added: checked.claims.added || [], dropped: checked.claims.dropped || [] },
       watcher: {
-        quick: `${quiz.filter(q => q.options[answers.get(q.id)]?.right).length}/${quiz.length}`,
+        quick: `${allQuiz.filter(q => q.options[answers.get(q.id)]?.right).length}/${allQuiz.length}`,
         closing: `${(checked.reading?.closing || []).filter(item => item.answerable).length}/${(checked.reading?.closing || []).length}`,
         unknown: checked.reading?.unknown || [],
         missing: checked.reading?.missing || [],

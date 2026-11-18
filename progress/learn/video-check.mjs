@@ -34,7 +34,21 @@ export function videoStamp(page) {
 /** A page made before quick questions existed: its course needs updating first. */
 export const isOldPage = page => !page?.stats;
 
-/** The page as numbered blocks by section, the things a scene can show, and its questions. */
+const RECAP = /^recap\b/i;
+const SHOWN_QUESTIONS = 3;
+
+/** The questions a video asks: every guess-first one, and at most `most` others, spread across the page. */
+export function videoQuiz(quiz, most = SHOWN_QUESTIONS) {
+  const others = quiz.filter(q => !q.guess);
+  const picked = new Set(others.length <= most ? others : Array.from({ length: most }, (_, k) => others[Math.floor(((k + 0.5) * others.length) / most)]));
+  return quiz.filter(q => q.guess || picked.has(q));
+}
+
+/**
+ * The page as numbered blocks by section, the things a scene can show, and its questions: `quiz`
+ * is what the video asks, `allQuiz` every question, which watching alone must still answer. The
+ * recap only says the page again, so a video that teaches all of it leaves the recap out.
+ */
 export function flattenPage(page) {
   const blocks = [];
   const assets = { code: [], table: [], diagram: [] };
@@ -45,11 +59,18 @@ export function flattenPage(page) {
     sections.push(taken ? `${name} (${taken + 1})` : name);
   };
   openSection('Introduction');
+  let skipping = false;
   const walk = (list, callout) => {
     for (const block of list) {
+      if (block.t === 'h') {
+        const name = plain(block.inlines) || 'Section';
+        if (!callout) skipping = RECAP.test(name);
+        if (!skipping) openSection(name);
+        continue;
+      }
       const section = sections.at(-1);
-      if (block.t === 'h') { openSection(plain(block.inlines) || 'Section'); continue; }
       if (block.t === 'check') { held.push({ block, section, after: blocks.length - 1 }); continue; }
+      if (skipping) continue;
       if (block.t === 'callout') { walk(block.blocks, block.kind === 'disputed' ? 'disputed' : `${block.kind}: ${plain(block.title)}`); continue; }
       const entry = { n: blocks.length, t: block.t, section, callout: callout || null };
       if (block.t === 'p' || block.t === 'quote') entry.text = plain(block.inlines);
@@ -73,7 +94,7 @@ export function flattenPage(page) {
     }
   };
   walk(page.blocks || [], null);
-  const quiz = held.map(({ block, section, after }) => ({
+  const allQuiz = held.map(({ block, section, after }) => ({
     id: block.id,
     guess: Boolean(block.guess),
     after,
@@ -81,9 +102,27 @@ export function flattenPage(page) {
     q: plain(block.q),
     options: block.options.map(option => ({ text: plain(option.inlines), why: plain(option.why), right: Boolean(option.right) })),
   }));
+  const quiz = videoQuiz(allQuiz);
   const used = sections.filter(name => blocks.some(block => block.section === name) || quiz.some(q => q.section === name));
-  return { blocks, assets, quiz, sections: used, pageText: norm(blocks.map(block => block.text).join(' ')) };
+  return { blocks, assets, quiz, allQuiz, sections: used, pageText: norm(blocks.map(block => block.text).join(' ')) };
 }
+
+/** Each glossary word and the section that first uses it, so a later section doesn't explain it again. */
+export function firstTaught(terms, blocks) {
+  const taught = new Map();
+  for (const term of terms || []) {
+    const names = [term.term, ...(term.aka || [])].map(norm).filter(Boolean);
+    const first = blocks.find(block => names.some(name => ` ${norm(block.text)} `.includes(` ${name} `)));
+    if (first) taught.set(term.term, first.section);
+  }
+  return taught;
+}
+
+/** About as many words as a section should take to say: its prose once, and a little for each code, table or diagram. */
+export const spokenBudget = blocks => blocks.reduce((total, block) => total + (['code', 'table', 'diagram'].includes(block.t) ? 60 : words(block.text).length), 0);
+
+/** The words a section's scenes say. */
+export const spokenWords = scenes => (scenes || []).filter(scene => !scene.check).flatMap(scene => scene.beats || []).reduce((total, beat) => total + words(beat.say).length, 0);
 
 // --- Testing a scene ---------------------------------------------------------------------
 
@@ -247,6 +286,13 @@ export function simulate(scene, name, assets, problems) {
   }
 }
 
+/** What's wrong with one scene Claude wrote, added to `problems`. */
+function sceneProblems(scene, label, assets, pageText, problems) {
+  if (!scene.quote || words(norm(scene.quote)).length < MIN_QUOTE_WORDS || !pageText.includes(norm(scene.quote))) problems.push(`${label}: its quote is not word for word from a block: ${String(scene.quote).slice(0, 80)}`);
+  for (const beat of scene.beats || []) if (words(beat.say).length > MAX_SAY_WORDS) problems.push(`${label}: sentence too long: ${beat.say}`);
+  simulate(scene, label, assets, problems);
+}
+
 /** What's wrong with one section's scenes; empty means it can be recorded. */
 export function testSection(section, result, { blocks, assets, quiz, pageText }) {
   const problems = [];
@@ -265,15 +311,13 @@ export function testSection(section, result, { blocks, assets, quiz, pageText })
   let beats = 0;
   let still = 0;
   scenes.forEach((scene, index) => {
-    if (scene.check) return;
-    const label = `Scene ${index} ("${scene.title}")`;
-    if (!scene.quote || words(norm(scene.quote)).length < MIN_QUOTE_WORDS || !pageText.includes(norm(scene.quote))) problems.push(`${label}: its quote is not word for word from a block: ${String(scene.quote).slice(0, 80)}`);
+    // A plain scene is the page's own words, made here: nothing to test.
+    if (scene.check || scene.plain) return;
     for (const beat of scene.beats || []) {
       beats++;
       if (!(beat.do || []).length) still++;
-      if (words(beat.say).length > MAX_SAY_WORDS) problems.push(`${label}: sentence too long: ${beat.say}`);
     }
-    simulate(scene, label, assets, problems);
+    sceneProblems(scene, `Scene ${index} ("${scene.title}")`, assets, pageText, problems);
   });
   if (beats && still / beats > STILL_BEATS) problems.push(`${still} of ${beats} beats change nothing on screen: give them actions`);
   return [...new Set(problems)];
@@ -334,6 +378,44 @@ export function plainScenes(section, { blocks, assets, quiz }) {
   const placed = new Set(scenes.filter(scene => scene.check).map(scene => scene.check));
   scenes.push(...mine.filter(q => !placed.has(q.id)).map(question));
   return scenes;
+}
+
+/**
+ * A section whose repairs ran out, mended scene by scene: the scenes that pass stay, a block only a
+ * failing scene taught is read out from the page where it falls, and the questions go back where
+ * they belong. Null when no scene passes, so the whole section is rebuilt instead.
+ */
+export function mendSection(section, result, { blocks, assets, quiz, pageText }) {
+  const kept = (result?.scenes || []).filter((scene, index) => {
+    if (scene.check) return false;
+    const problems = [];
+    sceneProblems(scene, `Scene ${index}`, assets, pageText, problems);
+    return !problems.length;
+  });
+  if (!kept.length) return null;
+  const title = section === 'Introduction' ? 'In brief' : section;
+  const covered = new Set(kept.flatMap(scene => scene.covers || []));
+  const left = blocks.filter(block => block.section === section && !covered.has(block.n));
+  const readOut = block => (['code', 'table', 'diagram'].includes(block.t) ? shownScenes(block, title, assets) : [proseScene(block, title)]);
+  const ordered = [];
+  for (const scene of kept) {
+    const from = Math.min(...(scene.covers || []).filter(Number.isInteger), Infinity);
+    while (left.length && left[0].n < from) ordered.push(...readOut(left.shift()));
+    ordered.push(scene);
+  }
+  for (const block of left) ordered.push(...readOut(block));
+  const question = q => ({ title: 'Quick check', covers: [], quote: null, check: q.id, objects: [], beats: [{ say: '', do: [] }] });
+  const mine = quiz.filter(q => q.section === section);
+  const waiting = mine.filter(q => !q.guess);
+  const scenes = mine.filter(q => q.guess).map(question);
+  let seen = -1;
+  for (const scene of ordered) {
+    scenes.push(scene);
+    seen = Math.max(seen, ...(scene.covers || []).filter(Number.isInteger));
+    while (waiting.length && waiting[0].after <= seen) scenes.push(question(waiting.shift()));
+  }
+  scenes.push(...waiting.map(question));
+  return { scenes, pronounce: result.pronounce || [] };
 }
 
 /** One block the scenes dropped, read out word for word right after what they did teach. */
@@ -411,7 +493,7 @@ export function tidyPronounce(list, scenes) {
 
 /** Roughly how long a page's video and recording will be, and its size. */
 export function estimate(wordCount) {
-  const minutes = wordCount / 112;
+  const minutes = wordCount / 160; // measured 2026-11-18: a 1,673-word page made a 9.5 min video
   const scriptMinutes = Math.max(2, Math.round(wordCount / 650));
   const recordingMinutes = Math.max(1, Math.round(minutes * 0.49));
   return { minutes: Math.round(minutes * 10) / 10, scriptMinutes, recordingMinutes, totalMinutes: scriptMinutes + recordingMinutes, mb: Math.round(minutes * 0.53 * 10) / 10 };
