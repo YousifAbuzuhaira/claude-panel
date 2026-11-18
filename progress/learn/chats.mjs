@@ -13,7 +13,8 @@ const RESULT_CHARS = 1500;
 const EDIT_CHARS = 400;
 const TEXT_CHARS = 12_000;
 
-export const projectsDir = () => join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
+// LEARN_CHATS_DIR points a scratch build at copies of chats; CLAUDE_CONFIG_DIR would move Claude's login too.
+export const projectsDir = () => process.env.LEARN_CHATS_DIR || join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
 
 /** Claude Code's folder name for a working folder: every character not a letter or digit is a dash. */
 export const projectSlug = path => String(path).replace(/[^A-Za-z0-9]/g, '-');

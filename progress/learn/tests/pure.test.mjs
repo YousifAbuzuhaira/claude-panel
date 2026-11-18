@@ -9,18 +9,18 @@ import {
 import { claudeArgs, readStreamLine } from '../claude.mjs';
 import { readMarkers } from '../chat.mjs';
 import { cleanLabel, diagramBlock, parseFlow, parseSequence, wrapLabel } from '../diagram.mjs';
-import { chatTitle, condenseChat, listClaudeChats, maskSecrets, projectSlug } from '../chats.mjs';
-import { cutLongSections, docxToSections, documentType, pageIsJunk, pagesForClaude, pdfSections, readZip, uniqueHeadings } from '../documents.mjs';
+import { chatTitle, condenseChat, listClaudeChats, maskSecrets, projectSlug, projectsDir } from '../chats.mjs';
+import { cutLongSections, docxToSections, documentType, mergeSections, pageIsJunk, pagesForClaude, pdfSections, readZip, uniqueHeadings } from '../documents.mjs';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32, deflateRawSync } from 'node:zlib';
 import { askNumbers, cleanAsks, picksCovering, uncovered } from '../coverage.mjs';
-import { markdownToBlocks, parseInline } from '../markdown.mjs';
+import { markdownToBlocks, parseInline, patchSections, splitSections } from '../markdown.mjs';
 import { DAILY_CAP, LADDER, answerInReview, answerOnPage, dropCourse, dueToday, emptyReview, flagItem, itemKey, nextDue, parseKey, recallDays, swapConcept } from '../review.mjs';
 import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
-import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, tidyDisputes } from '../verify.mjs';
+import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from '../verify.mjs';
 import { voicePlatform } from '../voice.mjs';
 import { estimate, faultsBySection, flattenPage, hearing, isOldPage, plainScenes, settleScenes, simulate, testSection, tidyPronounce, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
@@ -1193,5 +1193,98 @@ describe('the stage', () => {
     assert.equal(sceneAt(scenes, 0), 0);
     assert.equal(sceneAt(scenes, 15), 1);
     assert.equal(sceneAt(scenes, 99), 2);
+  });
+});
+
+describe('pages say what the source says', () => {
+  test('"(added; why)" is an added mark like "(added)": not spoken, not quotable', () => {
+    for (const mark of ['(added)', '(added; illustrative values)', '(added: my example)', '(added, toy numbers)']) {
+      const inlines = parseInline(`A toy deploy fails once in a hundred ${mark} and that is all.`);
+      assert.ok(inlines.some(item => item.added), mark);
+      assert.ok(!inlines.some(item => !item.added && item.s.includes('added')), mark);
+    }
+    const map = pageMap('Real fact from the chat is here. A toy deploy fails once in a hundred. (added; illustrative values) Another sourced fact sits here too.');
+    assert.equal(quoteState('A toy deploy fails once in a hundred', map), 'added');
+    assert.equal(quoteState('Another sourced fact sits here too', map), 'sourced');
+    const page = { title: 'P', markdown: 'x', stats: {}, blocks: markdownToBlocks('Said aloud here (added; illustrative values) and the rest.') };
+    assert.equal(flattenPage(page).blocks[0].text, 'Said aloud here and the rest.');
+  });
+
+  test('a closing question can rest only on what the source says', () => {
+    const markdown = '## One\nThe cache keeps entries for two seconds [sec: Cache]. Assume a toy hit rate of ninety percent here. (added; illustrative)';
+    const aids = tidyAids({
+      terms: [],
+      quick: [],
+      closing: [
+        { q: 'Sourced?', points: [], answer: 'a', quote: 'The cache keeps entries for two seconds', concepts: ['c_a'] },
+        { q: 'Added?', points: [], answer: 'a', quote: 'Assume a toy hit rate of ninety percent', concepts: ['c_a'] },
+      ],
+    }, { markdown, conceptIds: ['c_a'], headings: ['One'] });
+    assert.deepEqual(aids.closing.map(item => item.q), ['Sourced?']);
+    assert.deepEqual(aids.failed.map(item => item.q), ['Added?']);
+  });
+
+  test('sections split at ## headings, never inside a code fence', () => {
+    const parts = splitSections('Opening.\n\n## One\n\nA.\n\n```bash\n## not a heading\n```\n\n### Sub\n\n## Two\nB.');
+    assert.deepEqual(parts.map(part => part.heading), ['', 'One', 'Two']);
+  });
+
+  test('a patch replaces, removes and adds sections; everything else stays word for word', () => {
+    const page = 'Why it matters.\n\n## One\n\nFirst [sec: A].\n\n## Two\n\nSecond.\n\n## Recap\n\n- x\n';
+    assert.equal(
+      patchSections(page, [{ heading: 'Two', after: null, markdown: '## Two\n\nSecond, fixed.' }]),
+      'Why it matters.\n\n## One\n\nFirst [sec: A].\n\n## Two\n\nSecond, fixed.\n\n## Recap\n\n- x\n',
+    );
+    assert.equal(patchSections(page, [{ heading: 'One', after: null, markdown: '' }]), 'Why it matters.\n\n## Two\n\nSecond.\n\n## Recap\n\n- x\n');
+    assert.equal(patchSections(page, [{ heading: 'New', after: 'One', markdown: 'Text without its heading.' }]), 'Why it matters.\n\n## One\n\nFirst [sec: A].\n\n## New\n\nText without its heading.\n\n## Two\n\nSecond.\n\n## Recap\n\n- x\n');
+    assert.match(patchSections(page, [{ heading: 'Late', after: 'nowhere', markdown: '## Late\n\nL.' }]), /## Two\n\nSecond\.\n\n## Late\n\nL\.\n\n## Recap/, 'an unknown "after" goes before the Recap');
+    assert.match(patchSections(page, [{ heading: '', after: null, markdown: 'A new opening.' }]), /^A new opening\.\n\n## One/);
+    assert.equal(patchSections(page, []), page);
+    assert.equal(patchSections(page, [{ heading: 'Nope', after: null, markdown: '' }]), page, 'removing what is not there changes nothing');
+  });
+
+  test('a brief fix replaces its section; a new heading is added at the end', () => {
+    const sections = [{ heading: 'The plan', level: 1, text: 'Phases 1 to 3.' }, { heading: 'Risks', level: 1, text: 'None.' }];
+    const merged = mergeSections(sections, [{ heading: '## the plan', text: 'Phases 0 to 8, each named.' }, { heading: 'Who does the work', text: 'You write and review.' }, { heading: '', text: 'x' }]);
+    assert.deepEqual(merged.map(section => [section.heading, section.text]), [['The plan', 'Phases 0 to 8, each named.'], ['Risks', 'None.'], ['Who does the work', 'You write and review.']]);
+    assert.equal(sections[0].text, 'Phases 1 to 3.', 'the input is not changed');
+  });
+
+  test('the source check keeps what it can act on', () => {
+    const markdown = 'The layout re-runs on every tab click, the page says here. A toy example uses five hundred users. (added) The cache TTL is two seconds in the code.';
+    const found = tidySourceCheck({
+      wrong: [
+        { quote: 'The layout re-runs on every tab click', kind: 'contradicts', problem: 'Soft switches skip it.', correction: 'Only a first load runs it.' },
+        { quote: 'The layout re-runs on every tab click', kind: 'contradicts', problem: 'Again.', correction: 'x' },
+        { quote: 'A toy example uses five hundred users', kind: 'unsupported', problem: 'Not in the chat.', correction: 'Mark it.' },
+        { quote: 'a sentence that is nowhere on the page', kind: 'contradicts', problem: 'p', correction: 'c' },
+        { quote: 'The cache TTL is two seconds', kind: 'odd', problem: 'Never said.', correction: 'Remove it.' },
+      ],
+      dropped: [{ fact: 'Decision 2: you write and review.', where: 'Plan' }, { fact: '  ', where: 'x' }],
+    }, markdown);
+    assert.deepEqual(found.wrong.map(item => [item.kind, item.problem]), [['contradicts', 'Soft switches skip it.'], ['unsupported', 'Never said.']]);
+    assert.deepEqual(found.dropped, [{ fact: 'Decision 2: you write and review.', where: 'Plan' }]);
+    assert.deepEqual(sourceDisputes(found.wrong).map(item => [item.quote, item.evidence, item.source]), [['The layout re-runs on every tab click', null, true]]);
+  });
+
+  test('a box from the source check has no link', () => {
+    const block = disputeBlock({ quote: 'q', problem: 'Soft switches skip it.', correction: 'Only a first load runs it.', evidence: null });
+    const text = JSON.stringify(block.blocks);
+    assert.ok(!text.includes('Evidence'));
+    assert.ok(text.includes('the course'));
+    assert.ok(JSON.stringify(disputeBlock({ quote: 'q', problem: 'p', correction: 'c', evidence: 'https://example.com/x' }).blocks).includes('https://example.com/x'));
+  });
+
+  test('a scratch build can read chats from a folder of copies', () => {
+    const before = process.env.LEARN_CHATS_DIR;
+    try {
+      process.env.LEARN_CHATS_DIR = '/tmp/scratch-chats';
+      assert.equal(projectsDir(), '/tmp/scratch-chats');
+      delete process.env.LEARN_CHATS_DIR;
+      assert.match(projectsDir(), /projects$/);
+    } finally {
+      if (before === undefined) delete process.env.LEARN_CHATS_DIR;
+      else process.env.LEARN_CHATS_DIR = before;
+    }
   });
 });

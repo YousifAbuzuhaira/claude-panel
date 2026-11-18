@@ -11,16 +11,16 @@ import { fileURLToPath } from 'node:url';
 import { applyProposals, compactCatalogue, ensureCategory, findCategory, stateOf } from './catalogue.mjs';
 import { askStructured, describeTool, stopAll } from './claude.mjs';
 import { activeJobFor, buildStatus, newCourseId, readCatalogue, readCourse, readStatus, recordUsage, updateCatalogue, updateCourse, writeStatus } from './library.mjs';
-import { inlineText, markdownToBlocks } from './markdown.mjs';
+import { inlineText, markdownToBlocks, patchSections } from './markdown.mjs';
 import { askNumbers, cleanAsks, picksCovering, uncovered } from './coverage.mjs';
 import { overlapReport } from './overlap.mjs';
 import {
-  BRIEF_SCHEMA, OUTLINE_SCHEMA, PAGE_PLAN_SCHEMA, PAGE_SCHEMA, READER_SCHEMA, RESEARCH_SCHEMA, TEACH_SCHEMA, VERIFY_SCHEMA,
-  chatBriefPrompt, outlinePrompt, pagePlanPrompt, pagePrompt, readerPrompt, researchPrompt, teachPrompt, verifyPrompt,
+  BRIEF_CHECK_SCHEMA, BRIEF_SCHEMA, OUTLINE_SCHEMA, PAGE_PLAN_SCHEMA, PAGE_SCHEMA, PATCH_SCHEMA, READER_SCHEMA, RESEARCH_SCHEMA, SOURCE_CHECK_SCHEMA, TEACH_SCHEMA, VERIFY_SCHEMA,
+  briefCheckPrompt, chatBriefPrompt, outlinePrompt, pagePlanPrompt, pagePrompt, patchPrompt, readerPrompt, researchPrompt, sourceCheckPrompt, teachPrompt, verifyPrompt,
 } from './prompts.mjs';
-import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, placeChecks, tidyAids } from './teach.mjs';
+import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, placeChecks, quoteState, pageMap, tidyAids } from './teach.mjs';
 import { makeVideos, readQueue } from './video.mjs';
-import { holdBack, placeDisputes, tidyDisputes } from './verify.mjs';
+import { MAX_DISPUTES, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from './verify.mjs';
 import { ensureVoice, record } from './voice.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
 import {
@@ -28,7 +28,7 @@ import {
   transcriptText, watchUrl, youTubeId, ytCaptions, ytInfo, ytPlaylist, ytSearch,
 } from './sources.mjs';
 import { ensureYtDlp } from './deps.mjs';
-import { MAX_DOCUMENT_BYTES, documentType, readDocument, uniqueHeadings } from './documents.mjs';
+import { MAX_DOCUMENT_BYTES, documentType, mergeSections, readDocument, uniqueHeadings } from './documents.mjs';
 import { CONFIG_DIR, toLocalPath } from './settings.mjs';
 import { readJson, withLock, writeJson } from './store.mjs';
 
@@ -412,6 +412,8 @@ async function researchChat(lib, job, save, io) {
   const categories = readCatalogue(lib).categories.map(category => category.name);
   save({ message: `Finding "${job.focus}" in ${chat.title}` });
   let brief;
+  let sections = [];
+  let briefCheck = null;
   try {
     brief = await io.askStructured({
       prompt: chatBriefPrompt({ focus: job.focus, title: chat.title, project: chat.cwd ? basename(chat.cwd) : '', cwd: chat.cwd && existsSync(chat.cwd) ? chat.cwd : null, categories }),
@@ -423,17 +425,34 @@ async function researchChat(lib, job, save, io) {
       onRateLimit: recordUsage,
       onTool: tool => save({ message: describeTool(tool) }),
     });
+    sections = (brief.sections || []).filter(section => section && section.heading && String(section.text || '').trim()).map(section => ({ heading: String(section.heading).slice(0, 140), level: 1, text: String(section.text).slice(0, 40_000) }));
+    // The brief is the course's only source: held against the chat, both ways, and mended.
+    if (brief.found !== false && sections.length >= 2) {
+      save({ message: 'Checking the brief against your chat' });
+      writeFileSync(`${work}/brief.md`, sections.map(section => `## ${section.heading}\n\n${section.text}`).join('\n\n'), { mode: 0o600 });
+      try {
+        const check = await io.askStructured({ prompt: briefCheckPrompt({ focus: job.focus }), schema: BRIEF_CHECK_SCHEMA, tools: ['Read', 'Grep'], model: lib.settings.models.build, cwd: work, onRateLimit: recordUsage, onTool: tool => save({ message: describeTool(tool) }) });
+        sections = mergeSections(sections, check.fixes);
+        briefCheck = {
+          wrong: (check.wrong || []).slice(0, 40).map(item => ({ quote: String(item.quote || '').slice(0, 300), says: String(item.says || '').slice(0, 300) })),
+          dropped: (check.dropped || []).slice(0, 60).map(item => String(item.fact || '').slice(0, 300)),
+          fixed: (check.fixes || []).length,
+        };
+      } catch (error) {
+        briefCheck = { error: String(error.message || error).slice(0, 300) };
+      }
+    }
   } finally {
-    // The chat's text is only for that run.
+    // The chat's text is only for these runs.
     rmSync(work, { recursive: true, force: true });
   }
-  const sections = uniqueHeadings((brief.sections || []).filter(section => section && section.heading && String(section.text || '').trim()).map(section => ({ heading: String(section.heading).slice(0, 140), level: 1, text: String(section.text).slice(0, 40_000) })));
+  sections = uniqueHeadings(sections);
   if (brief.found === false || sections.length < 2) throw new Error(`the chat has nothing about "${job.focus}"${brief.summary ? `: ${String(brief.summary).slice(0, 200)}` : ''}`);
   const title = String(brief.courseTitle || job.focus).slice(0, 200);
-  withLock(lib.root, () => writeJson(lib.paths.jobSections(job.id), { type: 'chat', title, chatTitle: chat.title, project: chat.cwd ? basename(chat.cwd) : '', sections }));
+  withLock(lib.root, () => writeJson(lib.paths.jobSections(job.id), { type: 'chat', title, chatTitle: chat.title, project: chat.cwd ? basename(chat.cwd) : '', sections, briefCheck }));
   const candidate = { id: 's1', kind: 'chat', url: null, title, channel: chat.title, lengthMin: null, level: null, why: 'Your chat', recommended: true };
   const category = job.category === 'General' && brief.category ? String(brief.category).trim().slice(0, 60) || job.category : job.category;
-  save({ candidates: [candidate], picks: ['s1'], courseTitle: title, summary: String(brief.summary || '').slice(0, 400), category, step: 'fetch' });
+  save({ asks: cleanAsks(brief.asks), candidates: [candidate], picks: ['s1'], courseTitle: title, summary: String(brief.summary || '').slice(0, 400), category, step: 'fetch' });
 }
 
 async function research(lib, job, save, io) {
@@ -627,7 +646,7 @@ function fetchChatBrief(lib, job, source) {
   return {
     usable: true,
     meta: { title: brief.title },
-    data: { v: 1, id: source.id, kind: 'chat', url: null, title: brief.title, chatId: job.chat, chatTitle: brief.chatTitle, project: brief.project, sections: brief.sections },
+    data: { v: 1, id: source.id, kind: 'chat', url: null, title: brief.title, chatId: job.chat, chatTitle: brief.chatTitle, project: brief.project, sections: brief.sections, briefCheck: brief.briefCheck || null },
   };
 }
 
@@ -779,7 +798,7 @@ function material(source, from, to, sections, budget) {
  * and questions, then a third sees only the page and answers them blind. What fails gets one
  * repair; what still fails is dropped. A concept left with no closing question gets a plain one.
  */
-async function makePage({ lib, io, page, concepts, sourceUrls, isStopping, onStep, writeRequest }) {
+async function makePage({ lib, io, page, concepts, sourceUrls, material, otherTitles, isStopping, onStep, writeRequest }) {
   const conceptIds = concepts.map(concept => concept.id);
   const ask = async (prompt, schema, tools = []) => {
     const call = () => io.askStructured({ prompt, schema, tools, model: lib.settings.models.build, cwd: lib.root, onRateLimit: recordUsage });
@@ -800,16 +819,33 @@ async function makePage({ lib, io, page, concepts, sourceUrls, isStopping, onSte
     const reading = await ask(readerPrompt({ page, markdown, terms: [...(repair?.terms || []), ...aids.terms], quick: aids.quick, closing: aids.closing }), READER_SCHEMA);
     return applyReader(aids, reading, conceptIds);
   };
+  // A fix comes back as the sections it changes, so mending a page never regrows the rest of it.
+  const patch = async fix => {
+    const answer = await ask(patchPrompt({ page, markdown, material, ...fix }), PATCH_SCHEMA);
+    return patchSections(markdown, answer.changes) || markdown;
+  };
+  const checkSource = async () => tidySourceCheck(await ask(sourceCheckPrompt({ page, markdown, material, otherTitles }), SOURCE_CHECK_SCHEMA), markdown);
   onStep(`writing ${page.title}`);
   let markdown = String((await ask(writeRequest([]), PAGE_SCHEMA)).markdown || '');
+  // The page against its material, both ways: what it gets wrong, what it leaves out.
+  onStep(`holding ${page.title} against its source`);
+  const firstCheck = await checkSource();
+  let found = firstCheck;
+  if (found.wrong.length || found.dropped.length) {
+    onStep(`fixing what ${page.title} got wrong or left out`);
+    markdown = await patch({ wrong: found.wrong, dropped: found.dropped });
+    found = await checkSource();
+  }
   let aids = await teachAndRead(markdown, null);
-  const stats = { asked: aids.quick.length + aids.closing.length + aids.failed.length, failed: aids.failed.length, unknown: aids.unknown.length, missing: aids.missing.length, rewritten: false, repaired: false };
+  const stats = {
+    asked: aids.quick.length + aids.closing.length + aids.failed.length, failed: aids.failed.length, unknown: aids.unknown.length, missing: aids.missing.length, rewritten: false, repaired: false,
+    sourceCheck: { wrong: firstCheck.wrong.length, dropped: firstCheck.dropped.length, leftWrong: found.wrong.map(item => item.quote), leftDropped: found.dropped.map(item => item.fact) },
+  };
   if (aids.missing.length) {
-    // The page left out something it had to cover: it's written again, and so is the rest.
+    // The page left out something it had to cover: those sections are mended, the rest kept.
     stats.rewritten = true;
     onStep(`adding what ${page.title} left out`);
-    const rewrite = await ask(writeRequest(aids.missing), PAGE_SCHEMA);
-    markdown = String(rewrite.markdown || markdown);
+    markdown = await patch({ missing: aids.missing });
     aids = await teachAndRead(markdown, null);
   } else if (aids.failed.length || aids.unknown.length || aids.untested.length) {
     stats.repaired = true;
@@ -818,8 +854,13 @@ async function makePage({ lib, io, page, concepts, sourceUrls, isStopping, onSte
   // Last, so it reads what the learner will. A failed call stops the build like any other: a
   // page is never saved unchecked.
   onStep(`checking the facts in ${page.title}`);
-  const found = await ask(verifyPrompt({ page, markdown, sources: sourceUrls, quick: aids.quick, closing: aids.closing }), VERIFY_SCHEMA, ['WebSearch', 'WebFetch']);
-  const { disputes, rejected } = tidyDisputes(found, { markdown, sourceUrls, checkIds: [...aids.quick, ...aids.closing].map(check => check.id) });
+  const checked = await ask(verifyPrompt({ page, markdown, sources: sourceUrls, quick: aids.quick, closing: aids.closing }), VERIFY_SCHEMA, ['WebSearch', 'WebFetch']);
+  const web = tidyDisputes(checked, { markdown, sourceUrls, checkIds: [...aids.quick, ...aids.closing].map(check => check.id) });
+  // What the source check still found contradicted gets a box too, while its words are on the page.
+  const map = pageMap(markdown);
+  const fromSource = sourceDisputes(found.wrong).filter(dispute => quoteState(dispute.quote, map) !== 'missing');
+  const disputes = [...fromSource, ...web.disputes].slice(0, MAX_DISPUTES);
+  const rejected = web.rejected;
   aids = holdBack(aids, disputes, markdown);
   stats.disputed = disputes.length;
   stats.flagsRejected = rejected;
@@ -861,6 +902,8 @@ async function writePages(lib, job, save, io, isStopping) {
         page,
         concepts,
         sourceUrls: pageSources.map(source => source?.url).filter(Boolean),
+        material: parts.join('\n\n'),
+        otherTitles: course.pages.filter(other => other.n !== page.n).map(other => other.title),
         isStopping,
         onStep: text => save({ message: `Page ${position + 1}/${course.pages.length}: ${text}` }),
         writeRequest: missing => pagePrompt({

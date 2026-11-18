@@ -11,6 +11,9 @@
 import { diagramBlock } from './diagram.mjs';
 import { parseTime, watchUrl } from './sources.mjs';
 
+/** The mark after something Claude added from its own knowledge: "(added)", or "(added; why)". */
+export const ADDED_MARK = /\((added)(?:[;,:][^)\n]*)?\)/;
+
 const INLINE = new RegExp([
   /`([^`\n]+)`/.source, // 1 code
   /\*\*(.+?)\*\*/.source, // 2 bold
@@ -19,7 +22,7 @@ const INLINE = new RegExp([
   /\[([^\]\n]+)\]\(([^)\s]+)\)/.source, // 6, 7 link
   /(?<![\w*])\*(?![\s*])([^*\n]+?)\*(?![\w*])/.source, // 8 italic
   /(?<![\w_])_(?![\s_])([^_\n]+?)_(?![\w_])/.source, // 9 italic
-  /\((added)\)/.source, // 10 added
+  ADDED_MARK.source, // 10 added
   /(https?:\/\/[^\s)<>\]]+[^\s)<>\].,;:!?'"])/.source, // 11 bare url
 ].join('|'), 'g');
 
@@ -68,6 +71,57 @@ export function parseInline(text, ctx = {}, style = {}) {
 }
 
 const FENCE = /^\s*(`{3,}|~{3,})\s*([\w+#.-]*)/;
+
+const headingKey = text => String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/** A page's Markdown cut at its ## headings, fences respected: the text before the first one has heading ''. */
+export function splitSections(markdown) {
+  const parts = [{ heading: '', lines: [] }];
+  let fence = null;
+  for (const line of String(markdown ?? '').split('\n')) {
+    if (fence) {
+      if (line.trim().startsWith(fence)) fence = null;
+    } else {
+      const open = line.match(FENCE);
+      if (open) fence = open[1];
+      else if (/^##(?!#)\s+\S/.test(line)) {
+        parts.push({ heading: line.replace(/^##\s+/, '').trim(), lines: [line] });
+        continue;
+      }
+    }
+    parts.at(-1).lines.push(line);
+  }
+  return parts;
+}
+
+/**
+ * Sections changed in place: a change naming a ## heading on the page replaces that section (empty
+ * Markdown removes it), heading '' replaces the opening text, and a new heading is added after the
+ * section named in `after`, else before the Recap, else at the end. Everything else stays as it was.
+ */
+export function patchSections(markdown, changes) {
+  const parts = splitSections(markdown);
+  for (const change of changes || []) {
+    const heading = String(change?.heading ?? '').replace(/^#+\s*/, '').trim();
+    let text = String(change?.markdown ?? '').trim();
+    if (!headingKey(heading)) {
+      parts[0].lines = text ? text.split('\n') : [];
+      continue;
+    }
+    if (text && !/^##(?!#)\s/.test(text)) text = `## ${heading}\n\n${text}`;
+    const at = parts.findIndex((part, i) => i > 0 && headingKey(part.heading) === headingKey(heading));
+    if (at > 0) {
+      if (text) parts[at] = { heading, lines: text.split('\n') };
+      else parts.splice(at, 1);
+      continue;
+    }
+    if (!text) continue;
+    const after = parts.findIndex((part, i) => i > 0 && headingKey(part.heading) === headingKey(change.after));
+    const recap = parts.findIndex((part, i) => i > 0 && /^recap\b/i.test(part.heading));
+    parts.splice(after > 0 ? after + 1 : recap > 0 ? recap : parts.length, 0, { heading, lines: text.split('\n') });
+  }
+  return `${parts.map(part => part.lines.join('\n').trim()).filter(Boolean).join('\n\n')}\n`;
+}
 const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
 const RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const LIST = /^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$/;

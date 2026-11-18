@@ -141,7 +141,7 @@ export function outlinePrompt({ topic, title, category, sources, catalogue, asks
     `Plan a course on "${topic}" (working title: ${title}), from the sources below. ${LEARNER}`,
     '',
     ...(asks.length ? [
-      'The learner asked for all of these, and every one must get its own pages. In "covers", give the numbers each page teaches:',
+      'The learner asked for all of these, and each must be taught on at least one page. In "covers", give the numbers each page teaches:',
       ...asks.map((ask, number) => `${number}: ${ask}`),
       '',
     ] : []),
@@ -428,6 +428,7 @@ export const BRIEF_SCHEMA = {
     courseTitle: { type: 'string', description: 'A short title for the course' },
     summary: { type: 'string', description: 'One or two sentences: what the learner will understand afterwards' },
     category: { type: 'string', description: 'One of their category names if one fits, else a new short one' },
+    asks: { type: 'array', items: { type: 'string' }, description: 'Each separate thing the focus names, in its words' },
     sections: {
       type: 'array',
       maxItems: 15,
@@ -441,7 +442,7 @@ export const BRIEF_SCHEMA = {
       },
     },
   },
-  required: ['found', 'courseTitle', 'summary', 'category', 'sections'],
+  required: ['found', 'courseTitle', 'summary', 'category', 'asks', 'sections'],
 };
 
 export function chatBriefPrompt({ focus, title, project, cwd, categories }) {
@@ -459,12 +460,126 @@ export function chatBriefPrompt({ focus, title, project, cwd, categories }) {
     '- the code and commands that matter, as short excerpts in fenced blocks with a language;',
     '- the problems hit, how they were found, and how they were fixed;',
     '- how it was checked, and what to remember next time.',
+    'Leave none of these out, and state each one whole:',
+    '- every decision: all the options that were on the table, what the agent recommended, what the learner chose (they may differ) and why;',
+    '- every risk, caveat, rejected option, and every test or check a plan names;',
+    '- any numbered or ordered list the focus asks about (phases, steps, a fix plan): complete, in order, with its numbers and names, in one place;',
+    '- what was done and what is only planned: say which, plainly, and never describe a plan as shipped.',
+    'In "asks", list each separate thing the focus names, in its words (for example "the issues", "the decisions we made", "the step-by-step fix plan").',
     'Teach the engineering ideas underneath too (the general knowledge a reader needs to understand it), not only the story of this chat; put (added) after a fact you add from your own knowledge rather than from the chat or the code.',
     'Write for the learner, as "you". Never copy a secret: tokens, passwords, keys, connection strings or .env values stay out; write <hidden> instead.',
     'If the chat has nothing about the focus, set found to false, say so in the summary, and leave sections empty.',
     '',
     `Their categories: ${categories.join(', ') || '(none yet)'}`,
   ].filter(line => line !== '').join('\n');
+}
+
+export const BRIEF_CHECK_SCHEMA = {
+  type: 'object',
+  properties: {
+    wrong: { type: 'array', items: { type: 'object', properties: {
+      quote: { type: 'string', description: 'Copied exactly from brief.md' },
+      says: { type: 'string', description: 'What the chat really says' },
+      where: { type: 'string', description: 'Line numbers in chat.txt' },
+    }, required: ['quote', 'says', 'where'] } },
+    dropped: { type: 'array', items: { type: 'object', properties: {
+      fact: { type: 'string' },
+      where: { type: 'string', description: 'Line numbers in chat.txt' },
+      section: { type: 'string', description: 'The heading in brief.md it belongs under, exactly, or a new heading' },
+    }, required: ['fact', 'where', 'section'] } },
+    fixes: { type: 'array', items: { type: 'object', properties: {
+      heading: { type: 'string', description: 'Exactly as in brief.md to replace that section, or a new heading to add one' },
+      text: { type: 'string', description: 'The whole new text of the section, in Markdown' },
+    }, required: ['heading', 'text'] } },
+  },
+  required: ['wrong', 'dropped', 'fixes'],
+};
+
+/** The brief held against the chat it came from, both ways, and mended: the brief is a chat course's only source. */
+export function briefCheckPrompt({ focus }) {
+  return [
+    `A study brief was written from one of the learner's chats with their coding agent, for a course on: ${focus}`,
+    '',
+    'brief.md in the current folder is that brief. chat.txt is the whole chat it was written from, oldest first: the learner\'s messages (LEARNER), the agent\'s replies (CLAUDE), a line for each tool call, cut-down results, and marks where the chat was compacted (a summary written at a compaction can be wrong; the record around it is the truth).',
+    'Read brief.md whole. Read chat.txt whole too, in parts with Read (offset and limit), when it is under about 400 KB; otherwise Grep it for every topic of the brief and the focus, and Read the parts that matter.',
+    'Check the brief against the chat, both ways, for everything on the focus:',
+    '1. In "wrong", list every statement in the brief that the chat contradicts; that calls done something the chat only planned, or the other way round; that contradicts another part of the brief; or that the chat does not support and is not marked (added). Copy "quote" exactly from brief.md.',
+    '2. In "dropped", list everything on the focus that the chat has and the brief leaves out or only half states: each decision with all its options, what the agent recommended and what the learner chose; each risk, caveat and rejected option; each number, command, file and check; each step of a plan, with its number and name; open questions and reminders.',
+    '3. In "fixes", give the corrected whole text of every section that needs a change (its heading exactly as in brief.md), and a new section for what fits nowhere. Keep each section\'s correct content and style; only correct and add. Give a section once.',
+    'Never copy a secret: tokens, passwords, keys, connection strings or .env values; write <hidden> instead. If nothing is wrong or missing, return empty lists.',
+  ].join('\n');
+}
+
+// --- A page held against its material --------------------------------------------
+
+export const SOURCE_CHECK_SCHEMA = {
+  type: 'object',
+  properties: {
+    wrong: { type: 'array', items: { type: 'object', properties: {
+      quote: { type: 'string', description: 'Copied word for word from the page' },
+      kind: { type: 'string', enum: ['contradicts', 'unsupported'] },
+      problem: { type: 'string', description: 'What is wrong with it, plainly' },
+      correction: { type: 'string', description: 'What the material says instead, or that it should be marked (added) or removed' },
+    }, required: ['quote', 'kind', 'problem', 'correction'] } },
+    dropped: { type: 'array', items: { type: 'object', properties: {
+      fact: { type: 'string' },
+      where: { type: 'string', description: 'Where it is in the material: a heading or a time' },
+    }, required: ['fact', 'where'] } },
+  },
+  required: ['wrong', 'dropped'],
+};
+
+/** A written page against the material it was written from, both ways: what it gets wrong, what it leaves out. */
+export function sourceCheckPrompt({ page, markdown, material, otherTitles = [] }) {
+  return [
+    `Below are a page of a course, "${page.title}", and the material it was written from. Compare them, both ways. Use no outside knowledge to correct either: only compare.`,
+    (page.subtopics || []).length ? `The page was planned to cover: ${page.subtopics.join('; ')}.` : '',
+    otherTitles.length ? `Other pages of the course teach: ${otherTitles.join('; ')}.` : '',
+    '',
+    '1. In "wrong", list each claim on the page that the material contradicts (kind "contradicts"), and each specific claim about what the material is about (a name, number, file, command, result, decision, date, or what happened) that the material does not support and that is not marked (added) (kind "unsupported"). General knowledge that explains the material is not such a claim, and a sentence marked (added) is never "unsupported". Copy "quote" word for word from the page, leaving out marks like [12:34], [sec: ...] and (added).',
+    '2. In "dropped", list each fact of the material on what this page was planned to cover that the page does not teach: a decision with its options and reasons, a rejected option, a number, a command, a warning, a risk, a step, a result, a check. Leave out what belongs to the other pages, intros, sponsor segments and asides. Say where it is in the material.',
+    'Most pages have few problems, and empty lists are a good answer.',
+    '',
+    'THE PAGE:',
+    markdown,
+    '',
+    'THE MATERIAL:',
+    material,
+  ].filter(line => line !== '').join('\n');
+}
+
+export const PATCH_SCHEMA = {
+  type: 'object',
+  properties: {
+    changes: { type: 'array', items: { type: 'object', properties: {
+      heading: { type: 'string', description: 'An existing ## heading, exactly, to replace that section; "" for the text before the first ## heading; or a new heading to add a section' },
+      after: { type: ['string', 'null'], description: 'For a new section: the existing ## heading it follows' },
+      markdown: { type: 'string', description: 'The whole section as it should read, starting with its ## line (none for the opening text); empty to remove the section' },
+    }, required: ['heading', 'after', 'markdown'] } },
+  },
+  required: ['changes'],
+};
+
+/** Mends a page in place: only the sections that change come back, so a fix never regrows the page. */
+export function patchPrompt({ page, markdown, material, wrong = [], dropped = [], missing = [] }) {
+  return [
+    `Below are a page of a course, "${page.title}", and the material it was written from. Fix only what is listed. ${LEARNER}`,
+    '',
+    ...(wrong.length ? ['WRONG ON THE PAGE:', ...wrong.map(item => `- "${item.quote}": ${item.problem} ${item.correction}`), ''] : []),
+    ...(dropped.length ? ['FACTS OF THE MATERIAL THE PAGE LEAVES OUT (teach each one where it belongs):', ...dropped.map(item => `- ${item.fact}${item.where ? ` (${item.where})` : ''}`), ''] : []),
+    ...(missing.length ? ['PLANNED SUBTOPICS A READER COULD NOT LEARN FROM THE PAGE (teach each one properly):', ...missing.map(item => `- ${item}`), ''] : []),
+    'How to fix:',
+    '- Return only the ## sections you change, each whole, as it should read: its ## line, then its text. Use "" as the heading to change the text before the first ## heading. To add a section, give a new heading and, in "after", the existing heading it follows. Leave every other section out: it stays as it is.',
+    '- A claim the material contradicts: correct it from the material. A specific claim the material lacks: remove it, or replace it with what the material says; keep it only if it is general knowledge a reader needs, marked (added).',
+    '- Keep the page\'s style and marks: callouts (> [!example] ...), [m:ss] and [sec: Heading] cites, (added) after what is not from the material, fenced code with a language, ```mermaid diagrams.',
+    '- Change nothing else. A section stays about as long as it was, apart from what you add.',
+    '',
+    'THE PAGE:',
+    markdown,
+    '',
+    'MATERIAL:',
+    material,
+  ].join('\n');
 }
 
 // --- One page added by hand ----------------------------------------------------

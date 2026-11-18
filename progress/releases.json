@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.10.0",
+      "date": "2026-11-18",
+      "by": "Yousif",
+      "notes": [
+        "Learn checks each page against its source, and mends what's off",
+        "A course from a chat: its brief is checked against the chat first",
+        "Videos no longer read \"(added; ...)\" aloud; questions skip added text"
+      ]
+    },
+    {
       "version": "0.9.0",
       "date": "2026-11-16",
       "by": "Yousif",

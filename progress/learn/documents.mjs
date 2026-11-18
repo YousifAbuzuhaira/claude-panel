@@ -44,6 +44,21 @@ export function uniqueHeadings(sections) {
   });
 }
 
+/** A brief's sections with fixes in: a fix with a heading already there replaces that section's text; a new heading is added at the end. */
+export function mergeSections(sections, fixes) {
+  const key = text => String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const out = sections.map(section => ({ ...section }));
+  for (const fix of fixes || []) {
+    const heading = String(fix?.heading ?? '').replace(/^#+\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+    const text = String(fix?.text ?? '').trim().slice(0, 40_000);
+    if (!key(heading) || !text) continue;
+    const found = out.find(section => key(section.heading) === key(heading));
+    if (found) found.text = text;
+    else out.push({ heading, level: 1, text });
+  }
+  return out;
+}
+
 /** Sections longer than `max` cut into parts at paragraph ends: "Heading (part 2)". */
 export function cutLongSections(sections, max = SECTION_CHARS) {
   const out = [];

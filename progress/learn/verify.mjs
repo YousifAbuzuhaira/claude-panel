@@ -49,6 +49,33 @@ export function tidyDisputes(raw, { markdown, sourceUrls = [], checkIds = [] }) 
   return { disputes: disputes.slice(0, MAX_DISPUTES), rejected };
 }
 
+export const MAX_SOURCE_ITEMS = 12;
+
+/**
+ * What the source check found, tidied. A "wrong" quote must be on the page, or nothing can fix or
+ * box it; a sentence marked (added) never claimed to be the source's, so it can't be "unsupported".
+ */
+export function tidySourceCheck(raw, markdown) {
+  const map = pageMap(markdown);
+  const seen = new Set();
+  const wrong = [];
+  for (const item of raw?.wrong || []) {
+    const quote = String(item?.quote || '').trim();
+    const kind = item?.kind === 'contradicts' ? 'contradicts' : 'unsupported';
+    const problem = String(item?.problem || '').trim().slice(0, 600);
+    const correction = String(item?.correction || '').trim().slice(0, 600);
+    const state = quoteState(quote, map);
+    const key = tokens(quote).join(' ');
+    if (state === 'missing' || !problem || seen.has(key) || (kind === 'unsupported' && state === 'added')) continue;
+    seen.add(key);
+    wrong.push({ quote, kind, problem, correction });
+  }
+  const dropped = (raw?.dropped || [])
+    .map(item => ({ fact: String(item?.fact || '').trim().slice(0, 400), where: String(item?.where || '').trim().slice(0, 120) }))
+    .filter(item => item.fact);
+  return { wrong: wrong.slice(0, MAX_SOURCE_ITEMS), dropped: dropped.slice(0, MAX_SOURCE_ITEMS) };
+}
+
 /** Does this quote sit on a disputed passage? */
 function restsOn(quote, disputes, map) {
   const span = spanOf(quote, map);
@@ -77,10 +104,14 @@ function blockWords(block) {
   return inlineText(block.inlines);
 }
 
-/** A flag as the box a window draws. */
+/** A flag as the box a window draws. One from the source check has no link: the course's own source is the evidence. */
 export function disputeBlock(dispute, ctx = {}) {
-  return { t: 'callout', kind: 'disputed', title: [], blocks: markdownToBlocks(`${dispute.problem} ${dispute.correction} [Evidence](${dispute.evidence})`, ctx) };
+  const evidence = dispute.evidence ? ` [Evidence](${dispute.evidence})` : ' (What the course\'s source says.)';
+  return { t: 'callout', kind: 'disputed', title: [], blocks: markdownToBlocks(`${dispute.problem} ${dispute.correction}${evidence}`, ctx) };
 }
+
+/** What the source check still found wrong after the patch, as flags like the fact-check's. */
+export const sourceDisputes = wrong => (wrong || []).filter(item => item.kind === 'contradicts').map(item => ({ quote: item.quote, problem: item.problem, correction: item.correction, evidence: null, checks: [], source: true }));
 
 /** Each box goes under the block holding its quote; a quote across blocks, after the block it starts in. */
 export function placeDisputes(blocks, disputes, ctx = {}) {

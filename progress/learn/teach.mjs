@@ -2,12 +2,13 @@
 // A question stays only if its quote is really on the page, the quote isn't something Claude
 // added from its own knowledge, and a reader who saw only the page reached the same answer.
 import { createHash } from 'node:crypto';
-import { inlineText, parseInline } from './markdown.mjs';
+import { ADDED_MARK, inlineText, parseInline } from './markdown.mjs';
 
 const MIN_QUOTE_WORDS = 5;
 const MAX_QUICK = 12;
 const CITE = /\[(?:s\d{1,2}\s+)?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[-–]\s*\d{1,2}:\d{2}(?::\d{2})?)?\]|\[sec:[^\]]*\]/g;
-const ADDED = /\(added\)/g;
+const ADDED = new RegExp(ADDED_MARK.source, 'g');
+const MARK_AFTER_SENTENCE = new RegExp(`([.!?])\\s*${ADDED_MARK.source}`, 'g');
 
 export const tokens = text => String(text ?? '').toLowerCase().replace(CITE, ' ').replace(ADDED, ' ').match(/[\p{L}\p{N}]+/gu) || [];
 
@@ -31,12 +32,12 @@ export function shuffled(list, random = Math.random) {
 
 /** The page's words in order, each knowing whether its sentence was marked (added). */
 export function pageMap(markdown) {
-  // "(added)" follows its sentence: pulled inside, so splitting keeps it with that sentence.
-  const text = String(markdown ?? '').replace(/([.!?])\s*\(added\)/g, ' (added)$1');
+  // "(added)" (or "(added; why)") follows its sentence: pulled inside, so splitting keeps it with that sentence.
+  const text = String(markdown ?? '').replace(MARK_AFTER_SENTENCE, ' (added)$1');
   const words = [];
   const added = [];
   for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
-    const mark = /\(added\)/.test(sentence);
+    const mark = ADDED_MARK.test(sentence);
     for (const word of tokens(sentence)) {
       words.push(word);
       added.push(mark);
@@ -104,8 +105,9 @@ export function tidyAids(raw, { markdown, conceptIds, headings }, random = Math.
   for (const item of raw.closing || []) {
     const q = String(item?.q || '').trim();
     if (!q) continue;
+    // Like a quick check, it rests on what the source says, never on something Claude added.
     const state = quoteState(item.quote, map);
-    if (state === 'missing') {
+    if (state !== 'sourced') {
       failed.push({ q, reason: reasonOf(state) });
       continue;
     }
