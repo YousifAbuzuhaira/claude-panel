@@ -164,6 +164,7 @@ export function applyReader(aids, reading, conceptIds) {
     failed,
     unknown: [...new Set((reading?.unknown || []).map(word => String(word).trim()).filter(word => isTerm(word) && !named.has(word.toLowerCase())))],
     missing: (reading?.missing || []).map(String).filter(Boolean),
+    unclear: (reading?.unclear || []).map(String).filter(Boolean).slice(0, 8),
     untested: conceptIds.filter(id => !tested.has(id)),
   };
 }

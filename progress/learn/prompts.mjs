@@ -5,7 +5,7 @@ const LEARNER = 'The learner is a strong software engineer, but assume they know
 
 // Diagrams: Mermaid that learn/diagram.mjs can lay out (anything else shows as code).
 export const DIAGRAM_RULE = [
-  '- Anything that is a flow, an architecture, a request between parts, a state machine or a pipeline gets a diagram, as a ```mermaid block right after the text it explains; add as many as help the reader see it. Only `flowchart TD`, `flowchart LR` or `sequenceDiagram`. At most 12 boxes, labels of 4 words or fewer, edge labels of 1-3 words; no subgraph, classDef, style or HTML. Skip a diagram that would only repeat a list, and never add one for decoration. Use a table to compare things side by side.',
+  '- A flow of 3 or more steps between parts (a request path, an architecture, a state machine, a pipeline) gets one diagram, as a ```mermaid block right after the text it explains. Draw each flow once in a course: if an earlier page drew it, refer to that page instead. Only `flowchart TD`, `flowchart LR` or `sequenceDiagram`. At most 12 boxes, labels of 4 words or fewer, edge labels of 1-3 words; no subgraph, classDef, style or HTML. Skip a diagram that would only repeat a list, and never add one for decoration. Use a table to compare things side by side.',
 ].join('\n');
 const CHAT_DIAGRAMS = 'When a picture would make an answer clearer, you may include one small diagram as a ```mermaid block (flowchart TD/LR or sequenceDiagram only, at most 10 boxes, short labels); the app draws it.';
 
@@ -92,6 +92,7 @@ export const OUTLINE_SCHEMA = {
           covers: { type: 'array', items: { type: 'number' }, description: 'The numbers of the asks this page teaches' },
           outcomes: { type: 'array', items: { type: 'string' }, description: 'What the learner can do after this page, 1-3 items, each starting with a verb' },
           subtopics: { type: 'array', items: { type: 'string' }, description: 'Everything the page covers, as short items' },
+          teaches: { type: 'array', maxItems: 8, items: { type: 'string' }, description: 'The terms and mechanisms this page owns: it explains them in full, later pages only refer to them' },
           sourceId: { type: 'string', description: 'The main source this page teaches from' },
           fromSec: { type: ['number', 'null'], description: 'For a video: where the part this page covers starts, in seconds' },
           toSec: { type: ['number', 'null'], description: 'For a video: where it ends, in seconds' },
@@ -129,7 +130,7 @@ export const OUTLINE_SCHEMA = {
             },
           },
         },
-        required: ['title', 'part', 'covers', 'outcomes', 'subtopics', 'sourceId', 'fromSec', 'toSec', 'sections', 'support', 'concepts'],
+        required: ['title', 'part', 'covers', 'outcomes', 'subtopics', 'teaches', 'sourceId', 'fromSec', 'toSec', 'sections', 'support', 'concepts'],
       },
     },
   },
@@ -147,13 +148,13 @@ export function outlinePrompt({ topic, title, category, sources, catalogue, asks
     ] : []),
     ...(missing.length ? [`Your last plan had no page for: ${missing.join('; ')}. Plan those too.`, ''] : []),
     'Rules:',
-    '- Cover everything the sources teach on what the learner asked. One main idea per page, as many pages as that takes, at most 40. Never leave something out to keep the course short; never add a page just to fill it out.',
+    '- Cover everything the sources teach on what the learner asked; never leave something out. A section of a source is not a page: a page is one main idea, drawing on about 300-600 words of a brief, 600-1,500 words of a document or web page, or 800-2,000 words of a transcript. Merge small sections on one idea; split only where each half has its own idea. Never add a page just to fill out the course. At most 40 pages.',
     '- Order the pages so that each one only needs what came before it (not necessarily source order): what a thing is and why it exists before how to configure it, tune it or use it with something else. Start from what a software engineer already knows.',
     '- Group the pages into 2-7 parts, each a short name in "part", with a part\'s pages next to each other. A short course may have one part.',
     '- Give each page 1-3 outcomes: what the learner will be able to do after it, starting with a verb (trace, choose, explain why, spot, fix), never "understand" or "know". The page and its questions will be built from these.',
-    '- The last page is a practical task that uses the whole course on something real, so the learner pulls it together.',
     '- Each page teaches from one main source: a time window of a video (fromSec/toSec, using the chapters and timestamps) or named headings of a web page, document or brief (sections, copied exactly). Add support sources where they help, especially written docs that have the real commands for a video page.',
     '- Skip intros, outros, sponsor segments, channel promotion and off-topic tangents.',
+    '- In "teaches", give each page up to 8 terms or mechanisms it owns: the first page that needs one explains it in full, and later pages only refer back to it. Name each one the same way wherever it appears.',
     '- Tag each page with 1-6 concepts. A concept is one idea that can be explained and checked in a few minutes (e.g. "Docker named volumes", not "Docker"). Give a broader parent where one fits.',
     '- The learner keeps ONE catalogue of concepts across all courses. Before inventing a concept, look for the same idea in the catalogue, even under different wording, and reuse its id with match "existing". Only create a concept (id null, match "new") when nothing there is the same idea. Say why in "reason".',
     `- New concepts go in the "${category}" category; you don't set that.`,
@@ -166,7 +167,7 @@ export function outlinePrompt({ topic, title, category, sources, catalogue, asks
       ? [`### ${source.id}: video "${source.title}" by ${source.channel}, ${Math.round((source.durationSec || 0) / 60)} min`,
          source.chapters.length ? `Chapters:\n${source.chapters.map(chapter => `- ${chapter.start}s-${chapter.end}s ${chapter.title}`).join('\n')}` : 'No chapters.',
          'Transcript sample ([m:ss] at each line):', source.excerpt].join('\n')
-      : [`### ${source.id}: ${describeSource(source)}`, 'Headings with the start of each section:', source.excerpt].join('\n')),
+      : [`### ${source.id}: ${describeSource(source)}`, 'Its sections ([sec: heading] (words) and the text, or its start when the source is long):', source.excerpt].join('\n')),
   ].join('\n');
 }
 
@@ -180,7 +181,7 @@ export const PAGE_SCHEMA = {
   required: ['markdown'],
 };
 
-export function pagePrompt({ course, page, position, total, prevTitles, nextTitle, concepts, material, learned, missing = [] }) {
+export function pagePrompt({ course, page, position, total, prevTitles, nextTitle, concepts, material, learned, missing = [], budget = null, owners = null }) {
   return [
     `Write page ${position} of ${total} of the course "${course.title}": "${page.title}". ${LEARNER}`,
     page.note ? `This is a rewrite of the page, and the learner asked: "${page.note}". Follow that.` : '',
@@ -189,27 +190,32 @@ export function pagePrompt({ course, page, position, total, prevTitles, nextTitl
     page.subtopics.length ? `It must cover ALL of these: ${page.subtopics.join('; ')}.` : '',
     missing.length ? `Your last version left these out, so teach them properly this time: ${missing.join('; ')}.` : '',
     prevTitles.length ? `Earlier pages: ${prevTitles.join('; ')}.` : 'This is the first page.',
-    nextTitle ? `The next page is "${nextTitle}", so don't teach that here.` : 'This is the last page: make it a practical task that uses the whole course on something real.',
+    nextTitle ? `The next page is "${nextTitle}", so don't teach that here.` : 'This is the last page.',
     learned.length ? `The learner already knows: ${learned.join('; ')}. Build on that rather than re-explaining it.` : '',
+    owners?.mine.length ? `This page owns, and explains in full: ${owners.mine.join('; ')}.` : '',
+    owners?.earlier.length ? `Earlier pages explain these: at most one short clause here, only where a sentence needs it: ${owners.earlier.map(item => `${item.term} (page ${item.page})`).join('; ')}.` : '',
+    owners?.later.length ? `Later pages explain these: name them if you must, never teach them here: ${owners.later.map(item => item.term).join('; ')}.` : '',
     '',
     'Concepts this page must teach (id: name: definition):',
     ...concepts.map(concept => `- ${concept.id}: ${concept.name}: ${concept.definition}`),
     '',
     'How to write it:',
-    '- A full lesson: as long as it takes to cover everything above properly, and no longer. Cover it all; never skim something to save space. The page title is shown above it, so start with a short paragraph on why this matters, tied to something a software engineer already knows, then ## sections.',
+    budget
+      ? `- At most about ${budget} words of prose (code, tables and diagrams don't count); fewer is fine when the material is short. Never drop a fact of the material to stay under it: go over instead. Spend the words on what the material says and on the background a reader needs to follow it, never on saying a thing twice. The page title is shown above it, so start with one or two sentences on why this matters, then ## sections.`
+      : '- A full lesson: as long as it takes to cover everything above properly, and no longer. Cover it all; never skim something to save space. The page title is shown above it, so start with one or two sentences on why this matters, then ## sections.',
     '- Keep each ## section short and about one thing: quick questions sit between sections. Headings say the point ("Greedy search repeats itself"), not just a label ("Greedy search").',
     '- Teach in your own words. Never copy the transcript; it is speech, and the learner can watch the video for that.',
-    '- Never assume a word of this subject. Explain each one in plain words the first time it appears on this page, even if an earlier page did. Say what a thing is before you use its name. Keep notation out until the idea is clear, and read any formula out in words.',
-    '- Explain what it is, why it exists, how it works underneath, and how it is used in real work.',
-    '- Every concept gets at least one worked example with real values, walked through step by step so the reader sees what happens at each step. Start small enough to follow in your head, then show the real command or code in a fenced block with a language (```bash, ```yaml, ```ts...).',
+    '- Never assume a word of this subject: explain a word this page owns, or one no page owns, in plain words the first time it appears. A word an earlier page explained gets at most one short clause; the glossary explains it on hover. Say what a thing is before you use its name. Keep notation out until the idea is clear, and read any formula out in words.',
+    '- Where the material gives them, explain what a thing is, why it exists, how it works underneath and how it is used. A fact the material only mentions in passing needs a sentence, not a section.',
+    '- Use the material\'s own examples, values, code and commands, and walk through a process step by step where the reader must follow it, showing the real command or code in a fenced block with a language (```bash, ```yaml, ```ts...). Add an example of your own only when an idea can\'t be followed without one: then use obviously made-up toy values, mark it (added; illustrative), and never write code, names, files or numbers that look as if they came from the material. At most one example per idea.',
     '- Mark these with a callout, a quote block whose first line names its kind:',
     '  > [!example] A short title',
     '  > The worked example, which may hold code blocks and lists.',
-    '  [!key] for the one idea to remember from a section (at most a few on a page); [!warning] for a common mistake and how to spot it; [!analogy] for a comparison with something a software engineer already knows.',
-    '- Cite once per paragraph, at its end, not after every sentence: after something from a video, the time it is said as [m:ss] or [h:mm:ss] (when the material has more than one video, the video\'s id first, as in [s4 1:05]); after something from a web page, document or brief, [sec: Exact Heading].',
+    '  [!key] for the one idea to remember from a section (at most a few on a page); [!warning] for a common mistake and how to spot it; [!analogy] only for a comparison the material itself makes.',
+    '- Cite once per ## section, after the paragraph that draws most on the source, not after every paragraph: after something from a video, the time it is said as [m:ss] or [h:mm:ss] (when the material has more than one video, the video\'s id first, as in [s4 1:05]); after something from a web page, document or brief, [sec: Exact Heading].',
     '- When you add something that is NOT in the material below (a fact, a command, a caveat, an example of your own), put (added) right after that sentence, or once after a whole example.',
     DIAGRAM_RULE,
-    '- End with a short "## Recap" of the key points. Do not put any questions in the Markdown.',
+    '- End with "## Recap": 3-5 bullets of one line each, the key facts. Do not put any questions in the Markdown.',
     '',
     'MATERIAL:',
     material,
@@ -342,8 +348,9 @@ export const READER_SCHEMA = {
     },
     unknown: { type: 'array', items: { type: 'string' }, description: 'Words or notation you could not understand from the page' },
     missing: { type: 'array', items: { type: 'string' }, description: 'Listed subtopics the page does not really explain' },
+    unclear: { type: 'array', items: { type: 'string' }, description: 'Decisions or steps on the page you could not follow' },
   },
-  required: ['answers', 'closing', 'unknown', 'missing'],
+  required: ['answers', 'closing', 'unknown', 'missing', 'unclear'],
 };
 
 /** Sees only the page, and never the answers. */
@@ -356,6 +363,7 @@ export function readerPrompt({ page, markdown, terms, quick, closing }) {
     '2. For each open question, say whether you could answer it fully from this page alone.',
     '3. In "unknown", list each word or piece of notation you could not understand from the page, unless the glossary below explains it. Leave out everyday programming words, whole commands, values from examples, and the page\'s marks: [m:ss] and [sec: ...] are citations and (added) is a note.',
     (page.subtopics || []).length ? `4. In "missing", list any of these subtopics the page does not really explain: ${page.subtopics.join('; ')}.` : '4. Leave "missing" empty.',
+    '5. In "unclear", list each decision or step on the page you could not follow: why it was chosen, what it does, or what happens next isn\'t explained enough to act on. Most pages have none.',
     '',
     'GLOSSARY:',
     ...(terms.length ? terms.map(item => `- ${item.term}: ${item.def}`) : ['(none)']),
@@ -431,12 +439,12 @@ export const BRIEF_SCHEMA = {
     asks: { type: 'array', items: { type: 'string' }, description: 'Each separate thing the focus names, in its words' },
     sections: {
       type: 'array',
-      maxItems: 15,
+      maxItems: 30,
       items: {
         type: 'object',
         properties: {
           heading: { type: 'string', description: 'A short, distinct heading' },
-          text: { type: 'string', description: 'The section in Markdown: several paragraphs, with the code and commands that matter in fenced blocks' },
+          text: { type: 'string', description: 'The section in Markdown: its facts, dense, with the code and commands that matter in fenced blocks' },
         },
         required: ['heading', 'text'],
       },
@@ -445,7 +453,7 @@ export const BRIEF_SCHEMA = {
   required: ['found', 'courseTitle', 'summary', 'category', 'asks', 'sections'],
 };
 
-export function chatBriefPrompt({ focus, title, project, cwd, categories }) {
+export function chatBriefPrompt({ focus, title, project, cwd, categories, audience = 'team' }) {
   return [
     `The learner wants a course about something they did with their coding agent (Claude Code) in one of their chats${title ? `, "${title}"` : ''}${project ? `, in the project ${project}` : ''}. ${LEARNER}`,
     `What the course should cover: ${focus}`,
@@ -453,7 +461,7 @@ export function chatBriefPrompt({ focus, title, project, cwd, categories }) {
     'The file chat.txt in the current folder is that whole chat, oldest first: the learner\'s messages (LEARNER), the agent\'s replies (CLAUDE), a line for each tool call (commands run, files read and edited, with short before/after), cut-down results, and marks where the chat was compacted. It is long: do NOT read it whole. Search it with Grep for the words of the focus and its likely terms, then Read the parts that matter (offset and limit). Follow the thread: the problem, the attempts, what was decided, what was changed, how it was checked.',
     cwd ? `You may also read the project's files under ${cwd} (read only) to see the code as it is now; prefer what the code shows when the chat is unclear.` : '',
     '',
-    'Then write the study material a course will be built from: 6-15 sections, each several paragraphs, in teaching order, covering:',
+    'Then write the study material a course will be built from: one dense section per topic, as many as the chat needs (at most 30), in teaching order. Facts, decisions, steps and the code that matters, stated plainly and completely; leave the teaching to the course. Cover:',
     '- the problem and its context, in plain terms;',
     '- what was built or changed, and how it works underneath;',
     '- why: each decision with the options that were rejected and the reasons;',
@@ -466,7 +474,10 @@ export function chatBriefPrompt({ focus, title, project, cwd, categories }) {
     '- any numbered or ordered list the focus asks about (phases, steps, a fix plan): complete, in order, with its numbers and names, in one place;',
     '- what was done and what is only planned: say which, plainly, and never describe a plan as shipped.',
     'In "asks", list each separate thing the focus names, in its words (for example "the issues", "the decisions we made", "the step-by-step fix plan").',
-    'Teach the engineering ideas underneath too (the general knowledge a reader needs to understand it), not only the story of this chat; put (added) after a fact you add from your own knowledge rather than from the chat or the code.',
+    'Name the engineering ideas a reader needs to follow it (the general knowledge underneath), with a line on each where it matters; the course teaches them. Put (added) after a fact you add from your own knowledge rather than from the chat or the code.',
+    audience === 'self'
+      ? 'The learner was in this chat: leave out the background they lived through (what their project is, why they asked), but keep every fact, decision, step and check.'
+      : 'Write it so that a teammate who was not in the chat can follow it: say what the project and its parts are where it matters.',
     'Write for the learner, as "you". Never copy a secret: tokens, passwords, keys, connection strings or .env values stay out; write <hidden> instead.',
     'If the chat has nothing about the focus, set found to false, say so in the summary, and leave sections empty.',
     '',
@@ -561,18 +572,20 @@ export const PATCH_SCHEMA = {
 };
 
 /** Mends a page in place: only the sections that change come back, so a fix never regrows the page. */
-export function patchPrompt({ page, markdown, material, wrong = [], dropped = [], missing = [] }) {
+export function patchPrompt({ page, markdown, material, wrong = [], dropped = [], missing = [], unclear = [], tighten = null }) {
   return [
     `Below are a page of a course, "${page.title}", and the material it was written from. Fix only what is listed. ${LEARNER}`,
     '',
     ...(wrong.length ? ['WRONG ON THE PAGE:', ...wrong.map(item => `- "${item.quote}": ${item.problem} ${item.correction}`), ''] : []),
     ...(dropped.length ? ['FACTS OF THE MATERIAL THE PAGE LEAVES OUT (teach each one where it belongs):', ...dropped.map(item => `- ${item.fact}${item.where ? ` (${item.where})` : ''}`), ''] : []),
     ...(missing.length ? ['PLANNED SUBTOPICS A READER COULD NOT LEARN FROM THE PAGE (teach each one properly):', ...missing.map(item => `- ${item}`), ''] : []),
+    ...(unclear.length ? ['DECISIONS OR STEPS A READER COULD NOT FOLLOW (explain each enough to follow, from the material):', ...unclear.map(item => `- ${item}`), ''] : []),
+    ...(tighten ? [`THE PAGE IS TOO LONG: about ${tighten.words} words of prose against at most about ${tighten.budget}. Shorten the sections that run long by cutting what repeats, restates, signposts or pads, and examples the material doesn't give. Keep every fact of the material, every decision with its options and reasons, every number, step and warning, and the background a reader needs to follow them. Never shorten by dropping one of those.`, ''] : []),
     'How to fix:',
     '- Return only the ## sections you change, each whole, as it should read: its ## line, then its text. Use "" as the heading to change the text before the first ## heading. To add a section, give a new heading and, in "after", the existing heading it follows. Leave every other section out: it stays as it is.',
     '- A claim the material contradicts: correct it from the material. A specific claim the material lacks: remove it, or replace it with what the material says; keep it only if it is general knowledge a reader needs, marked (added).',
     '- Keep the page\'s style and marks: callouts (> [!example] ...), [m:ss] and [sec: Heading] cites, (added) after what is not from the material, fenced code with a language, ```mermaid diagrams.',
-    '- Change nothing else. A section stays about as long as it was, apart from what you add.',
+    tighten ? '- Change nothing else.' : '- Change nothing else. A section stays about as long as it was, apart from what you add.',
     '',
     'THE PAGE:',
     markdown,

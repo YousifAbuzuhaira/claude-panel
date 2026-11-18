@@ -23,7 +23,7 @@ const { readDocument } = await import('../documents.mjs');
 const CHUNKS = Array.from({ length: 60 }, (_, i) => ({ t: i * 30, text: `part ${i} about volumes` }));
 
 /** Stand-ins for everything a build reaches out to. `answers` maps a schema to Claude's answer. */
-function fakeIo({ pageFails = 0, brief = 'some', disputes = [] } = {}) {
+function fakeIo({ pageFails = 0, brief = 'some', disputes = [], briefFixes = [], source = null, changes = [] } = {}) {
   const calls = { pages: 0, prompts: [] };
   let failuresLeft = pageFails;
   return {
@@ -44,10 +44,21 @@ function fakeIo({ pageFails = 0, brief = 'some', disputes = [] } = {}) {
         calls.prompts.push(prompt);
         calls.tools = [...(calls.tools || []), tools];
         if (schema.properties.disputes) return { disputes };
+        // The brief held against the chat, a page against its material, and a patch.
+        if (schema.properties.fixes) return { wrong: [], dropped: briefFixes.length ? [{ fact: 'a dropped fact', where: '12', section: 'x' }] : [], fixes: briefFixes };
+        if (schema.properties.dropped) {
+          calls.sourceChecks = (calls.sourceChecks || 0) + 1;
+          return source || { wrong: [], dropped: [] };
+        }
+        if (schema.properties.changes) {
+          calls.patches = (calls.patches || 0) + 1;
+          return { changes };
+        }
         if (schema.properties.found) {
           if (brief === 'nothing') return { found: false, courseTitle: 'x', summary: 'The chat is about something else.', category: 'x', sections: [] };
           return {
             found: true,
+            asks: ['the browser link fix', 'the browser link fix', 'how it was checked'],
             courseTitle: 'Opening a browser from WSL',
             summary: 'Why a link opened from WSL can die, and the one-time link that fixes it.',
             category: 'Windows',
@@ -390,6 +401,14 @@ describe('helpers', () => {
     assert.deepEqual([page.fromSec, page.toSec], [0, 600]);
   });
 
+  test('an outline keeps what each page owns, tidied and at most 8; an older plan with none owns nothing', () => {
+    const teaches = ['  JWT  verify ', '', 'Prefetch', ...Array.from({ length: 10 }, (_, k) => `term ${k}`)];
+    const [page, older] = cleanOutline([{ title: 'T', sourceId: 's1', teaches, concepts: [{ name: 'x' }] }, { title: 'U', sourceId: 's1', concepts: [{ name: 'y' }] }], [{ id: 's1', kind: 'chat', sections: [] }]);
+    assert.deepEqual(page.teaches.slice(0, 2), ['JWT verify', 'Prefetch']);
+    assert.equal(page.teaches.length, 8);
+    assert.deepEqual(older.teaches, []);
+  });
+
   test('the lock nests within one process and is gone afterwards', () => {
     const lib = openLibrary();
     const value = withLock(lib.root, () => withLock(lib.root, () => 7));
@@ -576,7 +595,30 @@ describe('a course from a Claude chat', () => {
     assert.equal(course.sources[0].kind, 'chat');
     const category = readCatalogue(lib).categories.find(item => item.id === course.category);
     assert.equal(category.name, 'Windows', "with no category given, the brief's is used");
-    assert.ok(calls.prompts.at(-1).includes('### Chat brief s1'));
+    assert.ok(calls.prompts.at(-1).includes('### Chat brief s1') || calls.prompts.some(prompt => prompt.includes('### Chat brief s1')));
+    assert.deepEqual(course.asks, ['the browser link fix', 'how it was checked'], 'the brief names the asks, once each');
+    assert.equal(course.audience, 'team');
+  });
+
+  test('the brief is held against the chat with read-only tools, and its fixes go in', async () => {
+    const lib = openLibrary();
+    const job = createJob(lib, { chat: chatId, focus: 'the browser link fix', audience: 'self' });
+    assert.equal(job.audience, 'self');
+    const { io, calls } = fakeIo({ briefFixes: [{ heading: 'The fix', text: 'Return a one-time link, checked.' }, { heading: 'Who does it', text: 'You write and review.' }] });
+    await runJob(lib, job.id, io);
+    const done = readJob(lib, job.id);
+    assert.equal(done.state, 'done', done.error || '');
+    assert.deepEqual(calls.tools[1], ['Read', 'Grep'], 'the check reads the chat and the brief, nothing else');
+    assert.ok(calls.prompts[1].includes('brief.md'));
+    assert.ok(calls.prompts[0].includes('was in this chat'), 'the brief knows who the course is for');
+    const course = readCourse(lib, done.courseId);
+    assert.equal(course.audience, 'self');
+    const source = readJson(lib.paths.source(course.id, 's1'));
+    assert.equal(source.sections.find(section => section.heading === 'The fix').text, 'Return a one-time link, checked.');
+    assert.ok(source.sections.some(section => section.heading === 'Who does it'), 'a new section is added');
+    assert.deepEqual(source.briefCheck.dropped, ['a dropped fact']);
+    assert.equal(source.briefCheck.fixed, 2);
+    assert.ok(!existsSync(lib.paths.jobChat(job.id)), "the chat's text is gone after both runs");
   });
 
   test('a chat with nothing about the focus fails the build, saying so', async () => {
@@ -801,6 +843,45 @@ describe('the fact-check in a build', () => {
     if (saved.state === 'waiting-picks') return;
     const page = readPage(lib, saved.courseId, 1);
     assert.ok(Array.isArray(page.disputes));
+  });
+
+  test('the source check: what it finds is patched in place, and what stays contradicted is boxed with no link', async () => {
+    const wrongQuote = 'Volumes keep your data safe when a container is removed';
+    const { io, calls } = fakeIo({
+      source: { wrong: [{ quote: wrongQuote, kind: 'contradicts', problem: 'The source says only named volumes.', correction: 'Anonymous ones go with the container.' }], dropped: [{ fact: 'docker run -v', where: 'Syntax' }] },
+      changes: [{ heading: 'Part', after: null, markdown: '## Part\nSaid at [1:05] (added). See [sec: Syntax].\n\nVolumes keep your data safe when a container is removed, the page still says.' }],
+    });
+    const lib = openLibrary();
+    const job = createJob(lib, { topic: 'Sourced volumes', category: 'Docker', mode: 'auto' });
+    await runJob(lib, job.id, io);
+    const saved = readJob(lib, job.id);
+    assert.equal(saved.state, 'done', saved.error || '');
+    const page = readPage(lib, saved.courseId, 1);
+    assert.ok(calls.patches >= 1, 'a patch, not a rewrite');
+    assert.equal(calls.pages, 3, 'each page written once');
+    assert.ok(page.markdown.includes('the page still says'), 'the patched section is in');
+    assert.ok(page.markdown.includes('## Recap'), 'the rest is kept');
+    const box = page.disputes.find(dispute => dispute.source);
+    assert.equal(box.evidence, null);
+    assert.equal(page.stats.sourceCheck.wrong, 1);
+    assert.deepEqual(page.stats.sourceCheck.leftDropped, ['docker run -v']);
+    assert.ok(page.blocks.some(block => block.t === 'callout' && block.kind === 'disputed'));
+  });
+
+  test('a page over its size is tightened once, and kept only if the check finds nothing more missing', async () => {
+    const long = `## Part\n${'Volumes keep your data safe when a container is removed. '.repeat(400)}\n\n## Recap\nDone.`;
+    const { io, calls } = fakeIo({ changes: [{ heading: 'Part', after: null, markdown: '## Part\nVolumes keep your data safe when a container is removed.' }] });
+    const write = io.askStructured;
+    io.askStructured = async args => (args.schema.properties.markdown ? (calls.pages++, { markdown: long }) : write(args));
+    const lib = openLibrary();
+    const job = createJob(lib, { topic: 'Long volumes', category: 'Docker', mode: 'auto' });
+    await runJob(lib, job.id, io);
+    const saved = readJob(lib, job.id);
+    assert.equal(saved.state, 'done', saved.error || '');
+    const page = readPage(lib, saved.courseId, 1);
+    assert.equal(page.stats.tightened, 'kept');
+    assert.ok(page.stats.words < page.stats.wordsWritten);
+    assert.ok(page.stats.budget >= 600 && page.stats.budget <= 2400);
   });
 
   test('the check gets the web and nothing else', async () => {

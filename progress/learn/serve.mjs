@@ -365,8 +365,8 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       return removeAdvisorChat(lib, chatId);
     },
 
-    'build.start': ({ topic, category, mode, link, file, name, chat, focus }) => {
-      const job = createJob(lib, { topic, category, mode, link, file, name, chat, focus });
+    'build.start': ({ topic, category, mode, link, file, name, chat, focus, audience }) => {
+      const job = createJob(lib, { topic, category, mode, link, file, name, chat, focus, audience });
       startDaemon(lib, job.id);
       return job;
     },

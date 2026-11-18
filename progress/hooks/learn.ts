@@ -35,11 +35,12 @@ export const isLearnView = (name: string): name is LearnView => (LEARN_VIEWS as 
  * the chat's saved record; nothing is sent to this chat). Leading dashes are taken off, so the
  * focus can't be read as a flag.
  */
-export function courseArgv({ pluginRoot, sessionId, focus, isWindows = false }: { pluginRoot: string; sessionId: string; focus: string; isWindows?: boolean }): string[] {
+export function courseArgv({ pluginRoot, sessionId, focus, isWindows = false, audience = 'self' }: { pluginRoot: string; sessionId: string; focus: string; isWindows?: boolean; audience?: 'self' | 'team' }): string[] {
   const what = focus.replace(/\s+/g, ' ').trim().replace(/^-+\s*/, '').slice(0, 300)
   // On Windows `bash` is WSL's launcher (or missing): Node runs the helper straight, as the server does.
   const helper = isWindows ? ['node', `${pluginRoot}/learn/learn.mjs`] : ['bash', `${pluginRoot}/learn/learn.sh`]
-  return [...helper, 'build', 'start', '--chat', sessionId, '--focus', what]
+  // /course is typed inside the chat itself, so by default the course is for the one who was in it.
+  return [...helper, 'build', 'start', '--chat', sessionId, '--audience', audience, '--focus', what]
 }
 
 const text = (value: unknown, max = 120) => (typeof value === 'string' ? value.slice(0, max) : '')

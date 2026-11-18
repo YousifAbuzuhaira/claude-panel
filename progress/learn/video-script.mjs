@@ -132,7 +132,8 @@ const recapOf = page => (page.blocks || []).at(-1)?.items?.map(item => (item.inl
 
 function watcherRequest(page, { quiz }, heard) {
   return readerPrompt({
-    page: { title: page.title, subtopics: [...(page.outcomes || []), ...recapOf(page)] },
+    // What the page set out to teach; an older page, saved without its subtopics, falls back to its recap.
+    page: { title: page.title, subtopics: [...(page.outcomes || []), ...((page.subtopics || []).length ? page.subtopics : recapOf(page))] },
     markdown: heard,
     terms: [],
     quick: quiz.map(q => ({ id: q.id, q: q.q, options: q.options.map(option => ({ text: option.text })) })),

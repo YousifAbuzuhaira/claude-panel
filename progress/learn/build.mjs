@@ -24,13 +24,14 @@ import { MAX_DISPUTES, holdBack, placeDisputes, sourceDisputes, tidyDisputes, ti
 import { ensureVoice, record } from './voice.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
 import {
-  condenseTranscript, fetchPage, formatTime, isExtractorError, isPlaylist, isYouTube, sectionsOutline, sectionsText,
+  condenseTranscript, fetchPage, formatTime, isExtractorError, isPlaylist, isYouTube, outlineExcerpt, sectionsText,
   transcriptText, watchUrl, youTubeId, ytCaptions, ytInfo, ytPlaylist, ytSearch,
 } from './sources.mjs';
 import { ensureYtDlp } from './deps.mjs';
 import { MAX_DOCUMENT_BYTES, documentType, mergeSections, readDocument, uniqueHeadings } from './documents.mjs';
 import { CONFIG_DIR, toLocalPath } from './settings.mjs';
 import { readJson, withLock, writeJson } from './store.mjs';
+import { countWords, isOver, keepTighter, learnedFor, ownerMap, pageBudget, proseWords } from './shape.mjs';
 
 const LEARN_MJS = fileURLToPath(new URL('./learn.mjs', import.meta.url));
 const PAGES_AT_ONCE = 3;
@@ -157,7 +158,7 @@ function checkDocument(file, name) {
   return { path, fileName };
 }
 
-export function createJob(lib, { topic, category, mode = 'auto', link = null, file = null, name = null, chat = null, focus = null }) {
+export function createJob(lib, { topic, category, mode = 'auto', link = null, file = null, name = null, chat = null, focus = null, audience = 'team' }) {
   const cleanTopic = String(topic || '').trim().slice(0, MAX_TOPIC);
   const cleanLink = link ? String(link).trim() : null;
   const document = file ? checkDocument(file, name) : null;
@@ -177,6 +178,8 @@ export function createJob(lib, { topic, category, mode = 'auto', link = null, fi
     fileName: document ? document.fileName : null,
     chat: chatId,
     focus: chatId ? cleanFocus : null,
+    // Who a course from a chat is for: a teammate (all the background) or the one who was in it.
+    audience: chatId && audience === 'self' ? 'self' : 'team',
     category: String(category || '').trim().slice(0, 60) || 'General',
     mode: chatId ? 'chat' : document ? 'document' : cleanLink ? 'link' : mode === 'pick' ? 'pick' : 'auto',
     courseId: null,
@@ -416,7 +419,7 @@ async function researchChat(lib, job, save, io) {
   let briefCheck = null;
   try {
     brief = await io.askStructured({
-      prompt: chatBriefPrompt({ focus: job.focus, title: chat.title, project: chat.cwd ? basename(chat.cwd) : '', cwd: chat.cwd && existsSync(chat.cwd) ? chat.cwd : null, categories }),
+      prompt: chatBriefPrompt({ focus: job.focus, title: chat.title, project: chat.cwd ? basename(chat.cwd) : '', cwd: chat.cwd && existsSync(chat.cwd) ? chat.cwd : null, categories, audience: job.audience }),
       schema: BRIEF_SCHEMA,
       tools: ['Read', 'Grep', 'Glob'],
       addDirs: chat.cwd && existsSync(chat.cwd) ? [chat.cwd] : [],
@@ -553,6 +556,7 @@ async function fetchSources(lib, job, save, io) {
       topic: job.topic,
       summary: job.summary || '',
       category: category.id,
+      audience: job.audience || 'team',
       status: 'building',
       createdAt: now(),
       jobId: job.id,
@@ -714,7 +718,7 @@ function sourceExcerpts(lib, course) {
     const data = readSource(lib, course.id, source.id);
     return data.kind === 'youtube'
       ? { ...data, excerpt: condenseTranscript(data.chunks, budget) }
-      : { ...data, excerpt: sectionsOutline(data.sections, 400).slice(0, budget) };
+      : { ...data, excerpt: outlineExcerpt(data.sections, budget) };
   });
 }
 
@@ -776,6 +780,7 @@ export function cleanOutline(pages, sources, askCount = 0) {
       covers: askNumbers(page.covers, askCount),
       outcomes: (page.outcomes || []).map(item => String(item).trim().slice(0, 200)).filter(Boolean).slice(0, 3),
       subtopics: (page.subtopics || []).map(String).slice(0, 12),
+      teaches: (page.teaches || []).map(term => String(term).replace(/\s+/g, ' ').trim().slice(0, 80)).filter(Boolean).slice(0, 8),
       sourceId: source.id,
       ...window(source, page.fromSec, page.toSec),
       sections: pickSections(source, page.sections),
@@ -798,7 +803,7 @@ function material(source, from, to, sections, budget) {
  * and questions, then a third sees only the page and answers them blind. What fails gets one
  * repair; what still fails is dropped. A concept left with no closing question gets a plain one.
  */
-async function makePage({ lib, io, page, concepts, sourceUrls, material, otherTitles, isStopping, onStep, writeRequest }) {
+async function makePage({ lib, io, page, concepts, sourceUrls, material, otherTitles, budget, isStopping, onStep, writeRequest }) {
   const conceptIds = concepts.map(concept => concept.id);
   const ask = async (prompt, schema, tools = []) => {
     const call = () => io.askStructured({ prompt, schema, tools, model: lib.settings.models.build, cwd: lib.root, onRateLimit: recordUsage });
@@ -836,16 +841,29 @@ async function makePage({ lib, io, page, concepts, sourceUrls, material, otherTi
     markdown = await patch({ wrong: found.wrong, dropped: found.dropped });
     found = await checkSource();
   }
+  // Too long for its material: one tightening pass, kept only if the source check finds nothing more wrong or missing.
+  const words = proseWords(markdown);
+  let tightened = null;
+  if (isOver(words, budget)) {
+    onStep(`tightening ${page.title}`);
+    const before = { markdown, found };
+    markdown = await patch({ tighten: { words, budget } });
+    const after = await checkSource();
+    tightened = keepTighter(before.found, after) ? 'kept' : 'reverted';
+    if (tightened === 'kept') found = after;
+    else markdown = before.markdown;
+  }
   let aids = await teachAndRead(markdown, null);
   const stats = {
     asked: aids.quick.length + aids.closing.length + aids.failed.length, failed: aids.failed.length, unknown: aids.unknown.length, missing: aids.missing.length, rewritten: false, repaired: false,
     sourceCheck: { wrong: firstCheck.wrong.length, dropped: firstCheck.dropped.length, leftWrong: found.wrong.map(item => item.quote), leftDropped: found.dropped.map(item => item.fact) },
+    budget, wordsWritten: words, tightened, unclear: aids.unclear.length,
   };
-  if (aids.missing.length) {
-    // The page left out something it had to cover: those sections are mended, the rest kept.
+  if (aids.missing.length || aids.unclear.length) {
+    // The page left out something it had to cover, or a decision a reader can't follow: those sections are mended, the rest kept.
     stats.rewritten = true;
     onStep(`adding what ${page.title} left out`);
-    markdown = await patch({ missing: aids.missing });
+    markdown = await patch({ missing: aids.missing, unclear: aids.unclear });
     aids = await teachAndRead(markdown, null);
   } else if (aids.failed.length || aids.unknown.length || aids.untested.length) {
     stats.repaired = true;
@@ -871,6 +889,8 @@ async function makePage({ lib, io, page, concepts, sourceUrls, material, otherTi
   stats.closing = closing.length;
   stats.terms = aids.terms.length;
   stats.leftUnknown = aids.unknown;
+  stats.words = proseWords(markdown);
+  stats.over = isOver(stats.words, budget);
   return { markdown, aids: { terms: aids.terms, quick: aids.quick.slice(0, MAX_QUICK), closing }, disputes, stats };
 }
 
@@ -878,7 +898,8 @@ async function writePages(lib, job, save, io, isStopping) {
   const course = readCourse(lib, job.courseId);
   const catalogue = readCatalogue(lib);
   const sources = new Map(course.sources.filter(source => source.usable).map(source => [source.id, readSource(lib, course.id, source.id)]));
-  const learned = catalogue.concepts.filter(concept => stateOf(concept) === 'learned').map(concept => concept.name).slice(0, 200);
+  const learned = learnedFor(catalogue, course.category);
+  const owners = ownerMap(course.pages);
   const todo = course.pages.filter(page => page.status !== 'written');
   let done = course.pages.length - todo.length;
   save({ done, total: course.pages.length });
@@ -895,6 +916,8 @@ async function writePages(lib, job, save, io, isStopping) {
       const concepts = page.concepts.map(id => catalogue.concepts.find(concept => concept.id === id)).filter(Boolean);
       // Order is the place in the list; `n` is only the page's id.
       const position = course.pages.findIndex(other => other.n === page.n);
+      // The page's size follows its material. LEARN_PAGE_BUDGET=off writes without one, to compare.
+      const budget = process.env.LEARN_PAGE_BUDGET === 'off' ? null : pageBudget({ kind: main.kind, mainWords: countWords(parts[0]), supportWords: countWords(parts.slice(1).join(' ')), audience: course.audience });
       const pageSources = [main, ...(page.support || []).map(item => sources.get(item.sourceId))];
       const made = await makePage({
         lib,
@@ -904,6 +927,7 @@ async function writePages(lib, job, save, io, isStopping) {
         sourceUrls: pageSources.map(source => source?.url).filter(Boolean),
         material: parts.join('\n\n'),
         otherTitles: course.pages.filter(other => other.n !== page.n).map(other => other.title),
+        budget,
         isStopping,
         onStep: text => save({ message: `Page ${position + 1}/${course.pages.length}: ${text}` }),
         writeRequest: missing => pagePrompt({
@@ -917,6 +941,8 @@ async function writePages(lib, job, save, io, isStopping) {
           material: parts.join('\n\n'),
           learned,
           missing,
+          budget,
+          owners: owners[position],
         }),
       });
       const videoSource = main.kind === 'youtube' ? main : (page.support || []).map(item => sources.get(item.sourceId)).find(other => other && other.kind === 'youtube');
@@ -939,6 +965,7 @@ async function writePages(lib, job, save, io, isStopping) {
         markdown,
         blocks,
         outcomes: page.outcomes || [],
+        subtopics: page.subtopics || [],
         terms: aids.terms,
         checks: aids.closing,
         disputes,

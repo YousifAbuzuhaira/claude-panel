@@ -276,3 +276,12 @@ export function sectionsText(sections, names = null, maxChars = 120_000) {
 
 /** Headings with the start of each section: the outline's view of a page. */
 export const sectionsOutline = (sections, perSection = 400) => sections.map(section => `[sec: ${section.heading}] ${section.text.slice(0, perSection).replace(/\s+/g, ' ')}`).join('\n');
+
+const sectionWords = section => (String(section.text ?? '').match(/\S+/g) || []).length;
+
+/** What a planner reads of a source with sections: all of it, with each section's words, when it fits; else each one's start. */
+export function outlineExcerpt(sections, budget) {
+  const whole = sections.map(section => `[sec: ${section.heading}] (${sectionWords(section)} words)\n${section.text}`).join('\n\n');
+  if (whole.length <= budget) return whole;
+  return sections.map(section => `[sec: ${section.heading}] (${sectionWords(section)} words) ${section.text.slice(0, 400).replace(/\s+/g, ' ')}`).join('\n').slice(0, budget);
+}

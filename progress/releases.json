@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.11.0",
+      "date": "2026-11-18",
+      "by": "Yousif",
+      "notes": [
+        "Pages are sized to their source: shorter, with nothing left out",
+        "Each idea is taught once in a course; later pages refer back",
+        "A course from a chat can be just for you: \"I was in this chat\""
+      ]
+    },
+    {
       "version": "0.10.0",
       "date": "2026-11-18",
       "by": "Yousif",

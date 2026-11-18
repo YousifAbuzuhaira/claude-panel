@@ -2,7 +2,7 @@
 //
 //   learn.sh serve                                   the window's JSON-lines channel
 //   learn.sh build start --topic "DevOps" --category DevOps [--mode pick|auto] | --link <url> | --file <path>
-//                        | --chat <session id> --focus "what the course covers"   (a course from a Claude chat)
+//                        | --chat <session id> --focus "what the course covers" [--audience self|team]   (a course from a Claude chat)
 //   learn.sh chats                                   your recent Claude chats
 //   learn.sh extract <file>                          what Learn reads from a document (no build)
 //   learn.sh build run|pick|resume|cancel <job> [s1,s3]
@@ -40,7 +40,7 @@ try {
   } else if (command === 'build') {
     const lib = openLibrary();
     if (sub === 'start') {
-      const job = createJob(lib, { topic: flags.topic, category: flags.category, mode: flags.mode, link: flags.link, file: flags.file, name: flags.name, chat: flags.chat, focus: flags.focus });
+      const job = createJob(lib, { topic: flags.topic, category: flags.category, mode: flags.mode, link: flags.link, file: flags.file, name: flags.name, chat: flags.chat, focus: flags.focus, audience: flags.audience });
       startDaemon(lib, job.id);
       print(job.id);
     } else if (sub === 'run') {

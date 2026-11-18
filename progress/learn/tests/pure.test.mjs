@@ -27,7 +27,8 @@ import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video
 import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { claudeBinary, isAbsoluteLocal, normalizeSettings, toLocalPath, toWslPath } from '../settings.mjs';
-import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
+import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, outlineExcerpt, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
+import { countWords, isOver, keepTighter, learnedFor, ownerMap, pageBudget, proseWords } from '../shape.mjs';
 
 describe('what you asked for', () => {
   test('a build line keeps a long request whole', () => {
@@ -1286,5 +1287,86 @@ describe('pages say what the source says', () => {
       if (before === undefined) delete process.env.LEARN_CHATS_DIR;
       else process.env.LEARN_CHATS_DIR = before;
     }
+  });
+});
+
+describe('the shape of a page', () => {
+  test('a page may run to about what its material needs, never past the clamps', () => {
+    assert.equal(pageBudget({ kind: 'chat', mainWords: 226 }), 1100);
+    assert.equal(pageBudget({ kind: 'chat', mainWords: 500 }), 2000);
+    assert.equal(pageBudget({ kind: 'chat', mainWords: 5000 }), 2400, 'at most 2,400');
+    assert.equal(pageBudget({ kind: 'youtube', mainWords: 0 }), 600, 'at least 600');
+    assert.equal(pageBudget({ kind: 'web', mainWords: 1000, supportWords: 1000 }), 1700);
+    assert.equal(pageBudget({ kind: 'youtube', mainWords: 2000 }), 2000);
+    assert.equal(pageBudget({ kind: 'chat', mainWords: 500, audience: 'self' }), 1700, 'shorter for the one who was there');
+    assert.equal(pageBudget({ kind: 'unknown', mainWords: 1000 }), 1400);
+  });
+
+  test('prose words leave out code, diagrams, cites, marks and table rules', () => {
+    const markdown = [
+      '## Why it is slow',
+      'The layout waits on two calls [sec: Chain]. A toy page waits once (added; illustrative).',
+      '',
+      '```ts',
+      'const x = await getSession();',
+      '```',
+      '',
+      '> [!example] A short trace',
+      '> One hop then [1:05] another.',
+      '> ```bash',
+      '> curl -s https://x',
+      '> ```',
+      '',
+      '| hop | ms |',
+      '|---|---|',
+      '| proxy | 40 |',
+    ].join('\n');
+    assert.equal(proseWords(markdown), countWords('Why it is slow The layout waits on two calls. A toy page waits once. A short trace One hop then another. hop ms proxy 40'));
+  });
+
+  test('over means a quarter over and 200 words over; no budget is never over', () => {
+    assert.equal(isOver(1300, 1000), true);
+    assert.equal(isOver(1200, 1000), false, 'a fifth over is fine');
+    assert.equal(isOver(1000, 700), true);
+    assert.equal(isOver(820, 600), false, 'a quarter over but under 200 words over');
+    assert.equal(isOver(9000, null), false);
+  });
+
+  test('tightening is kept only if the check finds no more wrong or missing', () => {
+    const before = { wrong: [{}], dropped: [{}] };
+    assert.equal(keepTighter(before, { wrong: [{}], dropped: [{}] }), true);
+    assert.equal(keepTighter(before, { wrong: [], dropped: [] }), true);
+    assert.equal(keepTighter(before, { wrong: [{}], dropped: [{}, {}] }), false);
+    assert.equal(keepTighter(before, { wrong: [{}, {}], dropped: [] }), false);
+  });
+
+  test('each term belongs to the first page that teaches it; the others refer back or forward', () => {
+    const owners = ownerMap([{ teaches: ['JWT', 'Prefetch'] }, { teaches: ['jwt', 'Permission cache'] }, {}, { teaches: ['Held session'] }]);
+    assert.deepEqual(owners[0].mine, ['JWT', 'Prefetch']);
+    assert.deepEqual(owners[1].mine, ['Permission cache'], 'JWT is page 1\'s');
+    assert.deepEqual(owners[1].earlier, [{ term: 'JWT', page: 1 }, { term: 'Prefetch', page: 1 }]);
+    assert.deepEqual(owners[1].later, [{ term: 'Held session', page: 4 }]);
+    assert.deepEqual(owners[2].mine, [], 'an older page with no teaches owns nothing');
+    assert.equal(owners[2].earlier.length, 3);
+  });
+
+  test('what you have learned is passed on only from the course\'s own category', () => {
+    const catalogue = emptyCatalogue();
+    const ai = ensureCategory(catalogue, 'AI');
+    const concept = addConcept(catalogue, { name: 'Gradient descent', definition: 'd', category: ai.id });
+    setLearned(catalogue, concept.id, true);
+    assert.deepEqual(learnedFor(catalogue, 'AI'), ['Gradient descent']);
+    assert.deepEqual(learnedFor(catalogue, 'DevOps'), [], 'a category with no match gets nothing, not the whole catalogue');
+    assert.deepEqual(learnedFor(catalogue, null), []);
+  });
+
+  test('a planner reads whole sections with their words when they fit, else their starts', () => {
+    const sections = [{ heading: 'The plan', text: 'Phase 0 relaxes the rule. '.repeat(10) }, { heading: 'Risks', text: 'Tokens live 14 minutes.' }];
+    const whole = outlineExcerpt(sections, 10_000);
+    assert.ok(whole.includes('[sec: The plan] (50 words)'));
+    assert.ok(whole.includes('Tokens live 14 minutes.'));
+    const cut = outlineExcerpt([{ heading: 'Long', text: 'word '.repeat(5000) }], 1000);
+    assert.ok(cut.length <= 1000);
+    assert.ok(cut.startsWith('[sec: Long] (5000 words) '));
   });
 });

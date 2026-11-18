@@ -5,6 +5,7 @@ import { GLYPH, S, act, action, armed, categoryName, chip, formatDate, h, inline
 const L = {
   mode: 'auto',
   source: 'topic', // what a new course is built from: topic, document or chat
+  audience: 'team', // a course from a chat: for a teammate, or for you who were in it
   document: null, // the File picked for one
   pickingJob: null,
   picks: new Set(),
@@ -63,6 +64,12 @@ export function buildLibraryView(host) {
   chatSelect.addEventListener('change', () => { if (chatSelect.value) chatFocus.focus(); });
 
   const modes = h('div.modes', null, autoChip, pickChip);
+  // Who a course from a chat is for: a teammate gets the background, you get it shorter.
+  const teamChip = chip('For a teammate', true, () => setAudience('team'));
+  teamChip.title = 'Explains the project and the background, for someone who wasn\'t in the chat';
+  const selfChip = chip('I was in this chat', false, () => setAudience('self'));
+  selfChip.title = 'Leaves out the background you lived through; keeps every fact, decision and step';
+  const audience = h('div.modes', { hidden: true }, teamChip, selfChip);
   const sourceChips = {};
   const fromRow = h('div.from-row', null, h('span.from-label', null, 'From'));
   for (const item of SOURCES) {
@@ -74,7 +81,7 @@ export function buildLibraryView(host) {
   const view = h('div.library-view', null,
     h('section.card.new-course', null,
       h('div.new-head', null, h('h2.card-title', null, 'New course'), fromRow),
-      h('div.new-row', null, topic, docBox, chatBox, category, modes, build, fileInput),
+      h('div.new-row', null, topic, docBox, chatBox, category, modes, audience, build, fileInput),
       categoryChips),
     search,
     jobs,
@@ -95,7 +102,13 @@ export function buildLibraryView(host) {
     setDocument(file);
   });
   host.append(view);
-  ui = { topic, category, pickChip, autoChip, categoryChips, search, jobs, courses, docBox, docName, docClear, modes, sourceChips, chatBox, chatSelect, chatFocus };
+  ui = { topic, category, pickChip, autoChip, categoryChips, search, jobs, courses, docBox, docName, docClear, modes, sourceChips, chatBox, chatSelect, chatFocus, audience, teamChip, selfChip };
+}
+
+function setAudience(audience) {
+  L.audience = audience;
+  ui.teamChip.classList.toggle('on', audience === 'team');
+  ui.selfChip.classList.toggle('on', audience === 'self');
 }
 
 function setSource(source) {
@@ -106,6 +119,7 @@ function setSource(source) {
   ui.chatBox.hidden = source !== 'chat';
   // Picking sources is for a researched topic; a document or a chat is its own source.
   ui.modes.hidden = source !== 'topic';
+  ui.audience.hidden = source !== 'chat';
   if (source === 'topic') ui.topic.focus();
   if (source === 'chat') loadChats();
 }
@@ -139,7 +153,7 @@ async function submitChat(category) {
     return;
   }
   const title = ui.chatSelect.selectedOptions[0]?.textContent.split('  \u00b7  ')[0] || 'your chat';
-  const job = await act('build.start', { chat, focus, category });
+  const job = await act('build.start', { chat, focus, category, audience: L.audience });
   if (!job) return;
   ui.chatFocus.value = '';
   toast(`Reading ${title} for ${focus}. It carries on if you close this page.`);

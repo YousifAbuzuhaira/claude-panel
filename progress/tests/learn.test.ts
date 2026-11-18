@@ -88,13 +88,19 @@ describe('Learn in a session', () => {
 describe('/course', () => {
   test('starts a build from this chat about the focus, through the helper', () => {
     expect(courseArgv({ pluginRoot: '/p', sessionId: 'abc-123', focus: '  how we fixed\nthe browser link ' })).toEqual([
-      'bash', '/p/learn/learn.sh', 'build', 'start', '--chat', 'abc-123', '--focus', 'how we fixed the browser link',
+      'bash', '/p/learn/learn.sh', 'build', 'start', '--chat', 'abc-123', '--audience', 'self', '--focus', 'how we fixed the browser link',
     ])
+  })
+
+  test('a course made from inside the chat is for the one who was in it, unless a teammate is named', () => {
+    expect(courseArgv({ pluginRoot: '/p', sessionId: 's', focus: 'x' })).toContain('self')
+    const argv = courseArgv({ pluginRoot: '/p', sessionId: 's', focus: 'x', audience: 'team' })
+    expect(argv[argv.indexOf('--audience') + 1]).toBe('team')
   })
 
   test('on Windows itself Node runs the helper straight: bash there is WSL\'s launcher', () => {
     expect(courseArgv({ pluginRoot: 'C:\\p', sessionId: 's', focus: '/api routes', isWindows: true })).toEqual([
-      'node', 'C:\\p/learn/learn.mjs', 'build', 'start', '--chat', 's', '--focus', '/api routes',
+      'node', 'C:\\p/learn/learn.mjs', 'build', 'start', '--chat', 's', '--audience', 'self', '--focus', '/api routes',
     ])
   })
 
