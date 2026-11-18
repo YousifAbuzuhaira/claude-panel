@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { WINDOW_TITLES, cleanAppearance, cleanPrefs, cleanTerminal, handoverTarget, infoPlist, launchPath, lookCss, pagePath, phaseLine, pluginVersion, shouldHandOver, uploadName, windowId } from '../server.mjs';
+import { WINDOW_TITLES, cleanAppearance, cleanPrefs, cleanTerminal, handoverTarget, infoPlist, launchPath, lookCss, mergePrefs, pagePath, phaseLine, pluginVersion, shouldHandOver, uploadName, windowId } from '../server.mjs';
 
 // server.mjs loads shared/theme.js, so the pages' own arithmetic is here to compare with.
 const T = globalThis.ClaudeTheme;
@@ -159,6 +159,16 @@ test('Learn\'s prefs keep only what the page remembers, each checked', () => {
   assert.deepEqual(cleanPrefs({ view: 'overlap', courseId: '../x', textScale: Infinity, showContents: 'no', customColors: { bg: '#000000' } }), {});
   assert.deepEqual(cleanPrefs({ courseId: null }), { courseId: null });
   for (const bad of [null, [], 'x', 3]) assert.deepEqual(cleanPrefs(bad), {});
+  assert.deepEqual(cleanPrefs({ videoRate: 1.5, videoCaptions: false }), { videoRate: 1.5, videoCaptions: false });
+  assert.deepEqual(cleanPrefs({ videoRate: 3, videoCaptions: 'yes' }), {}, 'a speed the player has not, and no yes or no');
+});
+
+test("a POST to Learn's prefs replaces the fields it names and keeps the rest", () => {
+  const saved = { view: 'course', courseId: 'devops-1c21', customColors: { bg: '#000000', accent: '#FFD400', text: '#FFFFFF' }, videoRate: 1.25 };
+  assert.deepEqual(mergePrefs(saved, { videoRate: 1.5, videoCaptions: false }), { ...saved, videoRate: 1.5, videoCaptions: false }, 'the player leaves the page\'s fields alone');
+  assert.deepEqual(mergePrefs(saved, { view: 'library', courseId: null, customColors: null }), { view: 'library', courseId: null, videoRate: 1.25 }, 'the page clears its own colours and keeps the player\'s speed');
+  assert.deepEqual(mergePrefs(null, { videoRate: 9 }), {});
+  assert.deepEqual(mergePrefs({ view: 'nowhere', videoRate: 2 }, {}), { videoRate: 2 }, 'what was saved is checked again');
 });
 
 test('a terminal a window follows is a plain name and session, or nothing', () => {

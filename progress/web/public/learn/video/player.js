@@ -1,5 +1,6 @@
 // The video player: the audio is the clock, and every picture, word and question follows it.
-// Opened as /learn/video/?course=<id>&page=<n>. An answer goes through check.answer, as on the
+// A video is a playlist of clips, one per section: each stops at its end, and the next starts when
+// you say so. Opened as /learn/video/?course=<id>&page=<n>. An answer goes through check.answer, as on the
 // page, so it counts towards Review. The audio can't send a header, so it's fetched and played from
 // a Blob. Keeping the event stream open stops the server idling out during a long video.
 import { onEvents, rpc, token } from '../../shared/api.js';
@@ -53,6 +54,13 @@ const { video: V, blob } = await load();
 const { scenes, assets, quiz, sections, audio: track } = V;
 const quizById = new Map(quiz.map(q => [q.id, q]));
 const total = track.mainEnd;
+
+// --- Clips: the page's sections, each a span of the one track ------------------------------
+const clips = sections.map(name => scenes.filter(scene => scene.section === name)).filter(own => own.length)
+  .map((own, k) => ({ name: own[0].section, from: k ? own[0].start : 0, to: own.at(-1).end, done: false }));
+const clipAt = t => { let found = 0; clips.forEach((c, k) => { if (c.from <= t + 0.001) found = k; }); return found; };
+const endsClip = scene => scene.end >= clips[clipAt(scene.start)].to - 0.01;
+let shownClip = -1;
 initStage({ objects: $('objects'), wires: $('wires'), assets });
 
 // --- Every moment is worked out from the time alone, so any jump lands on the right picture ---
@@ -72,6 +80,7 @@ function syncTo(t, instant) {
   const scene = scenes[s];
   let c = 0;
   while (c < (scene.cues || []).length && scene.cues[c].t <= t) c += 1;
+  if (clipAt(t) !== shownClip) showClip(clipAt(t));
   if (s === shownScene && c === shownCue) return;
   const newScene = s !== shownScene;
   shownScene = s; shownCue = c;
@@ -84,27 +93,31 @@ function syncTo(t, instant) {
 }
 function showHead(scene) {
   const head = $('head');
-  $('section').textContent = scene.section;
+  $('section').textContent = `${clipAt(scene.start) + 1} of ${clips.length} · ${scene.section}`;
   $('title').textContent = scene.title;
-  $('nowChapter').textContent = scene.section;
   head.classList.remove('swap'); void head.offsetWidth; head.classList.add('swap');
-  document.querySelectorAll('.chapter').forEach(node => node.classList.toggle('now', node.dataset.section === scene.section));
   showQuiz(scene);
+}
+function showClip(k) {
+  shownClip = k;
+  $('nowChapter').textContent = `${k + 1}/${clips.length} · ${clips[k].name}`;
+  showClipBar(k);
+  showRail();
 }
 
 // --- Sound and time --------------------------------------------------------------------
 const sound = new Audio(URL.createObjectURL(blob));
 sound.preload = 'auto';
 sound.preservesPitch = true;
-let playing = false, rate = 1, dragging = false, mode = 'main', pinned = 0, clip = null, sleepTimer = 0;
+let playing = false, rate = 1, dragging = false, mode = 'main', pinned = 0, extra = null, sleepTimer = 0, againClip = -1;
 const answers = new Map();
 const clockNow = () => (mode === 'main' && !dragging ? sound.currentTime : pinned);
 
-function setPlaying(on) {
+function setPlaying(on, quiet = false) {
   playing = on;
   $('play').innerHTML = icon(on ? 'pause' : 'play');
   if (on) { $('cover').hidden = true; if (mode !== 'held') sound.play().catch(() => setPlaying(false)); } else sound.pause();
-  flash(on);
+  if (!quiet) flash(on);
   wake();
 }
 function seek(t, keepPlaying = true) {
@@ -115,24 +128,44 @@ function seek(t, keepPlaying = true) {
   showFrame(pinned);
   if (playing && keepPlaying) sound.play().catch(() => {});
 }
+/** Jumps within the clip playing now: a clip's edges are where it stops, not places to slip past. */
+function seekInClip(t) { const c = clips[shownClip]; seek(clamp(t, c.from, c.to - 0.1)); }
+/** Goes to a clip you picked, and plays it. */
+function jump(t) { $('cover').hidden = true; seek(t); if (!playing) setPlaying(true, true); }
 function watch(t) {
-  if (mode === 'extra' && sound.currentTime >= clip.end - 0.03) { sound.pause(); mode = 'held'; }
+  if (mode === 'extra' && sound.currentTime >= extra.end - 0.03) { sound.pause(); mode = 'held'; }
   if (!playing || mode !== 'main' || dragging) return;
   const scene = scenes[shownScene];
-  if (scene.skip) { sound.currentTime = scene.end + 0.02; return; }
-  if (scene.check && t >= scene.end - 0.05 && !answers.has(scene.check)) { sound.pause(); mode = 'held'; pinned = scene.end - 0.06; }
-  if (t >= total - 0.05) finish();
+  if (scene.skip) { if (endsClip(scene)) endClip(clipAt(scene.start)); else sound.currentTime = scene.end + 0.02; return; }
+  if (scene.check && t >= scene.end - 0.05 && !answers.has(scene.check)) { sound.pause(); mode = 'held'; pinned = scene.end - 0.06; return; }
+  if (t >= clips[clipAt(t)].to - 0.05) endClip(clipAt(t));
+}
+/** A clip's end: it stops, waiting on the next clip's first picture until you say go. */
+function endClip(k) {
+  clips[k].done = true;
+  if (k >= clips.length - 1) { showRail(); return finish(); }
+  setPlaying(false, true);
+  const next = clips[k + 1];
+  seek(next.from, false);
+  showRail();
+  againClip = k;
+  $('coverTitle').textContent = `Next: ${next.name}`;
+  $('coverMeta').textContent = `${k + 2} of ${clips.length} · ${timeText(next.to - next.from)}`;
+  $('coverPlay').title = 'Play the next clip (Enter)';
+  $('coverAgain').hidden = false;
+  $('cover').hidden = false;
 }
 function finish() {
-  setPlaying(false);
+  setPlaying(false, true);
   const right = [...answers.entries()].filter(([id, k]) => quizById.get(id).options[k].right).length;
+  answers.clear();
+  clips.forEach(c => { c.done = false; });
+  seek(0, false);
   $('coverTitle').textContent = 'That is everything on this page.';
   $('coverMeta').textContent = `${right} of ${quiz.length} questions right`;
   $('coverPlay').title = 'Watch again';
+  $('coverAgain').hidden = true;
   $('cover').hidden = false;
-  answers.clear();
-  document.querySelectorAll('.tick').forEach(tick => tick.classList.remove('right', 'wrong'));
-  seek(0, false);
 }
 
 // --- Questions -------------------------------------------------------------------------
@@ -182,15 +215,16 @@ function answer(k) {
   const right = q.options[k].right;
   const tick = document.querySelector(`.tick[data-scene="${shownScene}"]`);
   if (tick) tick.classList.add(right ? 'right' : 'wrong');
-  clip = track.extras[q.id][right ? 'right' : 'wrong'];
+  extra = track.extras[q.id][right ? 'right' : 'wrong'];
   pinned = scene.end - 0.06;
   mode = 'extra';
-  sound.currentTime = clip.start;
+  sound.currentTime = extra.start;
   if (playing) sound.play().catch(() => {});
 }
 function leaveQuestion() {
   const scene = scenes[shownScene];
   mode = 'main';
+  if (endsClip(scene)) return endClip(clipAt(scene.start));
   sound.currentTime = scene.end + 0.02;
   if (playing) sound.play().catch(() => {});
 }
@@ -275,30 +309,33 @@ function flash(on) {
   node.classList.remove('go'); void node.offsetWidth; node.classList.add('go');
 }
 function showClock(t) {
-  $('clock').innerHTML = `${timeText(t)} <span>/ ${timeText(total)}</span>`;
+  const c = clips[Math.max(0, shownClip)];
+  $('clock').innerHTML = `${timeText(Math.max(0, t - c.from))} <span>/ ${timeText(c.to - c.from)}</span>`;
   document.querySelectorAll('.seg').forEach(seg => { seg.firstElementChild.style.width = `${clamp((t - Number(seg.dataset.from)) / Number(seg.dataset.span), 0, 1) * 100}%`; });
-  $('knob').style.left = `${(t / total) * 100}%`;
+  $('knob').style.left = `${clamp((t - c.from) / (c.to - c.from), 0, 1) * 100}%`;
 }
-function buildScrub() {
+/** The scrub bar is the clip playing now, its questions marked on it. */
+function showClipBar(k) {
   const box = $('scrub');
-  sections.forEach(name => {
-    const own = scenes.filter(scene => scene.section === name);
-    if (!own.length) return;
-    const from = own[0].start, to = own.at(-1).end, span = to - from;
-    const seg = div('seg');
-    seg.dataset.from = from; seg.dataset.span = span;
-    seg.style.flex = `${span} 1 0`;
-    seg.append(document.createElement('i'), document.createElement('u'));
-    box.append(seg);
-  });
-  scenes.forEach((scene, k) => {
-    if (!scene.check || scene.skip) return;
+  const c = clips[k];
+  box.querySelectorAll('.seg, .tick').forEach(node => node.remove());
+  const seg = div('seg');
+  seg.dataset.from = c.from; seg.dataset.span = c.to - c.from;
+  seg.style.flex = '1 1 0';
+  seg.append(document.createElement('i'), document.createElement('u'));
+  box.append(seg);
+  scenes.forEach((scene, index) => {
+    if (!scene.check || scene.skip || scene.start < c.from || scene.start >= c.to) return;
     const tick = div('tick');
-    tick.dataset.scene = k;
-    tick.style.left = `${(scene.start / total) * 100}%`;
+    tick.dataset.scene = index;
+    tick.style.left = `${((scene.start - c.from) / (c.to - c.from)) * 100}%`;
+    if (answers.has(scene.check)) tick.classList.add(quizById.get(scene.check).options[answers.get(scene.check)].right ? 'right' : 'wrong');
     box.append(tick);
   });
-  const timeOf = event => { const r = box.getBoundingClientRect(); return clamp((event.clientX - r.left) / r.width, 0, 1) * total; };
+}
+function wireScrub() {
+  const box = $('scrub');
+  const timeOf = event => { const r = box.getBoundingClientRect(); const c = clips[shownClip]; return c.from + clamp((event.clientX - r.left) / r.width, 0, 1) * (c.to - c.from - 0.1); };
   const hover = event => {
     const t = timeOf(event), r = box.getBoundingClientRect();
     const scene = scenes[sceneAt(t)];
@@ -323,33 +360,54 @@ function buildScrub() {
   box.addEventListener('pointerup', release);
   box.addEventListener('pointercancel', release);
 }
-function buildChapters() {
-  sections.forEach(name => {
-    const first = scenes.find(scene => scene.section === name);
-    if (!first) return;
+/** The clips drawer: each clip with its length, the one playing, and those you've watched. */
+function buildClips() {
+  clips.forEach((c, k) => {
     const button = document.createElement('button');
     button.className = 'chapter';
-    button.dataset.section = name;
-    const time = document.createElement('small'); time.textContent = timeText(first.start);
-    const text = document.createElement('span'); text.textContent = name;
+    button.dataset.clip = k;
+    const time = document.createElement('small'); time.textContent = timeText(c.to - c.from);
+    const text = document.createElement('span'); text.textContent = c.name;
     button.append(time, text);
-    button.addEventListener('click', () => { seek(first.start); toggleDrawer(false); });
+    button.addEventListener('click', () => { jump(c.from); toggleDrawer(false); });
     $('chapters').append(button);
   });
 }
+function showRail() {
+  document.querySelectorAll('.chapter').forEach(node => {
+    const k = Number(node.dataset.clip);
+    node.classList.toggle('now', k === shownClip);
+    node.classList.toggle('done', clips[k].done);
+  });
+}
 function toggleDrawer(open) { $('drawer').classList.toggle('open', open ?? !$('drawer').classList.contains('open')); wake(); }
-function setRate(value) {
+function setRate(value, save = true) {
   rate = value;
   sound.playbackRate = rate;
   $('speed').textContent = `${rate}x`;
   $('speedMenu').hidden = true;
   [...$('speedMenu').children].forEach(button => button.classList.toggle('on', Number(button.dataset.rate) === rate));
+  if (save) savePrefs();
 }
 function nudgeRate(step) { const all = [0.75, 1, 1.25, 1.5, 1.75, 2]; setRate(all[clamp(all.indexOf(rate) + step, 0, all.length - 1)]); }
 function setVolume(value) { sound.volume = clamp(value, 0, 1); sound.muted = sound.volume === 0; $('volume').value = sound.volume; showSound(); }
 function toggleSound() { sound.muted = !sound.muted; showSound(); }
 function showSound() { $('mute').innerHTML = icon(sound.muted ? 'muted' : 'sound'); }
-function toggleCaptions() { showCaptions = !showCaptions; $('cc').classList.toggle('off', !showCaptions); $('captions').classList.toggle('off', !showCaptions); }
+function toggleCaptions(save = true) { showCaptions = !showCaptions; $('cc').classList.toggle('off', !showCaptions); $('captions').classList.toggle('off', !showCaptions); if (save) savePrefs(); }
+
+// Speed and subtitles carry over to every video. Kept by the server, since the port, and so the
+// browser's storage, changes with each start; the server keeps the page's own prefs beside these.
+async function loadPrefs() {
+  try {
+    const response = await fetch('/api/prefs', { headers: { 'X-Learn-Token': token } });
+    const saved = response.ok ? await response.json() : null;
+    if (typeof saved?.videoRate === 'number') setRate(saved.videoRate, false);
+    if (saved?.videoCaptions === false && showCaptions) toggleCaptions(false);
+  } catch {}
+}
+function savePrefs() {
+  fetch('/api/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Learn-Token': token }, body: JSON.stringify({ videoRate: rate, videoCaptions: showCaptions }), keepalive: true }).catch(() => {});
+}
 function toggleFull() { if (!document.fullscreenEnabled) return; if (document.fullscreenElement) document.exitFullscreen(); else frame.requestFullscreen().catch(() => {}); }
 function fit() {
   const w = frame.clientWidth, h = frame.clientHeight;
@@ -367,9 +425,10 @@ if (V.stale) {
 }
 $('full').hidden = !document.fullscreenEnabled;
 $('coverTitle').textContent = V.title;
-$('coverMeta').textContent = `${Math.round(total / 60)} minutes, ${quiz.length} questions`;
+$('coverMeta').textContent = `${clips.length} clips, ${Math.round(total / 60)} minutes, ${quiz.length} questions`;
 $('coverPlay').innerHTML = icon('play');
 $('coverPlay').addEventListener('click', () => setPlaying(true));
+$('coverAgain').addEventListener('click', () => { if (againClip >= 0) jump(clips[againClip].from); });
 $('play').innerHTML = icon('play');
 $('back').innerHTML = icon('back');
 $('forward').innerHTML = icon('forward');
@@ -378,8 +437,8 @@ $('chaptersButton').innerHTML = icon('list');
 $('full').innerHTML = icon('full');
 showSound();
 $('play').addEventListener('click', () => setPlaying(!playing));
-$('back').addEventListener('click', () => seek(clockNow() - 10));
-$('forward').addEventListener('click', () => seek(clockNow() + 10));
+$('back').addEventListener('click', () => seekInClip(clockNow() - 10));
+$('forward').addEventListener('click', () => seekInClip(clockNow() + 10));
 $('mute').addEventListener('click', toggleSound);
 $('volume').addEventListener('input', event => setVolume(Number(event.target.value)));
 $('captions').addEventListener('click', toggleCaptions);
@@ -409,10 +468,10 @@ document.addEventListener('keydown', event => {
   const asking = scene.check && !answers.has(scene.check);
   wake();
   if (key === ' ' || key === 'k') { event.preventDefault(); if (document.activeElement) document.activeElement.blur(); if (scene.check && answers.has(scene.check) && mode !== 'main') leaveQuestion(); else setPlaying(!playing); }
-  else if (key === 'arrowleft') seek(clockNow() - 5);
-  else if (key === 'arrowright') seek(clockNow() + 5);
-  else if (key === 'j') seek(clockNow() - 10);
-  else if (key === 'l') seek(clockNow() + 10);
+  else if (key === 'arrowleft') seekInClip(clockNow() - 5);
+  else if (key === 'arrowright') seekInClip(clockNow() + 5);
+  else if (key === 'j') seekInClip(clockNow() - 10);
+  else if (key === 'l') seekInClip(clockNow() + 10);
   else if (key === 'arrowup') { event.preventDefault(); setVolume(sound.volume + 0.1); }
   else if (key === 'arrowdown') { event.preventDefault(); setVolume(sound.volume - 0.1); }
   else if (key === 'm') toggleSound();
@@ -421,18 +480,21 @@ document.addEventListener('keydown', event => {
   else if (key === 'g') toggleDrawer();
   else if (key === '>' ) nudgeRate(1);
   else if (key === '<') nudgeRate(-1);
-  else if (key === ']') { const next = scenes.find(item => sections.indexOf(item.section) > sections.indexOf(scene.section)); if (next) seek(next.start); }
-  else if (key === '[') { const own = scenes.find(item => item.section === scene.section); const earlier = clockNow() - own.start > 3 ? own : scenes.find(item => sections.indexOf(item.section) === sections.indexOf(scene.section) - 1); if (earlier) seek(earlier.start); }
+  else if (key === ']') { if (shownClip < clips.length - 1) jump(clips[shownClip + 1].from); }
+  else if (key === '[') { const c = clips[shownClip]; jump(clockNow() - c.from > 3 || !shownClip ? c.from : clips[shownClip - 1].from); }
+  else if (key === 'enter' && !$('cover').hidden) setPlaying(true);
   else if (key === 'enter' && scene.check && answers.has(scene.check)) leaveQuestion();
   else if (asking && /^[1-5]$/.test(key)) { const q = quizById.get(scene.check); const k = q.order?.[Number(key) - 1]; if (k !== undefined) answer(k); }
 });
 
 new ResizeObserver(fit).observe(frame);
 fit();
-buildScrub();
-buildChapters();
+wireScrub();
+buildClips();
 syncTo(0, true);
+loadPrefs();
 loop();
 
 // For stills of a moment: tools/shoot.mjs --eval "player.hold(120)".
-window.player = { hold: t => { $('cover').hidden = true; dragging = true; pinned = t; syncTo(t, true); showFrame(t); }, scenes, sound };
+// player.endClip(k) shows the card at the end of clip k.
+window.player = { hold: t => { $('cover').hidden = true; dragging = true; pinned = t; syncTo(t, true); showFrame(t); }, endClip, scenes, clips, sound };

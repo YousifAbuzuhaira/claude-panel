@@ -35,13 +35,18 @@ export function videoStamp(page) {
 export const isOldPage = page => !page?.stats;
 
 const RECAP = /^recap\b/i;
-const SHOWN_QUESTIONS = 3;
+const TINY_CLIP = 70; // spoken words: a section shorter than this is a clip only together with a neighbour
+const LONG_CLIP = 430; // about 3 minutes at the voice's pace, most likely two mechanisms: noted, never split
 
-/** The questions a video asks: every guess-first one, and at most `most` others, spread across the page. */
-export function videoQuiz(quiz, most = SHOWN_QUESTIONS) {
-  const others = quiz.filter(q => !q.guess);
-  const picked = new Set(others.length <= most ? others : Array.from({ length: most }, (_, k) => others[Math.floor(((k + 0.5) * others.length) / most)]));
-  return quiz.filter(q => q.guess || picked.has(q));
+/**
+ * The questions a video asks: every guess-first one, and each clip's last quick check, so a clip
+ * stops at most twice. Watching must still answer all of them (`allQuiz`), asked or not.
+ */
+export function videoQuiz(quiz) {
+  const last = new Map();
+  for (const q of quiz) if (!q.guess) last.set(q.section, q);
+  const kept = new Set(last.values());
+  return quiz.filter(q => q.guess || kept.has(q));
 }
 
 /**
@@ -123,6 +128,32 @@ export const spokenBudget = blocks => blocks.reduce((total, block) => total + ([
 
 /** The words a section's scenes say. */
 export const spokenWords = scenes => (scenes || []).filter(scene => !scene.check).flatMap(scene => scene.beats || []).reduce((total, beat) => total + words(beat.say).length, 0);
+
+/**
+ * The page's sections as the video's clips: a section too small to stand alone (under about 30
+ * seconds) joins the next one, or the one before when it's last. A clip is never split for length:
+ * one over about 3 minutes is only noted (`longClips`), since cutting by the clock cuts an idea.
+ */
+export function mergeTiny(material) {
+  const blocks = material.blocks.map(block => ({ ...block }));
+  const allQuiz = material.allQuiz.map(q => ({ ...q }));
+  const sections = [...material.sections];
+  if (!sections.length) return material;
+  // A question whose section has nothing else goes with the block it follows.
+  for (const q of allQuiz) if (!sections.includes(q.section)) q.section = blocks[q.after]?.section && sections.includes(blocks[q.after].section) ? blocks[q.after].section : sections[0];
+  const size = name => spokenBudget(blocks.filter(block => block.section === name));
+  for (let k = sections.findIndex(name => size(name) < TINY_CLIP); sections.length > 1 && k !== -1; k = sections.findIndex(name => size(name) < TINY_CLIP)) {
+    const from = sections[k];
+    const into = sections[k + 1 < sections.length ? k + 1 : k - 1];
+    for (const block of blocks) if (block.section === from) block.section = into;
+    for (const q of allQuiz) if (q.section === from) q.section = into;
+    sections.splice(k, 1);
+  }
+  return { ...material, blocks, allQuiz, sections, quiz: videoQuiz(allQuiz) };
+}
+
+/** Clips that likely hold two mechanisms: over about 3 minutes of narration. */
+export const longClips = (sections, scenes) => sections.filter(name => spokenWords(scenes.filter(scene => scene.section === name)) > LONG_CLIP);
 
 // --- Testing a scene ---------------------------------------------------------------------
 
@@ -321,6 +352,57 @@ export function testSection(section, result, { blocks, assets, quiz, pageText })
   });
   if (beats && still / beats > STILL_BEATS) problems.push(`${still} of ${beats} beats change nothing on screen: give them actions`);
   return [...new Set(problems)];
+}
+
+// --- Nothing the voice still needs leaves the screen ---------------------------------------
+
+/**
+ * Text the voice would only say of that thing on screen: two or more words, or one with a digit, an
+ * underscore, a dot or a capital after its first letter (`mainEnd`, `IAM`, `v2`). An ordinary word
+ * ("checks", "documents") is said for other reasons too, so it never counts.
+ */
+const isName = text => {
+  const plainText = String(text ?? '').trim();
+  return Boolean(plainText) && (words(plainText).length >= 2 || /[\d_.]/.test(plainText) || /.\p{Lu}/u.test(plainText));
+};
+const named = o => ['box', 'label'].includes(o?.shape) && isName(o.text);
+
+/**
+ * Where a clip wipes what it still needs (the transient-information effect): a sentence names a
+ * thing shown earlier in the clip that is off screen by then, or a new scene starts with none of the
+ * last one's objects (a code, table or diagram view excepted). These are polish, never failures: they
+ * go to Claude with a repair, and a section is never read out over them. A question or a read-out
+ * scene clears the stage anyway, so the trail starts again after one.
+ */
+export function keptOnScreen(scenes) {
+  const problems = [];
+  let gone = new Map(); // normalised text to the id that showed it, shown earlier and off screen now
+  let before = null; // the last scene's objects on screen at its end
+  (scenes || []).forEach((scene, index) => {
+    if (scene.check || scene.plain) { gone = new Map(); before = null; return; }
+    const label = `Scene ${index} ("${scene.title}")`;
+    const objects = new Map((scene.objects || []).map(o => [o.id, { ...o, visible: Boolean(o.show) }]));
+    if (before) {
+      if (![...before.keys()].some(id => objects.has(id)) && !(scene.objects || []).some(hasAsset)) problems.push(`${label} starts with none of the last scene's objects: carry at least one over by its id, so the picture grows instead of starting again`);
+      for (const [id, o] of before) if (!objects.has(id) && named(o)) gone.set(norm(o.text), id);
+    }
+    (scene.beats || []).forEach((beat, k) => {
+      const said = ` ${norm(beat.say)} `;
+      const coming = new Set((beat.do || []).flatMap(action => action.show || []).map(id => norm(objects.get(id)?.text)));
+      for (const [text, id] of gone) {
+        if (!said.includes(` ${text} `) || coming.has(text) || [...objects.values()].some(o => o.visible && norm(o.text) === text)) continue;
+        problems.push(`${label}, beat ${k}: the voice names "${text}" but ${id} is off screen by then. Keep it on screen, faded, while the voice still needs it`);
+        gone.delete(text);
+      }
+      for (const action of beat.do || []) {
+        for (const id of action.hide || []) if (objects.get(id)?.visible && named(objects.get(id))) gone.set(norm(objects.get(id).text), id);
+        apply(objects, action);
+      }
+      for (const o of objects.values()) if (o.visible && o.text) gone.delete(norm(o.text));
+    });
+    before = new Map([...objects].filter(([, o]) => o.visible));
+  });
+  return problems;
 }
 
 // --- The plain fallback --------------------------------------------------------------------

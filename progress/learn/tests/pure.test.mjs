@@ -22,7 +22,7 @@ import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
 import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from '../verify.mjs';
 import { voicePlatform } from '../voice.mjs';
-import { estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, mendSection, plainScenes, settleScenes, simulate, spokenBudget, spokenWords, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
+import { estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleScenes, simulate, spokenBudget, spokenWords, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
@@ -1403,12 +1403,11 @@ describe('a video retells a page once', () => {
     assert.ok(!blocks.some(block => /Volumes keep data\./.test(block.text)));
   });
 
-  test('the video asks the guess and at most 3 others, spread out; watching must still answer all of them', () => {
+  test("the video asks the guess and each section's last quick check; watching must still answer all of them", () => {
     const { quiz, allQuiz } = flattenPage(page);
     assert.deepEqual(allQuiz.map(q => q.id), ['q1', 'q2', 'q3', 'q4', 'q5', 'q6']);
-    assert.equal(quiz[0].id, 'q1');
-    assert.equal(quiz.filter(q => !q.guess).length, 3);
-    assert.deepEqual(videoQuiz(allQuiz.slice(0, 3)).map(q => q.id), ['q1', 'q2', 'q3'], 'few enough are all asked');
+    assert.deepEqual(quiz.map(q => q.id), ['q1', 'q3', 'q6'], 'at most two stops a clip: its guess and its last question');
+    assert.deepEqual(videoQuiz(allQuiz.slice(0, 2)).map(q => q.id), ['q1', 'q2']);
     assert.equal(allQuiz.find(q => q.id === 'q6').section, 'Bind mounts', "a question under the recap stays with the section before it");
   });
 
@@ -1444,5 +1443,77 @@ describe('a video retells a page once', () => {
     assert.deepEqual(mended.scenes.filter(scene => scene.check).map(scene => scene.check), material.quiz.filter(q => q.section === 'Volumes').map(q => q.id));
     assert.deepEqual(testSection('Volumes', mended, material), []);
     assert.equal(mendSection('Volumes', { scenes: [bad] }, material), null, 'no good scene: the whole section is rebuilt');
+  });
+});
+
+describe('a video as clips', () => {
+  const many = (word, n) => `${Array.from({ length: n }, (_, k) => `${word}${k}`).join(' ')}.`;
+  const check = (id, guess = false) => ({ t: 'check', id, guess, q: parseInline(`Question ${id}?`), concepts: [], options: [{ inlines: parseInline('Right'), why: parseInline('Yes.'), right: 1 }, { inlines: parseInline('Wrong'), why: parseInline('No.') }] });
+  const page = {
+    title: 'Clips',
+    markdown: 'x',
+    stats: {},
+    terms: [],
+    blocks: [
+      ...markdownToBlocks(`A short opening line.\n\n## Long one\n\n${many('alpha', 90)}\n\n## Another long one\n\n${many('beta', 80)}`),
+      check('q1', true), check('q2'), check('q3'),
+      ...markdownToBlocks('## Tail\n\nJust a few words here.'),
+      check('q4'),
+    ],
+  };
+
+  test('a section too small to stand alone joins the next, or the one before when it is last; questions go with it', () => {
+    const material = mergeTiny(flattenPage(page));
+    assert.deepEqual(material.sections, ['Long one', 'Another long one']);
+    assert.equal(material.blocks.find(block => /opening line/.test(block.text)).section, 'Long one');
+    assert.equal(material.blocks.find(block => /few words/.test(block.text)).section, 'Another long one');
+    assert.equal(material.allQuiz.find(q => q.id === 'q4').section, 'Another long one');
+    assert.deepEqual(material.quiz.map(q => q.id), ['q1', 'q4'], "the questions are picked again for the clips: the guess and the clip's last one");
+    for (const section of material.sections) assert.deepEqual(testSection(section, { scenes: plainScenes(section, material) }, material), [], `${section} is made and tested as one clip`);
+  });
+
+  test('nothing is split, and one section stays one clip however small', () => {
+    const one = mergeTiny(flattenPage({ ...page, blocks: markdownToBlocks('Only a line.') }));
+    assert.deepEqual(one.sections, ['Introduction']);
+    const scenes = [{ section: 'A', beats: [{ say: many('w', 440) }] }, { section: 'B', beats: [{ say: 'short' }] }];
+    assert.deepEqual(longClips(['A', 'B'], scenes), ['A'], 'a clip over about 3 minutes is noted, not cut');
+  });
+
+  const box = (id, text, x = 100) => ({ id, shape: 'box', x, y: 200, w: 260, h: 120, text });
+  const told = ({ hide = true } = {}) => ({
+    title: 'Gateway',
+    objects: [box('gw', 'App gateway'), box('c', 'checks', 420)],
+    beats: [
+      { say: 'The app gateway forwards checks.', do: [{ on: 'gateway', show: ['gw', 'c'] }] },
+      { say: 'Then it steps aside.', do: [{ on: 'aside', ...(hide ? { hide: ['gw', 'c'] } : { set: { gw: { fade: true }, c: { fade: true } } }) }] },
+      { say: 'Later the app gateway answers, and checks pass.', do: [] },
+    ],
+  });
+
+  test('a sentence naming something the clip hid is flagged; an ordinary word is not, and a faded thing is fine', () => {
+    const problems = keptOnScreen([told()]);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /app gateway/);
+    assert.deepEqual(keptOnScreen([told({ hide: false })]), []);
+  });
+
+  test('a new scene carries something over, unless it shows code, a table or a diagram; a question clears the stage anyway', () => {
+    const fresh = { title: 'Fresh', objects: [box('x', 'Other thing')], beats: [{ say: 'Something else.', do: [{ on: null, show: ['x'] }] }] };
+    const carried = { ...fresh, objects: [box('gw', 'App gateway'), box('x', 'Other thing', 420)], beats: [{ say: 'Something else.', do: [{ on: null, show: ['gw', 'x'] }] }] };
+    const code = { ...fresh, objects: [{ id: 'k', shape: 'code', x: 40, y: 100, w: 540, h: 396, asset: 0 }], beats: [{ say: 'The code.', do: [{ on: null, show: ['k'] }] }] };
+    const question = { title: 'Quick check', covers: [], quote: null, check: 'q1', objects: [], beats: [{ say: '', do: [] }] };
+    const keep = told({ hide: false });
+    assert.match(keptOnScreen([keep, fresh]).join(), /starts with none of the last scene's objects/);
+    assert.deepEqual(keptOnScreen([keep, carried]), []);
+    assert.deepEqual(keptOnScreen([keep, code]), []);
+    assert.deepEqual(keptOnScreen([keep, question, fresh]), []);
+  });
+
+  test("what is kept on screen never fails a section: it's polish for Claude, not a reason to read a section out", () => {
+    const material = mergeTiny(flattenPage(page));
+    const [block] = material.blocks.filter(item => item.section === 'Long one');
+    const scene = { ...told(), covers: material.blocks.filter(item => item.section === 'Long one').map(item => item.n), quote: block.text.split(' ').slice(0, 6).join(' '), check: null };
+    assert.equal(keptOnScreen([scene]).length, 1);
+    assert.ok(!testSection('Long one', { scenes: [scene] }, material).some(problem => /off screen/.test(problem)));
   });
 });

@@ -262,6 +262,25 @@ export function cleanPrefs(value) {
   if (custom && typeof custom === 'object' && ['bg', 'accent', 'text'].every(key => THEME.parseHex(custom[key]))) {
     out.customColors = { bg: custom.bg.toUpperCase(), accent: custom.accent.toUpperCase(), text: custom.text.toUpperCase() };
   }
+  // The video player's: its speed and its subtitles, the same for every video.
+  if (VIDEO_RATES.includes(value.videoRate)) out.videoRate = value.videoRate;
+  if (typeof value.videoCaptions === 'boolean') out.videoCaptions = value.videoCaptions;
+  return out;
+}
+
+const VIDEO_RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
+
+/**
+ * The prefs after a POST: each field the body names is replaced (or dropped, when its value isn't
+ * kept), and the rest stay. Learn's pages and its video player each send only their own fields.
+ */
+export function mergePrefs(saved, given) {
+  const out = cleanPrefs(saved);
+  const clean = cleanPrefs(given);
+  for (const key of Object.keys(given || {})) {
+    if (key in clean) out[key] = clean[key];
+    else delete out[key];
+  }
   return out;
 }
 
@@ -736,8 +755,9 @@ function serve() {
         if (req.method === 'POST') {
           const value = await readJsonObject(req);
           if (!value) return send(400, { error: 'the body is not a small JSON object' });
-          const clean = cleanPrefs(value);
-          writeAtomic(PREFS_FILE, JSON.stringify(clean));
+          let saved = null;
+          try { saved = existsSync(PREFS_FILE) ? JSON.parse(readFileSync(PREFS_FILE, 'utf8')) : null; } catch {}
+          writeAtomic(PREFS_FILE, JSON.stringify(mergePrefs(saved, value)));
           return send(200, { ok: true });
         }
       }

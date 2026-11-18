@@ -2,7 +2,7 @@
 // is tested as the player would draw it, repaired, or rebuilt from the page. Then someone who only
 // watches answers the questions, and a check compares the script with the page, both ways.
 import { READER_SCHEMA, readerPrompt } from './prompts.mjs';
-import { faultsBySection, firstTaught, flattenPage, hearing, mendSection, plainScenes, settleScenes, spokenBudget, spokenWords, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
+import { faultsBySection, firstTaught, flattenPage, hearing, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleScenes, spokenBudget, spokenWords, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
 
 const REPAIRS = 2;
 
@@ -51,7 +51,8 @@ MOTION IS THE POINT. The learner should SEE the idea happen, like a great animat
 - Code is traced: put it on the left and, on the right, the values changing as the voice reaches each line. This layout always fits: code at x 40, y 100, w 540, h 396, and two rows at x 600, w 480, one at y 120 for what goes in and one at y 290 for what comes out. Move the code's "lines" and set the rows' "items" as the voice walks through it. If the code needs more width than that, give it what the check asks for and move the rows below it or drop them.
 - A worked example runs step by step with its real values, never summarised.
 - Fade what is not being discussed (set fade true). The camera frames the picture by itself, so you never need "camera": lay things out and let the scene grow.
-- Keep the picture growing through a scene. Do not clear and restart. Reuse the same object id in the next scene of this section, at a new place, to carry it across.
+- Keep the picture growing through a scene. Do not clear and restart. Never hide something the voice will name again: fade it instead, so the learner can look back at it.
+- This section is one clip of the video. Start each new scene of it by carrying at least one object over by its id, at a new place, unless the new scene shows code, a table or a diagram.
 - Very little text on screen: 1 to 5 words per object, and never a sentence. The voice carries the words. Never a bullet list of text.
 - Fill the stage: big objects, boxes at least 80 wide. Leave no scene as one small thing in the middle.
 - A scene has 3 to 10 beats. Start a new scene when the picture changes completely.
@@ -152,7 +153,8 @@ function watcherRequest(page, { quiz, allQuiz }, heard) {
 /** `ask(prompt, schema)` is one Claude call. Returns the script `narrate.py` records. */
 export async function writeScript({ page, ask, onStep = () => {} }) {
   const started = Date.now();
-  const material = flattenPage(page);
+  // The page's sections are the video's clips, tiny ones joined to a neighbour.
+  const material = mergeTiny(flattenPage(page));
   material.taught = firstTaught(page.terms, material.blocks);
   const { sections, blocks, assets, quiz, allQuiz } = material;
   const written = new Map();
@@ -163,6 +165,8 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
   const readOut = [];
   const mended = [];
   const shortened = [];
+  const polished = [];
+  const firstSoft = {};
   const rebuild = (section, problems) => {
     rebuilt.add(section);
     whyRebuilt[section] = problems.slice(0, 8);
@@ -173,22 +177,30 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
   let finished = 0;
   await Promise.all(sections.map(async section => {
     if (blocks.some(block => block.section === section)) {
-      // Length is a hint, never a failure: a long section is asked to say less, and kept as it is when that doesn't pass.
+      // Length and what's kept on screen are polish, never failures: asked for once more, and kept
+      // only when the answer still passes and is no worse on either.
       const limit = spokenBudget(blocks.filter(block => block.section === section));
       const lengthHint = result => (spokenWords(result?.scenes) > limit * 1.3 ? [`The narration runs ${spokenWords(result.scenes)} words for about ${limit} words of page: say each fact once, cut signposts and summaries, and keep every block covered.`] : []);
+      const soft = result => keptOnScreen(result?.scenes).slice(0, 8);
+      const polish = result => [...lengthHint(result), ...soft(result)];
       let result = await attempt(section, null);
       let problems = testSection(section, result, material);
       firstProblems[section] = problems.length;
+      firstSoft[section] = keptOnScreen(result?.scenes).length;
       if (problems.length) forClaude[section] = problems.slice(0, 8);
       for (let round = 0; round < REPAIRS && problems.length; round++) {
-        result = await attempt(section, { result, problems: [...problems, ...lengthHint(result)] });
+        result = await attempt(section, { result, problems: [...problems, ...polish(result)] });
         problems = testSection(section, result, material);
       }
-      if (!problems.length && lengthHint(result).length) {
-        const shorter = await attempt(section, { result, problems: lengthHint(result) });
-        if (!testSection(section, shorter, material).length && spokenWords(shorter.scenes) < spokenWords(result.scenes)) {
-          result = shorter;
-          shortened.push(section);
+      if (!problems.length && polish(result).length) {
+        const better = await attempt(section, { result, problems: polish(result) });
+        const [softNow, softThen] = [keptOnScreen(better?.scenes).length, keptOnScreen(result.scenes).length];
+        const [wordsNow, wordsThen] = [spokenWords(better?.scenes), spokenWords(result.scenes)];
+        const noWorse = softNow <= softThen && wordsNow <= Math.max(wordsThen, limit * 1.3);
+        if (!testSection(section, better, material).length && noWorse && (softNow < softThen || wordsNow < wordsThen)) {
+          if (wordsNow < wordsThen) shortened.push(section);
+          polished.push(section);
+          result = better;
         }
       }
       // Repairs ran out: keep the scenes that pass, and read out only what the failing ones taught.
@@ -256,10 +268,16 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
       onWord: actions.filter(action => action.on).length,
       blocks: blocks.length,
       sections: sections.length,
+      clips: sections.length,
+      clipWords: sections.map(section => spokenWords(scenes.filter(scene => scene.section === section))),
+      longClips: longClips(sections, scenes),
       rebuilt: [...rebuilt],
       whyRebuilt,
       mended,
       shortened,
+      polished,
+      firstSoft,
+      softLeft: Object.fromEntries(sections.filter(section => !rebuilt.has(section)).map(section => [section, keptOnScreen(scenes.filter(scene => scene.section === section))]).filter(([, left]) => left.length)),
       quizShown: quiz.length,
       quizAll: allQuiz.length,
       readOut,

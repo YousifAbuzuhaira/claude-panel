@@ -169,6 +169,7 @@ tr.now td { color: var(--ink); background: var(--selected); }
 .chapter small { font-family: var(--mono); font-size: 11.5px; color: var(--faint); padding-top: 1px; }
 .chapter:hover { background: var(--hover); color: var(--ink); }
 .chapter.now { background: var(--selected); color: var(--ink); }
+.chapter.done small::after { content: ' ✓'; color: var(--green); }
 
 @keyframes head { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
 @keyframes pop { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
