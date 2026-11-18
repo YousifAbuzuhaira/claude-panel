@@ -2,7 +2,7 @@
 // is tested as the player would draw it, repaired, or rebuilt from the page. Then someone who only
 // watches answers the questions, and a check compares the script with the page, both ways.
 import { READER_SCHEMA, readerPrompt } from './prompts.mjs';
-import { faultsBySection, firstTaught, flattenPage, hearing, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleScenes, spokenBudget, spokenWords, testOpener, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
+import { faultsBySection, firstTaught, flattenPage, hearing, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
 import { OPENER_SCHEMA, OPENER_WORDS, applyPlan, makePlan } from './video-plan.mjs';
 
 const REPAIRS = 2;
@@ -98,6 +98,8 @@ ${DRAWING}
 
 QUESTIONS. Add each quiz question below once, as its own scene: {"title":"Quick check","covers":[],"quote":null,"check":"its id","objects":[],"beats":[{"say":"","do":[]}]}. The player reads it out. It must come after the voice has fully taught its answer, except GUESS FIRST ones, which come before.`;
 
+const MASK_RULE = 'MASKED LINE: once in this clip, after you have shown the mechanism in pictures and while its code is on screen, hide the one line that carries it out and let the learner pick it: add {"on": "word", "mask": {"id": "the code object", "line": its line number from 0, "choices": ["wrong version 1", "wrong version 2"]}} to an action. The beat with the mask asks, in one sentence, what that line has to do ("So what must line 6 set before the call goes out?"); the player stops there until the learner picks, and your next beat says what the line does. The two wrong versions look like lines of this code, in its style and about its length, wrong the way someone who missed the idea would get it wrong, and are no line of the page\'s code. Never in the clip\'s first scene.';
+
 const describe = block => `[${block.n}] (${block.t}${block.asset !== undefined ? ` ${block.asset}` : ''}${block.callout ? `, ${block.callout}` : ''})`;
 
 /** Glossary words a section before this one already explains. */
@@ -116,6 +118,7 @@ function sectionRequest(page, material, section, repair) {
     ...(earlierTerms(material, section).length ? [`ALREADY EXPLAINED IN EARLIER SECTIONS (use these words, don't explain them again): ${earlierTerms(material, section).join('; ')}`, ''] : []),
     'BLOCKS OF THIS SECTION:',
     ...mine.flatMap(block => [describe(block), block.text, '']),
+    ...(material.masks?.has(section) ? [`${MASK_RULE}${material.patterns?.[section] ? ` This clip repeats the pattern of clip "${material.patterns[section]}": show the shape briefly, and mask the step that repeats.` : ''}`, ''] : []),
     ...(material.traps?.[section]?.length ? [`REAL FAILURE: blocks ${material.traps[section].join(', ')} describe something that really went wrong. Open this clip by showing that failure as it happened (after any GUESS FIRST question) and give the scenes that show it "trap": true. A trap scene shows only what went wrong, never the fix; the player marks it as a wrong turn. Then teach the rest.`, ''] : []),
     'QUIZ:',
     ...(questions.length ? questions.flatMap(q => [`[${q.id}] ${q.guess ? 'GUESS FIRST, before this is taught' : `after block ${q.after} is taught`}: ${q.q}`, `  Answer: ${q.options.find(option => option.right)?.text}`]) : ['(none in this section)']),
@@ -246,8 +249,14 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
     whyRebuilt[section] = problems.slice(0, 8);
     written.set(section, { scenes: plainScenes(section, material), pronounce: [] });
   };
-  // Small misses are fixed here, so Claude only ever hears about what code can't fix.
-  const attempt = async (section, repair) => settleScenes(await ask(sectionRequest(page, material, section, repair), SCENE_SCHEMA), assets);
+  // Small misses are fixed here, so Claude only ever hears about what code can't fix. A masked line
+  // that doesn't hold is taken out here too, and goes back to Claude as polish.
+  const maskNotes = new WeakMap();
+  const attempt = async (section, repair) => {
+    const settled = settleMasks(settleScenes(await ask(sectionRequest(page, material, section, repair), SCENE_SCHEMA), assets), material, section);
+    maskNotes.set(settled.result, settled.notes);
+    return settled.result;
+  };
   let finished = 0;
   await Promise.all(sections.map(async section => {
     if (blocks.some(block => block.section === section)) {
@@ -255,7 +264,8 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
       // only when the answer still passes and is no worse on either.
       const limit = spokenBudget(blocks.filter(block => block.section === section));
       const lengthHint = result => (spokenWords(result?.scenes) > limit * 1.3 ? [`The narration runs ${spokenWords(result.scenes)} words for about ${limit} words of page: say each fact once, cut signposts and summaries, and keep every block covered.`] : []);
-      const soft = result => keptOnScreen(result?.scenes).slice(0, 8);
+      const softAll = result => [...keptOnScreen(result?.scenes), ...(maskNotes.get(result) || [])];
+      const soft = result => softAll(result).slice(0, 8);
       const polish = result => [...lengthHint(result), ...soft(result)];
       let result = await attempt(section, null);
       let problems = testSection(section, result, material);
@@ -268,7 +278,7 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
       }
       if (!problems.length && polish(result).length) {
         const better = await attempt(section, { result, problems: polish(result) });
-        const [softNow, softThen] = [keptOnScreen(better?.scenes).length, keptOnScreen(result.scenes).length];
+        const [softNow, softThen] = [softAll(better).length, softAll(result).length];
         const [wordsNow, wordsThen] = [spokenWords(better?.scenes), spokenWords(result.scenes)];
         const noWorse = softNow <= softThen && wordsNow <= Math.max(wordsThen, limit * 1.3);
         if (!testSection(section, better, material).length && noWorse && (softNow < softThen || wordsNow < wordsThen)) {
@@ -365,10 +375,13 @@ export async function writeScript({ page, ask, onStep = () => {} }) {
       blocks: blocks.length,
       sections: sections.length,
       clips: sections.length,
+      stops: Math.max(0, ...sections.map(section => stopsOf(scenes.filter(scene => scene.section === section)))),
+      masks: { planned: material.masks?.size || 0, made: scenes.reduce((total, scene) => total + (scene.masks || []).length, 0) },
+      groupQuestions: allQuiz.filter(q => q.group).length,
       plan: planned.plan ? {
         shape: planned.plan.shape,
         boxes: planned.plan.boxes.length,
-        guesses: allQuiz.filter(q => q.videoOnly).length,
+        guesses: allQuiz.filter(q => q.videoOnly && q.guess).length,
         traps: Object.keys(material.traps || {}).length,
         splits: planned.plan.splits.length,
         firstProblems: planned.firstProblems.length,

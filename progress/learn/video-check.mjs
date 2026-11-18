@@ -39,14 +39,19 @@ const TINY_CLIP = 70; // spoken words: a section shorter than this is a clip onl
 const LONG_CLIP = 430; // about 3 minutes at the voice's pace, most likely two mechanisms: noted, never split
 
 /**
- * The questions a video asks: every guess-first one, and each clip's last quick check, so a clip
- * stops at most twice. Watching must still answer all of them (`allQuiz`), asked or not.
+ * The questions a video asks: each clip's first guess and its last quick check (none in a clip
+ * whose masked line is its second stop, `quiet`), so a clip stops at most twice. Watching must still
+ * answer all of them (`allQuiz`), asked or not.
  */
-export function videoQuiz(quiz) {
+export function videoQuiz(quiz, quiet = new Set()) {
+  const first = new Map();
   const last = new Map();
-  for (const q of quiz) if (!q.guess) last.set(q.section, q);
-  const kept = new Set(last.values());
-  return quiz.filter(q => q.guess || kept.has(q));
+  for (const q of quiz) {
+    if (q.guess && !first.has(q.section)) first.set(q.section, q);
+    if (!q.guess && !quiet.has(q.section)) last.set(q.section, q);
+  }
+  const kept = new Set([...first.values(), ...last.values()]);
+  return quiz.filter(q => kept.has(q));
 }
 
 /**
@@ -367,8 +372,70 @@ export function testSection(section, result, { blocks, assets, quiz, pageText })
     sceneProblems(scene, `Scene ${index} ("${scene.title}")`, assets, pageText, problems);
   });
   if (beats && still / beats > STILL_BEATS) problems.push(`${still} of ${beats} beats change nothing on screen: give them actions`);
+  if (stopsOf(scenes) > 2) problems.push(`This clip stops ${stopsOf(scenes)} times for the learner: two at most`);
   return [...new Set(problems)];
 }
+
+// --- A masked line: the learner picks the line that does what the clip just showed -------------
+
+const lineKey = line => String(line ?? '').trim().replace(/\s+/g, ' ');
+
+/**
+ * The masks Claude wrote, made into what the player draws: `{"on", "mask": {id, line, choices}}`
+ * becomes a `set` of the code object's `mask` (the line hidden from then on in the scene) and an
+ * entry in `scene.masks` with the real line and its two wrong versions. Only a clip the plan gave a
+ * mask may have one, and only one, never in its first scene, on a line of code worth asking about,
+ * with two wrong versions shaped like the real line and found nowhere in the page's code: nothing
+ * made up is ever shown as the project's code. A mask that fails any of that is taken out here and
+ * told to Claude as polish; it never fails a clip. Returns `{ result, notes }`.
+ */
+export function settleMasks(result, { assets, masks }, section) {
+  const notes = [];
+  const allowed = Boolean(masks?.has(section));
+  const pageLines = new Set(assets.code.flatMap(code => String(code.text).split('\n').map(lineKey)).filter(Boolean));
+  let kept = 0;
+  let teaching = 0;
+  const scenes = (result?.scenes || []).map(scene => {
+    if (scene.check || scene.plain) return scene;
+    const index = teaching++;
+    const objects = new Map((scene.objects || []).map(o => [o.id, o]));
+    const found = [];
+    const beats = (scene.beats || []).map((beat, b) => ({
+      ...beat,
+      do: (beat.do || []).map(action => {
+        if (!action?.mask) return action;
+        const { mask, ...rest } = action;
+        const object = objects.get(mask.id);
+        const lines = object?.shape === 'code' ? String(assets.code[object.asset]?.text || '').split('\n') : [];
+        const real = lines[mask.line];
+        const choices = (mask.choices || []).map(choice => String(choice ?? '').trim());
+        const why = !allowed ? 'this clip has no masked line: take it out'
+          : kept ? 'one masked line a clip: keep the best one'
+          : !index ? 'mask a line only after the clip has shown the mechanism, not in its first scene'
+          : !object || object.shape !== 'code' ? `"${mask.id}" is not a code object of this scene`
+          : !Number.isInteger(mask.line) || real === undefined || lineKey(real).replace(/[^\w]/g, '').length < 3 ? `line ${mask.line} of ${mask.id} is not a line of code worth asking about`
+          : lines.filter(line => /[A-Za-z_]\w/.test(line)).length < 4 ? `${mask.id} is too short to mask a line of: it needs 4 lines that do something`
+          : choices.length !== 2 || new Set(choices.map(lineKey)).size !== 2 || choices.some(choice => !choice) ? 'give exactly 2 wrong versions of the line, different from each other'
+          : choices.some(choice => pageLines.has(lineKey(choice))) ? 'a wrong version is a real line of the page\'s code: write one that is wrong'
+          : choices.some(choice => choice.length < lineKey(real).length * 0.4 || choice.length > lineKey(real).length * 2.5) ? 'make the wrong versions look like the real line: about its length, in its style'
+          : null;
+        if (why) {
+          notes.push(`Masked line in "${scene.title}": ${why}`);
+          return rest;
+        }
+        kept++;
+        found.push({ id: mask.id, line: mask.line, answer: lineKey(real), choices, beat: b });
+        return { ...rest, set: { ...(rest.set || {}), [mask.id]: { ...(rest.set?.[mask.id] || {}), mask: mask.line } } };
+      }),
+    }));
+    return found.length ? { ...scene, beats, masks: found } : { ...scene, beats };
+  });
+  if (allowed && !kept && !notes.length) notes.push('This clip shows code: once it has shown the mechanism, hide the one line that carries it out with a "mask" action, so the learner picks it');
+  return { result: { ...result, scenes }, notes };
+}
+
+/** Where a clip stops for the learner: its questions and its masked line. At most two. */
+export const stopsOf = scenes => (scenes || []).filter(scene => scene.check).length + (scenes || []).reduce((total, scene) => total + (scene.masks || []).length, 0);
 
 // --- Nothing the voice still needs leaves the screen ---------------------------------------
 

@@ -2,6 +2,15 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.15.0",
+      "date": "2026-11-18",
+      "by": "Yousif",
+      "notes": [
+        "A clip with code hides the key line: you pick it from three",
+        "A part of the map ends on a question that ties its clips together"
+      ]
+    },
+    {
       "version": "0.14.0",
       "date": "2026-11-18",
       "by": "Yousif",

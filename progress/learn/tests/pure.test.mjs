@@ -22,8 +22,8 @@ import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
 import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from '../verify.mjs';
 import { voicePlatform } from '../voice.mjs';
-import { applyPlan, checkPlan } from '../video-plan.mjs';
-import { estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleScenes, simulate, spokenBudget, spokenWords, testOpener, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
+import { applyPlan, checkPlan, maskable } from '../video-plan.mjs';
+import { estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, simulate, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
@@ -1639,5 +1639,110 @@ describe("a video's plan: the map, each clip's guess, the failures it opens on",
     assert.deepEqual(testOpener(fine, 'Opener', material.assets, material.pageText), []);
     assert.match(testOpener(opener([say('Too short.'), say('Really.')]), 'Opener', material.assets, material.pageText).join(), /say 15 to 60/);
     assert.match(testOpener({ ...fine, objects: [{ id: 'k', shape: 'code', x: 40, y: 100, w: 540, h: 396, asset: 0, show: true }] }, 'Opener', { code: [{ text: 'x' }], table: [], diagram: [] }, material.pageText).join(), /no code, table or diagram/);
+  });
+});
+
+describe('a masked line, group questions and repeated patterns', () => {
+  const many = (word, n) => `${Array.from({ length: n }, (_, k) => `${word}${k}`).join(' ')}.`;
+  const code = ['function forward(request) {', '  const token = mint(request.user);', '  request.headers.auth = token;', '  return send(request);', '}'].join('\n');
+  const pageCheck = (id, guess = false) => ({ t: 'check', id, guess, q: parseInline(`Question ${id}?`), concepts: [], options: [{ inlines: parseInline('Right'), why: parseInline('Yes.'), right: 1 }, { inlines: parseInline('Wrong'), why: parseInline('No.') }] });
+  const page = {
+    title: 'Gateway',
+    markdown: 'x',
+    stats: {},
+    terms: [],
+    blocks: [
+      ...markdownToBlocks(`## Shell\n\nThe shell shows every app as a tab. ${many('alpha', 80)}\n\n## Gateway\n\nThe gateway mints a token for each request it forwards. ${many('beta', 80)}\n\n\`\`\`js\n${code}\n\`\`\``),
+      pageCheck('end1'),
+      ...markdownToBlocks(`## Backend\n\nThe backend checks the token before it answers. ${many('gamma', 80)}`),
+      pageCheck('end2'),
+    ],
+  };
+  const material = mergeTiny(flattenPage(page));
+  const question = (quote, right = 0) => ({ q: 'What happens?', options: ['One', 'Two', 'Three'].map((text, k) => ({ text, why: `Because ${k}.`, right: k === right })), quote });
+  const plan = () => ({
+    shape: 'flow',
+    boxes: [{ id: 'front', label: 'Front', parent: null }, { id: 'back', label: 'Back', parent: null }],
+    clips: [
+      { clip: 'Shell', box: 'front', handoff: null, handoffQuote: null, guess: question('The shell shows every app as a tab'), trap: [], mask: true, patternOf: null, patternQuote: null },
+      { clip: 'Gateway', box: 'front', handoff: null, handoffQuote: null, guess: question('The gateway mints a token for each request'), trap: [], mask: true, patternOf: null, patternQuote: null },
+      { clip: 'Backend', box: 'back', handoff: 'a token', handoffQuote: 'mints a token for each request', guess: question('The backend checks the token before it answers'), trap: [], mask: false, patternOf: 'Gateway', patternQuote: 'The backend checks the token before it answers' },
+    ],
+    splits: [],
+    groups: [{ box: 'front', q: 'What do the shell and the gateway share?', options: ['A', 'B', 'C'].map((text, k) => ({ text, why: 'w', right: !k })), needs: ['Shell', 'Gateway'], quotes: [{ clip: 'Shell', quote: 'The shell shows every app as a tab' }, { clip: 'Gateway', quote: 'The gateway mints a token for each request' }] }],
+  });
+
+  test('only a clip with code worth asking about may mask a line; a group question closes its box, so that clip has none', () => {
+    assert.ok(maskable(material, 'Gateway'));
+    assert.ok(!maskable(material, 'Shell'));
+    const { problems, plan: checked } = checkPlan(plan(), material);
+    assert.deepEqual(problems, []);
+    assert.deepEqual(checked.clips.map(entry => entry.mask), [false, false, false], 'Shell has no code; Gateway closes the group; Backend has no code');
+    assert.equal(checked.clips[2].patternOf, 'Gateway');
+    assert.equal(checked.groups.length, 1);
+    assert.equal(checked.groups[0].last, 'Gateway');
+  });
+
+  test("a group question needs two of its own box's clips, a quote from each, and one right answer", () => {
+    const bad = plan();
+    bad.groups[0].needs = ['Shell', 'Backend'];
+    assert.match(checkPlan(bad, material).problems.join(), /must name two or three of its own clips/);
+    const unquoted = plan();
+    unquoted.groups[0].quotes.pop();
+    assert.match(checkPlan(unquoted, material).problems.join(), /no quote word for word from clip "Gateway"/);
+    const later = plan();
+    later.clips[0].patternOf = 'Backend';
+    assert.match(checkPlan(later, material).problems.join(), /must name an earlier clip/);
+  });
+
+  test("the group question is its box's last clip's end question; a clip with a mask asks no end question; watching answers both", () => {
+    const noGroup = plan();
+    noGroup.groups = [];
+    const masked = applyPlan(page, material, checkPlan(noGroup, material).plan).material;
+    assert.ok(masked.masks.has('Gateway'));
+    assert.ok(!masked.quiz.some(q => q.id === 'end1'), 'the mask is the second stop');
+    assert.ok(masked.allQuiz.some(q => q.id === 'end1'), 'still answered by watching');
+    const grouped = applyPlan(page, material, checkPlan(plan(), material).plan).material;
+    const end = grouped.quiz.filter(q => q.section === 'Gateway' && !q.guess);
+    assert.equal(end.length, 1);
+    assert.deepEqual(end[0].group, ['Shell', 'Gateway']);
+    assert.equal(grouped.patterns.Backend, 'Gateway');
+  });
+
+  const codeScene = (beatDo, extra = {}) => ({ title: 'The code', covers: [], quote: null, check: null, objects: [{ id: 'k', shape: 'code', x: 40, y: 100, w: 540, h: 396, asset: 0 }], beats: [{ say: 'Here it is.', do: [{ on: null, show: ['k'] }] }, { say: 'So what must line 2 do?', do: [beatDo] }], ...extra });
+  const opening = { title: 'First', covers: [], quote: null, check: null, objects: [], beats: [{ say: 'First.', do: [] }] };
+  const allowed = { ...material, masks: new Set(['Gateway']) };
+  const mask = choices => ({ on: 'line', mask: { id: 'k', line: 2, choices } });
+
+  test('a mask becomes the hidden line and the pick, with the real line as the answer', () => {
+    const { result, notes } = settleMasks({ scenes: [opening, codeScene(mask(['  request.body = token;', '  request.headers.auth = request.user;']))] }, allowed, 'Gateway');
+    assert.deepEqual(notes, []);
+    const scene = result.scenes[1];
+    assert.equal(scene.masks.length, 1);
+    assert.equal(scene.masks[0].answer, 'request.headers.auth = token;');
+    assert.equal(scene.masks[0].beat, 1);
+    assert.deepEqual(scene.beats[1].do[0].set.k, { mask: 2 });
+    assert.equal(stopsOf(result.scenes), 1);
+  });
+
+  test("a mask that doesn't hold is taken out and told to Claude: never in another clip, the first scene, or with a real line as a wrong choice", () => {
+    const good = ['  request.body = token;', '  request.headers.auth = request.user;'];
+    const out = (scenes, section = 'Gateway') => settleMasks({ scenes }, allowed, section);
+    assert.match(out([opening, codeScene(mask(good))], 'Shell').notes.join(), /has no masked line/);
+    assert.match(out([codeScene(mask(good))]).notes.join(), /not in its first scene/);
+    assert.match(out([opening, codeScene(mask(['  return send(request);', good[1]]))]).notes.join(), /real line of the page's code/);
+    assert.match(out([opening, codeScene(mask([good[0]]))]).notes.join(), /exactly 2 wrong versions/);
+    assert.match(out([opening, codeScene(mask(['x', good[1]]))]).notes.join(), /about its length/);
+    const removed = out([opening, codeScene(mask(['x', good[1]]))]).result.scenes[1];
+    assert.ok(!removed.masks && !removed.beats[1].do[0].mask, 'nothing of it is left to play');
+    assert.match(out([opening]).notes.join(), /hide the one line/, 'a clip given a mask is reminded when it has none');
+  });
+
+  test('a clip stops twice at most', () => {
+    const q = id => ({ title: 'Quick check', covers: [], quote: null, check: id, objects: [], beats: [{ say: '', do: [] }] });
+    assert.equal(stopsOf([q('a'), { masks: [{}] }, q('b')]), 3);
+    assert.ok(testSection('Gateway', { scenes: [q('a'), { masks: [{}], title: 'x', covers: [], beats: [] }, q('b')] }, material).some(problem => /stops 3 times/.test(problem)));
+    const twoGuesses = videoQuiz([{ id: 'g1', guess: true, section: 'A' }, { id: 'g2', guess: true, section: 'A' }, { id: 'e', guess: false, section: 'A' }]);
+    assert.deepEqual(twoGuesses.map(item => item.id), ['g1', 'e'], 'one guess a clip, however many the page has');
   });
 });

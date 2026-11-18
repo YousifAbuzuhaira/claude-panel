@@ -95,7 +95,7 @@ function syncTo(t, instant) {
   if (s === shownScene && c === shownCue) return;
   const newScene = s !== shownScene;
   shownScene = s; shownCue = c;
-  applyState(scene.states[c], instant);
+  applyState(unmasked(scene.states[c], s), instant);
   camFrom = instant ? scene.cameras[c] : { ...cam };
   camTo = scene.cameras[c];
   camT0 = performance.now();
@@ -169,6 +169,53 @@ function showHandoff(k) {
   setTimeout(() => chip.remove(), 2600);
 }
 
+// --- A masked line: the learner picks the line that does what the clip just showed -----------
+const revealed = new Set(); // `${scene}:${object}` of lines picked
+const maskPicks = new Map();
+let activeMask = null;
+const maskKey = (s, id) => `${s}:${id}`;
+function unmasked(state, s) {
+  if (![...state.values()].some(o => o.mask !== undefined && revealed.has(maskKey(s, o.id)))) return state;
+  return new Map([...state].map(([id, o]) => [id, o.mask !== undefined && revealed.has(maskKey(s, id)) ? { ...o, mask: undefined } : o]));
+}
+function showMask(mask) {
+  activeMask = { mask, scene: shownScene };
+  const all = mask.all || (mask.all = [mask.answer, ...mask.choices].map((text, k) => ({ text, right: !k })).sort(() => Math.random() - 0.5));
+  const box = $('maskBox');
+  box.replaceChildren(div('quiz-tag', 'Which line goes here?'));
+  all.forEach((choice, k) => {
+    const node = document.createElement('button');
+    node.className = 'mask-choice';
+    const key = document.createElement('span'); key.className = 'key'; key.textContent = String(k + 1);
+    const text = document.createElement('code'); text.textContent = choice.text;
+    node.append(key, text);
+    node.addEventListener('click', () => pickMask(k));
+    box.append(node);
+  });
+  box.hidden = false;
+  drawPhrase(-1);
+}
+function pickMask(k) {
+  if (!activeMask) return;
+  const { mask, scene } = activeMask;
+  const key = maskKey(scene, mask.id);
+  if (maskPicks.has(key)) return;
+  maskPicks.set(key, k);
+  revealed.add(key);
+  const box = $('maskBox');
+  [...box.querySelectorAll('.mask-choice')].forEach((node, place) => {
+    node.disabled = true;
+    if (mask.all[place].right) node.classList.add('right');
+    else if (place === k) node.classList.add('wrong');
+  });
+  box.append(div(`quiz-result ${mask.all[k].right ? 'good' : 'bad'}`, mask.all[k].right ? 'Right' : 'Not quite: the real line is now on screen'));
+  applyState(unmasked(scenes[scene].states[shownCue], scene), false);
+  mode = 'main';
+  if (playing) sound.play().catch(() => {});
+  setTimeout(() => { if (activeMask?.mask === mask) hideMask(); }, 2800);
+}
+function hideMask() { activeMask = null; $('maskBox').hidden = true; }
+
 // --- Openers ------------------------------------------------------------------------------
 let openerScene = null, openerCue = -1;
 function syncOpener(t, instant) {
@@ -219,6 +266,7 @@ function setPlaying(on, quiet = false) {
 }
 function seek(t, keepPlaying = true) {
   if (openerScene) { openerScene = null; showWrongTurn(false); }
+  if (activeMask) hideMask();
   mode = 'main';
   pinned = clamp(t, 0, total - 0.05);
   sound.currentTime = pinned;
@@ -237,6 +285,8 @@ function watch(t) {
   const scene = scenes[shownScene];
   if (scene.skip) { if (endsClip(scene)) endClip(clipAt(scene.start)); else sound.currentTime = scene.end + 0.02; return; }
   if (scene.check && t >= scene.end - 0.05 && !answers.has(scene.check)) { sound.pause(); mode = 'held'; pinned = scene.end - 0.06; return; }
+  const mask = (scene.masks || []).find(item => item.until !== undefined && !maskPicks.has(maskKey(shownScene, item.id)) && t >= item.until - 0.05);
+  if (mask) { sound.pause(); mode = 'held'; pinned = mask.until - 0.06; showMask(mask); return; }
   if (t >= clips[clipAt(t)].to - 0.05) endClip(clipAt(t));
 }
 /** A clip's end: it stops, waiting on the next clip's first picture until you say go. */
@@ -261,6 +311,8 @@ function finish() {
   answers.clear();
   picked.clear();
   sure.clear();
+  maskPicks.clear();
+  revealed.clear();
   clips.forEach(c => { c.done = false; c.skipped = false; });
   seek(0, false);
   $('coverTitle').textContent = 'That is everything on this page.';
@@ -277,7 +329,7 @@ function showQuiz(scene) {
   if (box.hidden) return;
   const q = quizById.get(scene.check);
   box.replaceChildren();
-  box.append(div('quiz-tag', q.guess ? 'Guess first' : 'Quick check'), div('quiz-q', q.q));
+  box.append(div('quiz-tag', q.guess ? 'Guess first' : q.group ? 'Putting it together' : 'Quick check'), div('quiz-q', q.q));
   const order = q.order || (q.order = q.options.map((_, k) => k).sort(() => Math.random() - 0.5));
   const answered = answers.get(q.id);
   const done = answers.has(q.id);
@@ -404,7 +456,7 @@ function drawPhrase(index) {
 }
 function showCaption(t) {
   const current = mode === 'opener' ? openerScene : scenes[shownScene];
-  if (current?.check || !$('cover').hidden) { if (shownPhrase !== -1) drawPhrase(-1); return; }
+  if (current?.check || activeMask || !$('cover').hidden) { if (shownPhrase !== -1) drawPhrase(-1); return; }
   let low = 0, high = phrases.length - 1, found = -1;
   while (low <= high) { const mid = (low + high) >> 1; if (phrases[mid].s - 0.06 <= t) { found = mid; low = mid + 1; } else high = mid - 1; }
   if (found >= 0 && t > phrases[found].e + 0.55) found = -1;
@@ -637,6 +689,7 @@ document.addEventListener('keydown', event => {
   else if (key === '[') { const c = clips[shownClip]; jump(clockNow() - c.from > 3 || !shownClip ? c.from : clips[shownClip - 1].from); }
   else if (key === 'enter' && !$('cover').hidden) setPlaying(true);
   else if (key === 'enter') document.getElementById('continue')?.click();
+  else if (activeMask && !maskPicks.has(maskKey(activeMask.scene, activeMask.mask.id)) && /^[1-3]$/.test(key)) pickMask(Number(key) - 1);
   else if (asking && picked.has(scene.check) && (key === '1' || key === '2')) settle(key === '1');
   else if (asking && !picked.has(scene.check) && key === 'n' && quizById.get(scene.check)?.guess) notSure();
   else if (asking && !picked.has(scene.check) && /^[1-5]$/.test(key)) { const q = quizById.get(scene.check); const k = q.order?.[Number(key) - 1]; if (k !== undefined) (q.guess ? pick(k) : answer(k)); }
@@ -653,5 +706,7 @@ loop();
 // For stills of a moment: tools/shoot.mjs --eval "player.hold(120)".
 // player.endClip(k) shows the card at the end of clip k.
 window.player = { hold: t => { $('cover').hidden = true; dragging = true; pinned = t; syncTo(t, true); showFrame(t); }, endClip, scenes, clips, sound, plan, openers: openersOf,
+  // player.mask(): the masked line's pick, at the moment it holds (after player.hold), for stills.
+  mask: () => { const scene = scenes[shownScene]; if (scene.masks?.[0]) showMask(scene.masks[0]); },
   // player.opener(qid, k, t): a moment of an opener, for stills.
   opener: (id, k, t) => { const scene = openersOf[id][k]; $('cover').hidden = true; dragging = true; openerScene = scene; openerCue = -1; mode = 'opener'; $('quiz').hidden = true; showWrongTurn(true); pinned = scene.start + t; syncOpener(scene.start + t, true); showFrame(scene.start + t); } };

@@ -82,6 +82,21 @@ pre.code { margin: 0; padding: 14px 0; height: 100%; overflow: hidden; border-ra
 pre.code span { display: block; min-height: 1.45em; padding: 0 16px; line-height: 1.45; white-space: pre; transition: opacity .25s, background .25s; }
 pre.code.lit span { opacity: .4; }
 pre.code span.lit { opacity: 1; background: var(--selected); }
+pre.code span.masked { opacity: 1; color: transparent; background: repeating-linear-gradient(90deg, var(--gold-soft) 0 10px, transparent 10px 14px); outline: 1px dashed var(--gold); outline-offset: -1px; }
+/* Pick the masked line: under the picture, so the code stays in view. */
+.mask-box { position: absolute; left: 110px; right: 110px; bottom: 10px; z-index: 4; display: flex; flex-direction: column; gap: 5px; padding: 8px 12px; border: 1px solid var(--gold); border-radius: var(--radius); background: var(--card-fill); animation: head .3s ease-out both; }
+.mask-box[hidden] { display: none; }
+/* Clear of the controls when they show: they sit over the frame, the panel in the scaled stage. */
+.mask-box { transition: bottom .18s ease-out; }
+.frame.awake .mask-box { bottom: calc(8px + 64px / var(--k, 1)); }
+.mask-box .quiz-tag { font-size: 12px; }
+.mask-choice { display: grid; grid-template-columns: 24px 1fr; gap: 6px; padding: 3px 10px; text-align: left; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.mask-choice code { font-family: var(--mono); font-size: 15px; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.mask-choice .key { font-family: var(--mono); font-size: 13px; color: var(--dim); padding-top: 2px; }
+.mask-choice:hover:not(:disabled) { border-color: var(--accent-soft); background: var(--hover); }
+.mask-choice.right { background: var(--green-soft); border-color: var(--green); }
+.mask-choice.wrong { background: var(--red-soft); border-color: var(--red); }
+.mask-box .quiz-result { font-size: 14px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 20px; }
 th { padding: 8px 12px; text-align: left; font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--line); }

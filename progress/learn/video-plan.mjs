@@ -39,13 +39,30 @@ export const PLAN_SCHEMA = {
           handoffQuote: { type: ['string', 'null'] },
           guess: QUESTION,
           trap: { type: 'array', items: { type: 'integer' } },
+          mask: { type: 'boolean' },
+          patternOf: { type: ['string', 'null'] },
+          patternQuote: { type: ['string', 'null'] },
         },
-        required: ['clip', 'box', 'handoff', 'handoffQuote', 'guess', 'trap'],
+        required: ['clip', 'box', 'handoff', 'handoffQuote', 'guess', 'trap', 'mask', 'patternOf', 'patternQuote'],
+      },
+    },
+    groups: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          box: { type: 'string' },
+          q: { type: 'string' },
+          options: QUESTION.properties.options,
+          needs: { type: 'array', items: { type: 'string' } },
+          quotes: { type: 'array', items: { type: 'object', properties: { clip: { type: 'string' }, quote: { type: 'string' } }, required: ['clip', 'quote'] } },
+        },
+        required: ['box', 'q', 'options', 'needs', 'quotes'],
       },
     },
     splits: { type: 'array', items: { type: 'object', properties: { clip: { type: 'string' }, at: { type: 'integer' }, title: { type: 'string' } }, required: ['clip', 'at', 'title'] } },
   },
-  required: ['shape', 'boxes', 'clips', 'splits'],
+  required: ['shape', 'boxes', 'clips', 'splits', 'groups'],
 };
 
 const PLAN_RULES = `You plan a narrated, animated explainer video made from a page of a course. The video is a playlist of clips, one per section below, each written separately later. You decide four things. Use only the page: nothing from outside it.
@@ -60,6 +77,12 @@ const PLAN_RULES = `You plan a narrated, animated explainer video made from a pa
 3. THE GUESS QUESTION that opens each clip, before anything is taught: someone who already knows the clip's central mechanism gets it right; someone who doesn't plausibly gets it wrong. Exactly 3 options and one right. Each wrong option is a believable mistake a strong engineer new to this would make, never a joke. Each option has a one-sentence "why". The clip's own blocks must state the right answer: "quote" copies at least 5 words of them, word for word, that back it. A clip marked HAS A GUESS ALREADY gets null.
 
 4. "trap": the numbers of the clip's blocks that describe something that really went wrong: a bug, a failed approach, a rejected option, an idea that turned out false. The clip will open by showing it. Empty for most clips. Never stretch this.
+
+5. "mask": true for a clip whose code (marked CODE below) carries out the mechanism the clip explains, so the clip can show the mechanism first, then hide the one line that does it and let the learner pick it. Only a clip marked CODE can have it, and most clips don't.
+
+6. "patternOf": the name of an EARLIER clip whose pattern this clip repeats (the same check in another route, a second adapter on the same interface), with "patternQuote" copying at least 5 words of this clip's blocks that show the repeat. This clip will show the shape and leave the repeated step for the learner, so give it "mask" true when it is marked CODE. Otherwise both are null.
+
+7. "groups": for a top box (parent null) holding two or more clips, at most one question that needs two or three of its clips together to answer: what connects them, not a fact from one. "needs" names those clips; "quotes" gives, for each, at least 5 words of its blocks, word for word, that the answer rests on. 3 options, one right, each with a why. It is asked at the end of the box's last clip. Leave groups empty when the shape is "none".
 
 "splits": only for a clip marked LONG. If it really holds two separate mechanisms, give the block number where the second begins ("at", not the clip's first block) and a title for the new clip. Otherwise leave splits empty.
 
@@ -78,13 +101,18 @@ export function planRequest(page, material, repair = null) {
       const size = spokenBudget(mine);
       const guess = quiz.find(q => q.section === section && q.guess);
       return [
-        `## CLIP: ${section}${size > LONG_CLIP ? ' (LONG)' : ''}${guess ? ` (HAS A GUESS ALREADY: ${guess.q})` : ''}`,
+        `## CLIP: ${section}${size > LONG_CLIP ? ' (LONG)' : ''}${maskable(material, section) ? ' (CODE)' : ''}${guess ? ` (HAS A GUESS ALREADY: ${guess.q})` : ''}`,
         ...mine.flatMap(block => [describe(block), block.text]),
         '',
       ];
     }),
     ...(repair ? ['YOUR LAST ANSWER:', JSON.stringify(repair.plan), '', 'IT FAILED THESE CHECKS. Return all of it with these fixed and everything else kept:', ...repair.problems.map(problem => `- ${problem}`)] : []),
   ].join('\n');
+}
+
+/** A clip with code worth a masked line: a block of at least 4 lines that do something. */
+export function maskable({ blocks, assets }, section) {
+  return blocks.some(block => block.section === section && block.t === 'code' && String(assets.code[block.asset]?.text || '').split('\n').filter(line => /[A-Za-z_]\w/.test(line)).length >= 4);
 }
 
 const quoted = (quote, text) => words(norm(quote)).length >= MIN_QUOTE_WORDS && norm(text).includes(norm(quote));
@@ -146,15 +174,44 @@ export function checkPlan(plan, material) {
     } else if (!entry.guess && !hasOne && given.has(section)) problems.push(`Clip "${section}" needs a guess question`);
     const mine = new Set(blocks.filter(block => block.section === section).map(block => block.n));
     const trap = (entry.trap || []).filter(n => mine.has(n));
-    return { clip: section, box, handoff, guess, trap };
+    let patternOf = null;
+    if (entry.patternOf) {
+      if (sections.indexOf(entry.patternOf) === -1 || sections.indexOf(entry.patternOf) >= k) problems.push(`Clip "${section}": "patternOf" must name an earlier clip`);
+      else if (!quoted(entry.patternQuote, clipText(section))) problems.push(`Clip "${section}": the pattern's quote is not word for word from this clip's blocks`);
+      else patternOf = entry.patternOf;
+    }
+    // A masked line only where there's code to mask; never a problem, just not done.
+    const mask = Boolean(entry.mask || patternOf) && maskable(material, section);
+    return { clip: section, box, handoff, guess, trap, mask, patternOf };
   });
+
+  // Group questions: one per top box with two clips or more, asked at the end of its last clip.
+  const inBox = id => clips.filter(entry => entry.box === id || boxes.find(box => box.id === entry.box)?.parent === id).map(entry => entry.clip);
+  const groups = [];
+  for (const group of shape === 'none' ? [] : plan?.groups || []) {
+    const box = boxes.find(item => item.id === group?.box && !item.parent);
+    const members = box ? inBox(box.id) : [];
+    const needs = [...new Set(group?.needs || [])];
+    const options = group?.options || [];
+    const before = problems.length;
+    if (!box || members.length < 2) problems.push(`Group question on "${group?.box}": it needs a top box holding two clips or more`);
+    else if (groups.some(item => item.box === box.id)) problems.push(`Box "${box.label}" has two group questions: keep one`);
+    else {
+      if (needs.length < 2 || needs.some(name => !members.includes(name))) problems.push(`Group question on "${box.label}": "needs" must name two or three of its own clips`);
+      for (const name of needs) if (!quoted((group.quotes || []).find(item => item.clip === name)?.quote, clipText(name))) problems.push(`Group question on "${box.label}": no quote word for word from clip "${name}"`);
+      if (!String(group.q || '').trim() || options.length !== 3 || options.filter(option => option.right).length !== 1 || options.some(option => !String(option.text || '').trim() || !String(option.why || '').trim())) problems.push(`Group question on "${box.label}": it needs a question, 3 options with whys, and one right`);
+    }
+    if (problems.length === before) groups.push({ box: box.id, q: String(group.q).trim(), options: options.map(option => ({ text: String(option.text).trim(), why: String(option.why).trim(), right: Boolean(option.right) })), needs, last: sections.filter(name => members.includes(name)).at(-1) });
+  }
+  // A clip ends on at most one question: one closing a group has no masked line.
+  for (const entry of clips) if (groups.some(group => group.last === entry.clip)) entry.mask = false;
 
   const splits = (plan?.splits || []).filter(split => {
     const mine = blocks.filter(block => block.section === split?.clip);
     return mine.length && spokenBudget(mine) > LONG_CLIP && mine.some(block => block.n === split.at) && mine[0].n !== split.at && String(split.title || '').trim() && !sections.includes(String(split.title).trim());
   }).map(split => ({ clip: split.clip, at: split.at, title: String(split.title).trim() }));
 
-  return { problems, plan: { shape, boxes: shape === 'none' ? [] : boxes, clips, splits } };
+  return { problems, plan: { shape, boxes: shape === 'none' ? [] : boxes, clips, splits, groups } };
 }
 
 const questionId = (page, section, q) => `v${createHash('sha256').update(`${page.title}\n${section}\n${q}`).digest('hex').slice(0, 10)}`;
@@ -176,7 +233,7 @@ export function applyPlan(page, material, plan) {
     for (const q of allQuiz) if (q.section === split.clip && !q.guess && q.after >= split.at) q.section = split.title;
     sections.splice(at + 1, 0, split.title);
     const entry = clips.find(item => item.clip === split.clip);
-    const half = { clip: split.title, box: entry?.box ?? null, handoff: null, guess: null, trap: (entry?.trap || []).filter(n => n >= split.at) };
+    const half = { clip: split.title, box: entry?.box ?? null, handoff: null, guess: null, trap: (entry?.trap || []).filter(n => n >= split.at), mask: false, patternOf: null };
     // The guess goes with the half that teaches its answer.
     if (entry?.guess && norm(blocks.filter(block => block.section === split.title).map(block => block.text).join(' ')).includes(norm(entry.guess.quote))) [half.guess, entry.guess] = [entry.guess, null];
     if (entry) entry.trap = entry.trap.filter(n => n < split.at);
@@ -187,12 +244,20 @@ export function applyPlan(page, material, plan) {
     const first = blocks.find(block => block.section === entry.clip);
     allQuiz.push({ id: questionId(page, entry.clip, entry.guess.q), guess: true, videoOnly: true, after: (first?.n ?? 0) - 1, section: entry.clip, q: entry.guess.q, options: entry.guess.options.map(({ text, why, right }) => ({ text, why, right })) });
   }
+  // A group's question closes its box's last clip, in place of that clip's own end question.
+  for (const group of plan.groups || []) {
+    const last = blocks.filter(block => block.section === group.last).at(-1);
+    allQuiz.push({ id: questionId(page, group.last, group.q), guess: false, videoOnly: true, group: group.needs, after: last?.n ?? 0, section: group.last, q: group.q, options: group.options.map(({ text, why, right }) => ({ text, why, right })) });
+  }
   // In clip order, each clip's guess first.
   allQuiz = allQuiz.map((q, k) => ({ q, k })).sort((a, b) => sections.indexOf(a.q.section) - sections.indexOf(b.q.section) || Number(b.q.guess) - Number(a.q.guess) || a.k - b.k).map(({ q }) => q);
   blocks = blocks.sort((a, b) => a.n - b.n);
   const traps = Object.fromEntries(clips.filter(entry => entry.trap.length).map(entry => [entry.clip, entry.trap]));
+  // A clip with a masked line asks no end question: the mask is its second stop.
+  const masks = new Set(clips.filter(entry => entry.mask).map(entry => entry.clip));
+  const patterns = Object.fromEntries(clips.filter(entry => entry.patternOf).map(entry => [entry.clip, entry.patternOf]));
   return {
-    material: { ...material, blocks, allQuiz, sections, quiz: videoQuiz(allQuiz), traps },
+    material: { ...material, blocks, allQuiz, sections, quiz: videoQuiz(allQuiz, masks), traps, masks, patterns },
     map: { shape: plan.shape, boxes: plan.boxes, clips: clips.map(({ clip, box, handoff }) => ({ clip, box, handoff })) },
   };
 }

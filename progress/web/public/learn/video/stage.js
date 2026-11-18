@@ -223,7 +223,11 @@ function drawCode(item, o) {
   }
   const [from, to] = o.lines || [];
   pre.classList.toggle('lit', from !== undefined);
-  [...pre.children].forEach((line, k) => line.classList.toggle('lit', from !== undefined && k >= from && k <= (to ?? from)));
+  [...pre.children].forEach((line, k) => {
+    line.classList.toggle('lit', from !== undefined && k >= from && k <= (to ?? from));
+    // A masked line: hidden until the learner picks it (the player then draws the state without it).
+    line.classList.toggle('masked', o.mask === k);
+  });
 }
 function drawTable(item, o) {
   const rows = assets.table[o.asset] || [[]];

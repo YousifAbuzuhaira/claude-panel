@@ -101,10 +101,15 @@ def tell(speaker, scene, all_words):
     missed = 0
     scene['start'] = round(speaker.at, 3)
     scene['cues'] = []
-    for beat in scene['beats']:
+    masks = scene.get('masks') or []
+    for index, beat in enumerate(scene['beats']):
         beat_start = speaker.at
         words = speaker.speak(beat['say'])
         all_words.extend(words)
+        # A masked line holds the picture once its question is said, until the learner picks.
+        for mask in masks:
+            if mask.get('beat') == index:
+                mask['until'] = round(speaker.at, 3)
         cursor = 0
         for action in beat.get('do') or []:
             t, cursor, found = cue_time(action, words, cursor, beat_start)
