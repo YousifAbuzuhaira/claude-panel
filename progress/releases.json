@@ -2,6 +2,14 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.11.1",
+      "date": "2026-11-18",
+      "by": "Yousif",
+      "notes": [
+        "Pages share a chat course's key facts: no refuted idea comes back"
+      ]
+    },
+    {
       "version": "0.11.0",
       "date": "2026-11-18",
       "by": "Yousif",

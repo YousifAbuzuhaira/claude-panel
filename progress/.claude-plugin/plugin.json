@@ -1,6 +1,6 @@
 {
   "name": "progress",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "A progress panel beside the chat (Phases, Tests, Learn and Releases tabs, plus a few games), in your choice of colour scheme and see-through. Learn builds courses from free videos and docs with your own Claude. On Windows (with WSL2 or Git Bash) it floats over WezTerm, Git Bash's window or Windows Terminal; on macOS it floats over the terminal; anywhere else it's a Claude Code pane, and Learn and the games open in your browser.",
   "author": {
     "name": "Yousif Abuzuhaira"

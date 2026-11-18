@@ -66,6 +66,7 @@ function fakeIo({ pageFails = 0, brief = 'some', disputes = [], briefFixes = [],
               { heading: 'The problem', text: 'Clicking did nothing. '.repeat(20) },
               { heading: 'Why the opener died', text: 'WSL stops the processes of a wsl.exe that ends. '.repeat(20) },
               { heading: 'The fix', text: 'Return a one-time link and open it from Windows. '.repeat(20) },
+              { heading: 'Key facts', text: '- FALSE: the opener outlives wsl.exe. True: WSL stops it when wsl.exe ends.' },
             ],
           };
         }
@@ -597,6 +598,9 @@ describe('a course from a Claude chat', () => {
     assert.equal(category.name, 'Windows', "with no category given, the brief's is used");
     assert.ok(calls.prompts.at(-1).includes('### Chat brief s1') || calls.prompts.some(prompt => prompt.includes('### Chat brief s1')));
     assert.deepEqual(course.asks, ['the browser link fix', 'how it was checked'], 'the brief names the asks, once each');
+    const told = calls.prompts.filter(prompt => prompt.includes('KEY FACTS OF THIS COURSE') && prompt.includes('FALSE: the opener outlives wsl.exe'));
+    assert.ok(told.some(prompt => prompt.startsWith('Write page')), 'every page writer gets the key facts');
+    assert.ok(told.some(prompt => prompt.includes('Compare them, both ways')), 'and so does the source check');
     assert.equal(course.audience, 'team');
   });
 

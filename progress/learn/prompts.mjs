@@ -181,7 +181,7 @@ export const PAGE_SCHEMA = {
   required: ['markdown'],
 };
 
-export function pagePrompt({ course, page, position, total, prevTitles, nextTitle, concepts, material, learned, missing = [], budget = null, owners = null }) {
+export function pagePrompt({ course, page, position, total, prevTitles, nextTitle, concepts, material, learned, missing = [], budget = null, owners = null, keyFacts = '' }) {
   return [
     `Write page ${position} of ${total} of the course "${course.title}": "${page.title}". ${LEARNER}`,
     page.note ? `This is a rewrite of the page, and the learner asked: "${page.note}". Follow that.` : '',
@@ -216,6 +216,7 @@ export function pagePrompt({ course, page, position, total, prevTitles, nextTitl
     '- When you add something that is NOT in the material below (a fact, a command, a caveat, an example of your own), put (added) right after that sentence, or once after a whole example.',
     DIAGRAM_RULE,
     '- End with "## Recap": 3-5 bullets of one line each, the key facts. Do not put any questions in the Markdown.',
+    ...keyFactsBlock(keyFacts, 'get each one exactly right wherever this page touches it, and never state a claim marked FALSE as true; teach only what belongs to this page'),
     '',
     'MATERIAL:',
     material,
@@ -474,6 +475,7 @@ export function chatBriefPrompt({ focus, title, project, cwd, categories, audien
     '- any numbered or ordered list the focus asks about (phases, steps, a fix plan): complete, in order, with its numbers and names, in one place;',
     '- what was done and what is only planned: say which, plainly, and never describe a plan as shipped.',
     'In "asks", list each separate thing the focus names, in its words (for example "the issues", "the decisions we made", "the step-by-step fix plan").',
+    'End with a section headed exactly "Key facts": one line each, at most 25, the facts every page must get right wherever it touches them. Each numbered phase or step of a plan with what it holds; who recommended and who chose what; the numbers that matter; and every claim the chat tested and found false or corrected, written as "FALSE: <the claim>. True: <what holds>". Nothing in the other sections may contradict it.',
     'Name the engineering ideas a reader needs to follow it (the general knowledge underneath), with a line on each where it matters; the course teaches them. Put (added) after a fact you add from your own knowledge rather than from the chat or the code.',
     audience === 'self'
       ? 'The learner was in this chat: leave out the background they lived through (what their project is, why they asked), but keep every fact, decision, step and check.'
@@ -514,7 +516,7 @@ export function briefCheckPrompt({ focus }) {
     'brief.md in the current folder is that brief. chat.txt is the whole chat it was written from, oldest first: the learner\'s messages (LEARNER), the agent\'s replies (CLAUDE), a line for each tool call, cut-down results, and marks where the chat was compacted (a summary written at a compaction can be wrong; the record around it is the truth).',
     'Read brief.md whole. Read chat.txt whole too, in parts with Read (offset and limit), when it is under about 400 KB; otherwise Grep it for every topic of the brief and the focus, and Read the parts that matter.',
     'Check the brief against the chat, both ways, for everything on the focus:',
-    '1. In "wrong", list every statement in the brief that the chat contradicts; that calls done something the chat only planned, or the other way round; that contradicts another part of the brief; or that the chat does not support and is not marked (added). Copy "quote" exactly from brief.md.',
+    '1. In "wrong", list every statement in the brief that the chat contradicts; that calls done something the chat only planned, or the other way round; that contradicts another part of the brief (a lesson or summary at the end that undoes a correction made earlier, a phase given the wrong number or contents); or that the chat does not support and is not marked (added). Copy "quote" exactly from brief.md. Check the "Key facts" section line by line: every page relies on it.',
     '2. In "dropped", list everything on the focus that the chat has and the brief leaves out or only half states: each decision with all its options, what the agent recommended and what the learner chose; each risk, caveat and rejected option; each number, command, file and check; each step of a plan, with its number and name; open questions and reminders.',
     '3. In "fixes", give the corrected whole text of every section that needs a change (its heading exactly as in brief.md), and a new section for what fits nowhere. Keep each section\'s correct content and style; only correct and add. Give a section once.',
     'Never copy a secret: tokens, passwords, keys, connection strings or .env values; write <hidden> instead. If nothing is wrong or missing, return empty lists.',
@@ -541,12 +543,16 @@ export const SOURCE_CHECK_SCHEMA = {
 };
 
 /** A written page against the material it was written from, both ways: what it gets wrong, what it leaves out. */
-export function sourceCheckPrompt({ page, markdown, material, otherTitles = [] }) {
+/** The brief's "Key facts", for every page of a course whose source has them. */
+const keyFactsBlock = (keyFacts, use) => (keyFacts ? ['', `KEY FACTS OF THIS COURSE (${use}):`, keyFacts, ''] : []);
+
+export function sourceCheckPrompt({ page, markdown, material, otherTitles = [], keyFacts = '' }) {
   return [
     `Below are a page of a course, "${page.title}", and the material it was written from. Compare them, both ways. Use no outside knowledge to correct either: only compare.`,
     (page.subtopics || []).length ? `The page was planned to cover: ${page.subtopics.join('; ')}.` : '',
     otherTitles.length ? `Other pages of the course teach: ${otherTitles.join('; ')}.` : '',
     '',
+    ...keyFactsBlock(keyFacts, 'they hold for the whole course: a page claim that contradicts one, or states as true a claim marked FALSE, is "contradicts" too'),
     '1. In "wrong", list each claim on the page that the material contradicts (kind "contradicts"), and each specific claim about what the material is about (a name, number, file, command, result, decision, date, or what happened) that the material does not support and that is not marked (added) (kind "unsupported"). General knowledge that explains the material is not such a claim, and a sentence marked (added) is never "unsupported". Copy "quote" word for word from the page, leaving out marks like [12:34], [sec: ...] and (added).',
     '2. In "dropped", list each fact of the material on what this page was planned to cover that the page does not teach: a decision with its options and reasons, a rejected option, a number, a command, a warning, a risk, a step, a result, a check. Leave out what belongs to the other pages, intros, sponsor segments and asides. Say where it is in the material.',
     'Most pages have few problems, and empty lists are a good answer.',
@@ -572,7 +578,7 @@ export const PATCH_SCHEMA = {
 };
 
 /** Mends a page in place: only the sections that change come back, so a fix never regrows the page. */
-export function patchPrompt({ page, markdown, material, wrong = [], dropped = [], missing = [], unclear = [], tighten = null }) {
+export function patchPrompt({ page, markdown, material, wrong = [], dropped = [], missing = [], unclear = [], tighten = null, keyFacts = '' }) {
   return [
     `Below are a page of a course, "${page.title}", and the material it was written from. Fix only what is listed. ${LEARNER}`,
     '',
@@ -586,6 +592,7 @@ export function patchPrompt({ page, markdown, material, wrong = [], dropped = []
     '- A claim the material contradicts: correct it from the material. A specific claim the material lacks: remove it, or replace it with what the material says; keep it only if it is general knowledge a reader needs, marked (added).',
     '- Keep the page\'s style and marks: callouts (> [!example] ...), [m:ss] and [sec: Heading] cites, (added) after what is not from the material, fenced code with a language, ```mermaid diagrams.',
     tighten ? '- Change nothing else.' : '- Change nothing else. A section stays about as long as it was, apart from what you add.',
+    ...keyFactsBlock(keyFacts, 'what you write must agree with them'),
     '',
     'THE PAGE:',
     markdown,

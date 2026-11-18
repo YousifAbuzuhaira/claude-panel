@@ -803,7 +803,7 @@ function material(source, from, to, sections, budget) {
  * and questions, then a third sees only the page and answers them blind. What fails gets one
  * repair; what still fails is dropped. A concept left with no closing question gets a plain one.
  */
-async function makePage({ lib, io, page, concepts, sourceUrls, material, otherTitles, budget, isStopping, onStep, writeRequest }) {
+async function makePage({ lib, io, page, concepts, sourceUrls, material, otherTitles, budget, keyFacts = '', isStopping, onStep, writeRequest }) {
   const conceptIds = concepts.map(concept => concept.id);
   const ask = async (prompt, schema, tools = []) => {
     const call = () => io.askStructured({ prompt, schema, tools, model: lib.settings.models.build, cwd: lib.root, onRateLimit: recordUsage });
@@ -826,10 +826,10 @@ async function makePage({ lib, io, page, concepts, sourceUrls, material, otherTi
   };
   // A fix comes back as the sections it changes, so mending a page never regrows the rest of it.
   const patch = async fix => {
-    const answer = await ask(patchPrompt({ page, markdown, material, ...fix }), PATCH_SCHEMA);
+    const answer = await ask(patchPrompt({ page, markdown, material, keyFacts, ...fix }), PATCH_SCHEMA);
     return patchSections(markdown, answer.changes) || markdown;
   };
-  const checkSource = async () => tidySourceCheck(await ask(sourceCheckPrompt({ page, markdown, material, otherTitles }), SOURCE_CHECK_SCHEMA), markdown);
+  const checkSource = async () => tidySourceCheck(await ask(sourceCheckPrompt({ page, markdown, material, otherTitles, keyFacts }), SOURCE_CHECK_SCHEMA), markdown);
   onStep(`writing ${page.title}`);
   let markdown = String((await ask(writeRequest([]), PAGE_SCHEMA)).markdown || '');
   // The page against its material, both ways: what it gets wrong, what it leaves out.
@@ -900,6 +900,8 @@ async function writePages(lib, job, save, io, isStopping) {
   const sources = new Map(course.sources.filter(source => source.usable).map(source => [source.id, readSource(lib, course.id, source.id)]));
   const learned = learnedFor(catalogue, course.category);
   const owners = ownerMap(course.pages);
+  // A chat's brief ends with its key facts: every page gets them, whichever part of the brief it teaches.
+  const keyFacts = [...sources.values()].flatMap(source => (source.sections || []).filter(section => /^key facts\b/i.test(section.heading)).map(section => section.text)).join('\n').slice(0, 8000);
   const todo = course.pages.filter(page => page.status !== 'written');
   let done = course.pages.length - todo.length;
   save({ done, total: course.pages.length });
@@ -928,6 +930,7 @@ async function writePages(lib, job, save, io, isStopping) {
         material: parts.join('\n\n'),
         otherTitles: course.pages.filter(other => other.n !== page.n).map(other => other.title),
         budget,
+        keyFacts,
         isStopping,
         onStep: text => save({ message: `Page ${position + 1}/${course.pages.length}: ${text}` }),
         writeRequest: missing => pagePrompt({
@@ -943,6 +946,7 @@ async function writePages(lib, job, save, io, isStopping) {
           missing,
           budget,
           owners: owners[position],
+          keyFacts,
         }),
       });
       const videoSource = main.kind === 'youtube' ? main : (page.support || []).map(item => sources.get(item.sourceId)).find(other => other && other.kind === 'youtube');
