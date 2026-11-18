@@ -137,7 +137,7 @@ export const OUTLINE_SCHEMA = {
   required: ['title', 'summary', 'pages'],
 };
 
-export function outlinePrompt({ topic, title, category, sources, catalogue, asks = [], missing = [] }) {
+export function outlinePrompt({ topic, title, category, sources, catalogue, asks = [], missing = [], pages = null }) {
   return [
     `Plan a course on "${topic}" (working title: ${title}), from the sources below. ${LEARNER}`,
     '',
@@ -148,6 +148,7 @@ export function outlinePrompt({ topic, title, category, sources, catalogue, asks
     ] : []),
     ...(missing.length ? [`Your last plan had no page for: ${missing.join('; ')}. Plan those too.`, ''] : []),
     'Rules:',
+    ...(pages ? [`- This much material fits in about ${pages} pages. Plan no more unless each extra page has its own idea to teach, and fewer when the ideas are few.`] : []),
     '- Cover everything the sources teach on what the learner asked; never leave something out. A section of a source is not a page: a page is one main idea, drawing on about 300-600 words of a brief, 600-1,500 words of a document or web page, or 800-2,000 words of a transcript. Merge small sections on one idea; split only where each half has its own idea. Never add a page just to fill out the course. At most 40 pages.',
     '- Order the pages so that each one only needs what came before it (not necessarily source order): what a thing is and why it exists before how to configure it, tune it or use it with something else. Start from what a software engineer already knows.',
     '- Group the pages into 2-7 parts, each a short name in "part", with a part\'s pages next to each other. A short course may have one part.',

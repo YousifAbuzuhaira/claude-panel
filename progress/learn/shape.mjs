@@ -4,8 +4,8 @@ import { findCategory, stateOf } from './catalogue.mjs';
 
 // Words of a page per word of its material. A chat's brief is dense (facts, not teaching), so
 // each of its words takes the most explaining; a transcript is speech, so the least.
-const PER_WORD = { chat: 3.2, doc: 1.0, web: 1.0, youtube: 0.8 };
-const BASE = 400;
+const PER_WORD = { chat: 2.6, doc: 1.0, web: 1.0, youtube: 0.8 };
+const BASE = 300;
 const LEAST = 600;
 const MOST = 2400;
 const SELF = 0.85; // "I was in this chat": the background the author lived through goes
@@ -40,11 +40,23 @@ export function proseWords(markdown) {
   return countWords(kept.join(' '));
 }
 
-/** Over its budget by enough to be worth tightening: a quarter over, and 200 words over. */
-export const isOver = (words, budget) => Boolean(budget) && words > budget * 1.25 && words > budget + 200;
+/** Over its budget by enough to be worth tightening: 15% over, and 150 words over. */
+export const isOver = (words, budget) => Boolean(budget) && words > budget * 1.15 && words > budget + 150;
 
-/** A tightened page is kept only if the source check finds nothing more wrong or left out than before. */
-export const keepTighter = (before, after) => after.dropped.length <= before.dropped.length && after.wrong.length <= before.wrong.length;
+/** A tightened page is kept only if no check finds more wrong, left out, missing or unclear than before. */
+export const keepTighter = (before, after) => ['wrong', 'dropped', 'missing', 'unclear'].every(key => (after[key] || []).length <= (before[key] || []).length);
+
+// Words of material a page draws on, by kind of source (as the planner is told).
+const PAGE_MATERIAL = { chat: 450, doc: 1000, web: 1000, youtube: 1400 };
+const sourceWords = source => (source.kind === 'youtube'
+  ? (source.chunks || []).reduce((total, chunk) => total + countWords(chunk.text), 0)
+  : (source.sections || []).reduce((total, section) => total + countWords(section.text), 0));
+
+/** About how many pages this much material fills: the planner's upper guide. */
+export function plannedPages(sources) {
+  const pages = sources.reduce((total, source) => total + sourceWords(source) / (PAGE_MATERIAL[source.kind] ?? 1000), 0);
+  return Math.max(3, Math.min(40, Math.round(pages)));
+}
 
 const termKey = text => String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 

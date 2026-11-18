@@ -28,7 +28,7 @@ import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { claudeBinary, isAbsoluteLocal, normalizeSettings, toLocalPath, toWslPath } from '../settings.mjs';
 import { chunkLines, condenseTranscript, formatTime, htmlToSections, isPlaylist, outlineExcerpt, parseJson3, parseTime, textToSections, transcriptText, youTubeId } from '../sources.mjs';
-import { countWords, isOver, keepTighter, learnedFor, ownerMap, pageBudget, proseWords } from '../shape.mjs';
+import { countWords, isOver, keepTighter, learnedFor, ownerMap, pageBudget, plannedPages, proseWords } from '../shape.mjs';
 
 describe('what you asked for', () => {
   test('a build line keeps a long request whole', () => {
@@ -1292,14 +1292,14 @@ describe('pages say what the source says', () => {
 
 describe('the shape of a page', () => {
   test('a page may run to about what its material needs, never past the clamps', () => {
-    assert.equal(pageBudget({ kind: 'chat', mainWords: 226 }), 1100);
-    assert.equal(pageBudget({ kind: 'chat', mainWords: 500 }), 2000);
+    assert.equal(pageBudget({ kind: 'chat', mainWords: 226 }), 900);
+    assert.equal(pageBudget({ kind: 'chat', mainWords: 500 }), 1600);
     assert.equal(pageBudget({ kind: 'chat', mainWords: 5000 }), 2400, 'at most 2,400');
     assert.equal(pageBudget({ kind: 'youtube', mainWords: 0 }), 600, 'at least 600');
-    assert.equal(pageBudget({ kind: 'web', mainWords: 1000, supportWords: 1000 }), 1700);
-    assert.equal(pageBudget({ kind: 'youtube', mainWords: 2000 }), 2000);
-    assert.equal(pageBudget({ kind: 'chat', mainWords: 500, audience: 'self' }), 1700, 'shorter for the one who was there');
-    assert.equal(pageBudget({ kind: 'unknown', mainWords: 1000 }), 1400);
+    assert.equal(pageBudget({ kind: 'web', mainWords: 1000, supportWords: 1000 }), 1600);
+    assert.equal(pageBudget({ kind: 'youtube', mainWords: 2000 }), 1900);
+    assert.equal(pageBudget({ kind: 'chat', mainWords: 500, audience: 'self' }), 1350, 'shorter for the one who was there');
+    assert.equal(pageBudget({ kind: 'unknown', mainWords: 1000 }), 1300);
   });
 
   test('prose words leave out code, diagrams, cites, marks and table rules', () => {
@@ -1324,11 +1324,11 @@ describe('the shape of a page', () => {
     assert.equal(proseWords(markdown), countWords('Why it is slow The layout waits on two calls. A toy page waits once. A short trace One hop then another. hop ms proxy 40'));
   });
 
-  test('over means a quarter over and 200 words over; no budget is never over', () => {
-    assert.equal(isOver(1300, 1000), true);
-    assert.equal(isOver(1200, 1000), false, 'a fifth over is fine');
+  test('over means 15% over and 150 words over; no budget is never over', () => {
+    assert.equal(isOver(1200, 1000), true);
+    assert.equal(isOver(1100, 1000), false, 'a tenth over is fine');
     assert.equal(isOver(1000, 700), true);
-    assert.equal(isOver(820, 600), false, 'a quarter over but under 200 words over');
+    assert.equal(isOver(700, 600), false, '15% over but under 150 words over');
     assert.equal(isOver(9000, null), false);
   });
 
@@ -1338,6 +1338,15 @@ describe('the shape of a page', () => {
     assert.equal(keepTighter(before, { wrong: [], dropped: [] }), true);
     assert.equal(keepTighter(before, { wrong: [{}], dropped: [{}, {}] }), false);
     assert.equal(keepTighter(before, { wrong: [{}, {}], dropped: [] }), false);
+    assert.equal(keepTighter({ ...before, missing: [], unclear: [] }, { ...before, missing: ['a subtopic'], unclear: [] }), false, 'a subtopic the reader now misses');
+    assert.equal(keepTighter({ ...before, unclear: ['why'] }, { ...before, unclear: [] }), true);
+  });
+
+  test('the planner is told about how many pages its material fills', () => {
+    assert.equal(plannedPages([{ kind: 'chat', sections: [{ text: 'word '.repeat(4500) }] }]), 10);
+    assert.equal(plannedPages([{ kind: 'youtube', chunks: [{ text: 'word '.repeat(14000) }] }, { kind: 'web', sections: [{ text: 'word '.repeat(2000) }] }]), 12);
+    assert.equal(plannedPages([{ kind: 'doc', sections: [{ text: 'tiny' }] }]), 3, 'at least 3');
+    assert.equal(plannedPages([{ kind: 'chat', sections: [{ text: 'word '.repeat(90000) }] }]), 40, 'at most 40');
   });
 
   test('each term belongs to the first page that teaches it; the others refer back or forward', () => {

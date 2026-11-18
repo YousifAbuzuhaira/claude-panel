@@ -31,7 +31,7 @@ import { ensureYtDlp } from './deps.mjs';
 import { MAX_DOCUMENT_BYTES, documentType, mergeSections, readDocument, uniqueHeadings } from './documents.mjs';
 import { CONFIG_DIR, toLocalPath } from './settings.mjs';
 import { readJson, withLock, writeJson } from './store.mjs';
-import { countWords, isOver, keepTighter, learnedFor, ownerMap, pageBudget, proseWords } from './shape.mjs';
+import { countWords, isOver, keepTighter, learnedFor, ownerMap, pageBudget, plannedPages, proseWords } from './shape.mjs';
 
 const LEARN_MJS = fileURLToPath(new URL('./learn.mjs', import.meta.url));
 const PAGES_AT_ONCE = 3;
@@ -663,7 +663,7 @@ async function outline(lib, job, save, io) {
   const asks = job.asks || [];
   save({ message: `Planning ${course.title}` });
   const askForPlan = missing => io.askStructured({
-    prompt: outlinePrompt({ topic: job.topic, title: course.title, category: job.category, sources, catalogue: compactCatalogue(catalogue), asks, missing }),
+    prompt: outlinePrompt({ topic: job.topic, title: course.title, category: job.category, sources, catalogue: compactCatalogue(catalogue), asks, missing, pages: plannedPages(sources) }),
     schema: OUTLINE_SCHEMA,
     tools: [],
     model: lib.settings.models.build,
@@ -841,18 +841,8 @@ async function makePage({ lib, io, page, concepts, sourceUrls, material, otherTi
     markdown = await patch({ wrong: found.wrong, dropped: found.dropped });
     found = await checkSource();
   }
-  // Too long for its material: one tightening pass, kept only if the source check finds nothing more wrong or missing.
   const words = proseWords(markdown);
   let tightened = null;
-  if (isOver(words, budget)) {
-    onStep(`tightening ${page.title}`);
-    const before = { markdown, found };
-    markdown = await patch({ tighten: { words, budget } });
-    const after = await checkSource();
-    tightened = keepTighter(before.found, after) ? 'kept' : 'reverted';
-    if (tightened === 'kept') found = after;
-    else markdown = before.markdown;
-  }
   let aids = await teachAndRead(markdown, null);
   const stats = {
     asked: aids.quick.length + aids.closing.length + aids.failed.length, failed: aids.failed.length, unknown: aids.unknown.length, missing: aids.missing.length, rewritten: false, repaired: false,
@@ -869,6 +859,22 @@ async function makePage({ lib, io, page, concepts, sourceUrls, material, otherTi
     stats.repaired = true;
     aids = mergeAids(aids, await teachAndRead(markdown, aids));
   }
+  // Too long for its material once every fix is in: one tightening pass, kept only if no check
+  // then finds more wrong, left out, missing or unclear than before.
+  const finished = proseWords(markdown);
+  if (isOver(finished, budget)) {
+    onStep(`tightening ${page.title}`);
+    const before = { markdown, found, aids };
+    markdown = await patch({ tighten: { words: finished, budget } });
+    const afterFound = await checkSource();
+    const afterAids = await teachAndRead(markdown, null);
+    tightened = keepTighter({ ...before.found, missing: before.aids.missing, unclear: before.aids.unclear }, { ...afterFound, missing: afterAids.missing, unclear: afterAids.unclear }) ? 'kept' : 'reverted';
+    if (tightened === 'kept') {
+      found = afterFound;
+      aids = afterAids;
+    } else markdown = before.markdown;
+  }
+  stats.tightened = tightened;
   // Last, so it reads what the learner will. A failed call stops the build like any other: a
   // page is never saved unchecked.
   onStep(`checking the facts in ${page.title}`);
