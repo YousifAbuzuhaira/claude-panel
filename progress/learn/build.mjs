@@ -20,7 +20,7 @@ import {
 } from './prompts.mjs';
 import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, placeChecks, quoteState, pageMap, tidyAids } from './teach.mjs';
 import { makeVideos, readQueue } from './video.mjs';
-import { checkExplainer, makeExplainer, saveExplainer, wantedClips } from './explain.mjs';
+import { checkExplainer, clipCounts, makeExplainer, readExplainer, saveExplainer, wantedClips } from './explain.mjs';
 import { MAX_DISPUTES, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from './verify.mjs';
 import { ensureVoice, record } from './voice.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
@@ -41,6 +41,8 @@ const MAX_TOPIC = 3000; // room for Build all as one course: it joins several wh
 const OUTLINE_BUDGET = 240_000; // characters of source material for the outline
 const PAGE_BUDGET = 150_000; // characters of the main source for one page
 const SUPPORT_BUDGET = 50_000;
+
+const START_GRACE_MS = 60_000; // a job just started, before its process writes its pid
 
 const now = () => new Date().toISOString();
 
@@ -101,15 +103,21 @@ export async function startExplainer(lib, { plan, sessionId, cwd, io = defaultIo
 }
 
 /**
- * The job making an explainer's clips: the one running, or a new one. A job stops after 20 minutes
- * nobody watched, so opening a clip it hasn't made starts it again (`explain.at`). A course's video
- * job pauses for it, its script kept, and goes on after.
+ * The job making an explainer's clips: the one running, or a new one. A job counts as running only
+ * while its process lives, so one killed by a reboot or a WSL shutdown carries on when the player
+ * opens (`explain.at`). A course's video job pauses for it, its script kept, and goes on after.
  */
 export function explainJob(lib, explainer) {
   const running = listJobs(lib).find(job => job.kind === 'explain' && job.explain === explainer.id && job.state === 'running');
-  if (running) return running;
+  // Just started: its process hasn't written its pid yet.
+  const starting = job => !job.pid && Date.now() - Date.parse(job.updatedAt || job.startedAt) < START_GRACE_MS;
+  if (running && (starting(running) || (running.pid && isAlive(running.pid)))) return running;
   const videos = videoJob(lib);
   if (videos?.state === 'running') cancelJob(lib, videos.id);
+  if (running) {
+    resumeJob(lib, running.id);
+    return readJob(lib, running.id);
+  }
   const stamp = now().replace(/[-:T]/g, '').slice(0, 12);
   const job = saveJob(lib, {
     v: 1, id: `j${stamp}${randomBytes(2).toString('hex')}`, kind: 'explain', explain: explainer.id, topic: explainer.title, courseTitle: 'Explainer', link: null, category: null, mode: 'page', courseId: null, summary: null,
@@ -367,7 +375,11 @@ export async function runJob(lib, id, io = defaultIo) {
           save({ step: 'clips' });
         }
         const made = await makeExplainer({ lib, io, id: job.explain, save, isStopping: () => stopping });
-        save({ step: 'done', state: 'done', making: null, message: made === 1 ? 'Your clip is ready' : `${made} clips ready`, done: made, total: made });
+        // Every clip ready, not only this run's: a job carried on after a reboot made just the rest.
+        const explainer = readExplainer(lib, job.explain);
+        const { done, total } = explainer ? clipCounts(lib, explainer) : { done: made, total: made };
+        const message = done < total ? `${done} of ${total} clips ready` : total === 1 ? 'Your clip is ready' : `${total} clips ready`;
+        save({ step: 'done', state: 'done', making: null, message, done, total });
       } finally {
         rmSync(lib.paths.explaining, { force: true });
       }

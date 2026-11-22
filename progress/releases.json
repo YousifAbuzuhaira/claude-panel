@@ -2,6 +2,15 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.18.2",
+      "date": "2026-11-22",
+      "by": "Yousif",
+      "notes": [
+        "/explain makes every clip of the depth you pick, without watching",
+        "Clips left half-made by a restart carry on when you open them"
+      ]
+    },
+    {
       "version": "0.18.1",
       "date": "2026-11-22",
       "by": "Yousif",

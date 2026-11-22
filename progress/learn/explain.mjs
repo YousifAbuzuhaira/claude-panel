@@ -22,8 +22,7 @@ export const MAX_CLIPS = 12;
 const MAX_ANCHOR_LINES = 60;
 const MIN_QUOTE_WORDS = 4;
 const MAX_LABEL = 22;
-const AHEAD = 2; // clips made ahead of the one you're watching
-const IDLE_MS = 20 * 60_000; // an explainer nobody has watched for this long stops being made
+const IDLE_MS = 20 * 60_000; // an explainer with no depth yet waits this long for the player's pick
 
 const words = text => String(text ?? '').trim().split(/\s+/).filter(Boolean);
 const LANGS = { '.ts': 'ts', '.tsx': 'tsx', '.js': 'js', '.mjs': 'js', '.cjs': 'js', '.jsx': 'jsx', '.py': 'python', '.go': 'go', '.rs': 'rust', '.java': 'java', '.rb': 'ruby', '.sh': 'bash', '.sql': 'sql', '.css': 'css', '.html': 'html', '.json': 'json', '.yaml': 'yaml', '.yml': 'yaml', '.md': 'markdown', '.swift': 'swift', '.kt': 'kotlin', '.cs': 'csharp', '.php': 'php', '.ps1': 'powershell' };
@@ -390,28 +389,34 @@ export function listExplainers(lib, jobs = []) {
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
+/** Clips made of the clips wanted: the bar on the panel, and the chat's notices. */
+export const clipCounts = (lib, explainer) => ({
+  done: explainer.clips.filter((clip, k) => existsSync(`${explainPaths(lib, explainer.id).clip(k + 1)}.json`)).length,
+  total: wantedClips(explainer),
+});
+
 /**
- * The next clip worth making now: in the depth picked (clip 1 before a pick), and at most AHEAD
- * clips of that depth past the one watched.
+ * The next clip to make: with a depth picked, every clip in it, the one being watched (and those
+ * after it) first; with none yet, clip 1, then a wait for the player's pick. `skip` counts as made.
  */
 export function nextClip(lib, explainer, skip = new Set()) {
-  const wanted = explainer.clips.map((clip, k) => k + 1).filter(n => n === 1 || inDepth(explainer.clips[n - 1], explainer.depth));
-  const watching = Math.max(0, wanted.findLastIndex(n => n <= (explainer.at || 1)));
-  for (let n = 1; n <= explainer.clips.length; n++) {
-    if (skip.has(n) || existsSync(`${explainPaths(lib, explainer.id).clip(n)}.json`)) continue;
-    if (n > 1 && !explainer.depth) return { wait: true };
-    if (!wanted.includes(n)) continue;
-    return wanted.indexOf(n) - watching > AHEAD ? { wait: true } : { n };
+  const made = n => skip.has(n) || existsSync(`${explainPaths(lib, explainer.id).clip(n)}.json`);
+  const all = explainer.clips.map((clip, k) => k + 1);
+  if (!explainer.depth) {
+    if (!made(1)) return { n: 1 };
+    return all.some(n => !made(n)) ? { wait: true } : { done: true };
   }
-  return { done: true };
+  const missing = all.filter(n => (n === 1 || inDepth(explainer.clips[n - 1], explainer.depth)) && !made(n));
+  if (!missing.length) return { done: true };
+  return { n: missing.find(n => n >= (explainer.at || 1)) ?? missing[0] };
 }
 
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 
 /**
  * Makes an explainer's clips in order, each a script then a recording, the next clip's script
- * written while one records, never more than AHEAD clips past the one watched. Stops when all its
- * clips in depth are made, or when nobody has watched it for IDLE_MS.
+ * written while one records. Stops when all its clips in depth are made; one with no depth yet
+ * stops after clip 1 when nobody picks one for IDLE_MS.
  */
 export async function makeExplainer({ lib, io, id, save, isStopping, poll = 3000 }) {
   const model = lib.settings.models.video;
@@ -445,8 +450,7 @@ export async function makeExplainer({ lib, io, id, save, isStopping, poll = 3000
     return scripts.get(n);
   };
   let made = 0;
-  // The bar on the panel: clips made of the clips wanted.
-  const counts = explainer => ({ done: explainer.clips.filter((clip, k) => existsSync(`${explainPaths(lib, id).clip(k + 1)}.json`)).length, total: wantedClips(explainer) });
+  const counts = explainer => clipCounts(lib, explainer);
   for (;;) {
     if (isStopping()) throw new Error('stopped');
     const explainer = readExplainer(lib, id);
@@ -455,7 +459,7 @@ export async function makeExplainer({ lib, io, id, save, isStopping, poll = 3000
     if (next.done) break;
     if (next.wait) {
       if (Date.now() - Date.parse(explainer.seenAt || explainer.createdAt) > IDLE_MS) break;
-      save({ message: `${explainer.title}: waiting for you to watch on`, ...counts(explainer) });
+      save({ message: `${explainer.title}: waiting for you to pick how deep`, ...counts(explainer) });
       await sleep(poll);
       continue;
     }

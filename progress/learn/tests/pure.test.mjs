@@ -24,7 +24,7 @@ import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, sourceDisputes, ti
 import { voicePlatform } from '../voice.mjs';
 import { applyPlan, checkPlan, maskable, planRequest, planSchema } from '../video-plan.mjs';
 import { writeScript } from '../video-script.mjs';
-import { anchorFile, checkExplainer, clipPage, clipPlan, codeParts, explainInfo, explainPaths, explainProblems, listExplainers, looksSecret, nextClip, quotesInChat, readAnchors, saveExplainer, wantedClips } from '../explain.mjs';
+import { anchorFile, checkExplainer, clipCounts, clipPage, clipPlan, codeParts, explainInfo, explainPaths, explainProblems, listExplainers, looksSecret, nextClip, quotesInChat, readAnchors, saveExplainer, wantedClips } from '../explain.mjs';
 import { codeNeeds, estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, layoutNotes, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, simulate, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, containers, crosses, dedent, edgePoint, fitCamera, frameFor, labelPoint, labelSpot, legendRect, roughRect, sceneAt, wireEnds } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
@@ -1969,7 +1969,7 @@ describe('an explainer: your session plans clips about code, Learn checks and ma
     assert.ok(checked.plan.clips[0].guess, "the guess's quote is on the clip's page");
   });
 
-  test('clips are made in order: clip 1 before you pick a depth, then only the depth picked, two ahead of the one you watch', () => {
+  test('clips are made in order: clip 1 before you pick a depth, then every clip of the depth picked, the one you watch first', () => {
     const lib = { root: mkdtempSync(join(tmpdir(), 'lib-')) };
     const one = { ...explainer(), clips: [...explainer().clips, ...explainer().clips.map((clip, k) => ({ ...clip, title: `More ${k}`, level: 2 }))] };
     assert.deepEqual(nextClip(lib, one), { n: 1 });
@@ -1980,15 +1980,21 @@ describe('an explainer: your session plans clips about code, Learn checks and ma
     made(2);
     assert.deepEqual(nextClip(lib, { ...one, depth: 2 }), { n: 4 }, 'clip 3 is past depth 2');
     made(4);
-    assert.deepEqual(nextClip(lib, { ...one, depth: 2 }), { wait: true }, 'clip 5 is more than two past clip 1');
-    assert.deepEqual(nextClip(lib, { ...one, depth: 2, at: 3 }), { n: 5 });
+    assert.deepEqual(nextClip(lib, { ...one, depth: 2 }), { n: 5 }, 'no limit ahead of the clip watched: nobody need be watching');
+    assert.deepEqual(nextClip(lib, { ...one, depth: 2, at: 6 }), { n: 6 }, 'the clip being watched first');
+    assert.deepEqual(nextClip(lib, { ...one, depth: 2, at: 6 }, new Set([6])), { n: 5 }, 'then the ones before it');
     const info = explainInfo(lib, { ...one, depth: 2 });
     assert.deepEqual(info.counts, [1, 5, 6]);
     assert.deepEqual(info.clips.slice(0, 4).map(clip => clip.state), ['ready', 'ready', 'left out', 'ready']);
+    assert.deepEqual(clipCounts(lib, { ...one, depth: 2 }), { done: 3, total: 5 });
+    made(5);
+    made(6);
+    assert.deepEqual(nextClip(lib, { ...one, depth: 2 }), { done: true }, 'clip 3 is never made at depth 2');
+    assert.deepEqual(nextClip(lib, one), { wait: true }, 'with no depth, clip 3 waits for a pick');
     rmSync(lib.root, { recursive: true, force: true });
   });
 
-  test('with the depth picked in the chat, clip 1 and the two after it are made at once, never waiting for a pick', () => {
+  test('with the depth picked in the chat, every clip of it is made at once, never waiting for a pick', () => {
     const lib = { root: mkdtempSync(join(tmpdir(), 'lib-')) };
     const picked = { ...explainer(), depth: 3 };
     const made = n => { mkdirSync(join(explainPaths(lib, picked.id).dir, 'clips'), { recursive: true }); writeFileSync(`${explainPaths(lib, picked.id).clip(n)}.json`, '{}'); };

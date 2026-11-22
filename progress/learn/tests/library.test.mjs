@@ -20,6 +20,8 @@ const { withLock, writeJson, readJson } = await import('../store.mjs');
 const { clearQueue, courseVideos, makeVideos, queueVideos, readQueue, swapVideo, videoInfo } = await import('../video.mjs');
 const { readDocument } = await import('../documents.mjs');
 const { writeSettings } = await import('../settings.mjs');
+const buildModule = await import('../build.mjs');
+const explainModule = await import('../explain.mjs');
 
 const CHUNKS = Array.from({ length: 60 }, (_, i) => ({ t: i * 30, text: `part ${i} about volumes` }));
 
@@ -919,5 +921,38 @@ describe('the fact-check in a build', () => {
     const job = createJob(lib, { topic: 'Checked volumes', category: 'Docker', mode: 'auto' });
     await runJob(lib, job.id, io);
     assert.ok(calls.tools.some(tools => tools.join() === 'WebSearch,WebFetch'));
+  });
+});
+
+describe("an explainer's job", () => {
+  const { explainJob, saveJob } = buildModule;
+  const { explainPaths, saveExplainer } = explainModule;
+  const clipsMade = (lib, explainer, count) => {
+    mkdirSync(join(explainPaths(lib, explainer.id).dir, 'clips'), { recursive: true });
+    for (let n = 1; n <= count; n++) writeFileSync(`${explainPaths(lib, explainer.id).clip(n)}.json`, '{}');
+  };
+  const clip = level => ({ title: `Level ${level}`, level, facts: [], anchors: [], guess: { q: 'q', options: [] } });
+
+  test('counts as running only while its process lives, or just after it started', () => {
+    const lib = openLibrary();
+    const explainer = saveExplainer(lib, { title: 'Alive', depth: 1, at: 1, clips: [clip(1)], createdAt: new Date().toISOString() });
+    const alive = saveJob(lib, { v: 1, id: 'j202611220000aaaa', kind: 'explain', explain: explainer.id, state: 'running', step: 'clips', pid: process.pid, startedAt: new Date().toISOString() });
+    assert.equal(explainJob(lib, explainer).id, alive.id, 'its process is alive');
+    saveJob(lib, { ...alive, state: 'done' });
+    const starting = saveJob(lib, { v: 1, id: 'j202611220000bbbb', kind: 'explain', explain: explainer.id, state: 'running', step: 'voice', pid: null, startedAt: new Date().toISOString() });
+    assert.equal(explainJob(lib, explainer).id, starting.id, 'no pid yet, but just started');
+    saveJob(lib, { ...starting, state: 'done' });
+  });
+
+  test('when it ends, it counts every clip ready, not only the ones this run made', async () => {
+    const lib = openLibrary();
+    const explainer = saveExplainer(lib, { title: 'Carried on', depth: 2, at: 1, clips: [clip(1), clip(2), clip(2), clip(3)], createdAt: new Date().toISOString() });
+    clipsMade(lib, explainer, 3);
+    saveJob(lib, { v: 1, id: 'j202611220000cccc', kind: 'explain', explain: explainer.id, state: 'running', step: 'clips', done: 0, total: 3, pid: null, startedAt: new Date().toISOString() });
+    const io = { askStructured: async () => { throw new Error('nothing left to write'); }, ensureVoice: async () => {}, record: async () => { throw new Error('nothing left to record'); } };
+    await buildModule.runJob(lib, 'j202611220000cccc', io);
+    const job = readJob(lib, 'j202611220000cccc');
+    assert.equal(job.state, 'done');
+    assert.deepEqual([job.done, job.total, job.message], [3, 3, '3 clips ready'], 'clip 4 is past depth 2, and this run made none');
   });
 });
