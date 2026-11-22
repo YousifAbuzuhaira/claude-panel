@@ -333,6 +333,8 @@ const empty = (headline, hint) => [el('div', { class: 'ink' }, headline), hint ?
 const counts = (ratio, color, ...rest) => el('div', { class: 'counts sub indent' }, el('span', { class: `bar ${color}` }, bar(ratio)), el('span', { class: 'rest' }, ...rest));
 // A link that opens the Learn window (at a view and a course, when given).
 const learnLink = (text, view, courseId) => el('div', { class: 'link act', onclick: () => openPage('learn', view, courseId) }, text);
+// An explainer's clips (/explain): nothing opens by itself, so the way to them is on this tab.
+const clipsLink = explain => el('div', { class: 'link act indent', onclick: () => post({ type: 'open', page: 'learn/video', explain }) }, `Watch clips ${G.arrow}`);
 
 function phasesBody(foot) {
   if (!hasPlan()) return empty('No plan yet', 'When Claude plans a task, its phases show here as it works through them.');
@@ -394,7 +396,8 @@ function learnBody() {
     const glyph = b.state === 'done' ? G.check : b.state === 'failed' ? G.cross : G.live;
     parts.push(markRow(glyph, color, b.topic, { cls: 'trim' }));
     parts.push(el('div', { class: 'sub indent dim' }, b.message));
-    if (Number(b.total) > 0 && b.state !== 'done') parts.push(counts(Number(b.done) / Number(b.total), color, ` ${b.done}/${b.total} pages`));
+    if (Number(b.total) > 0 && b.state !== 'done') parts.push(counts(Number(b.done) / Number(b.total), color, ` ${b.done}/${b.total} ${b.kind === 'explain' ? 'clips' : 'pages'}`));
+    if (b.kind === 'explain' && /^x[0-9a-f]{12,20}$/.test(String(b.explain || ''))) parts.push(clipsLink(b.explain));
   }
   if (c) {
     parts.push(markRow(G.course, 'dim', c.title, { cls: 'strong', top: b ? 'group' : '' }));

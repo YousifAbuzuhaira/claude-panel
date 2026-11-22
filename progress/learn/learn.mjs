@@ -68,7 +68,7 @@ try {
     }
     // One line of JSON, read by the /explain tool: the explainer started, or what the session must fix.
     const started = await startExplainer(openLibrary(), { plan, sessionId: flags.session, cwd: flags.cwd });
-    console.log(JSON.stringify(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips }));
+    console.log(JSON.stringify(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips, wanted: started.wanted, depth: started.depth }));
     process.exit(0);
   } else if (command === 'chats') {
     const lib = openLibrary();

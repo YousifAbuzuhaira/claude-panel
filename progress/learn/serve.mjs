@@ -18,7 +18,7 @@ import { chatKey, clearChat, listAdvisorChats, readChat, removeAdvisorChat, send
 import { cancelJob, createJob, createPageJob, createRefreshJob, dropJobFiles, explainJob, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon, startVideos, videoJob } from './build.mjs';
 import { videoStamp } from './video-check.mjs';
 import { clearQueue, courseVideos, queueVideos, swapVideo, videoInfo } from './video.mjs';
-import { explainInfo, explainPaths, inDepth, readExplainer, updateExplainer } from './explain.mjs';
+import { explainInfo, explainPaths, inDepth, listExplainers, readExplainer, updateExplainer } from './explain.mjs';
 import { voiceStatus } from './voice.mjs';
 import { ensureYtDlp, installedYtDlp } from './deps.mjs';
 import {
@@ -92,8 +92,9 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       const courses = listCourses(lib).map(course => courseSummary(course, catalogue))
         .sort((a, b) => String(b.lastOpened || b.createdAt).localeCompare(String(a.lastOpened || a.createdAt)));
       const day = Date.now() - 86_400_000;
-      const jobs = listJobs(lib).filter(job => !job.dismissed && (job.state !== 'done' || Date.parse(job.updatedAt) > day)).slice(0, 10);
-      return { categories: catalogue.categories, courses, jobs, status: readStatus(), reviewDue: dueToday(readReview()).due.length };
+      const all = listJobs(lib);
+      const jobs = all.filter(job => !job.dismissed && (job.state !== 'done' || Date.parse(job.updatedAt) > day)).slice(0, 10);
+      return { categories: catalogue.categories, courses, jobs, explainers: listExplainers(lib, all), status: readStatus(), reviewDue: dueToday(readReview()).due.length };
     },
 
     'category.add': ({ name }) => updateCatalogue(lib, catalogue => ensureCategory(catalogue, name)),
@@ -206,6 +207,8 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
       const job = listJobs(lib).find(item => item.kind === 'explain' && item.explain === explainer.id && item.state === 'running');
       return { ...explainInfo(lib, explainer, job?.making ?? null), message: job?.message || null };
     },
+    // Every explainer, newest first, as the Library lists them.
+    'explain.list': () => listExplainers(lib, listJobs(lib)),
     'explain.video': ({ id, n }) => {
       const explainer = readExplainer(lib, safeId(id));
       const clip = Number(n);

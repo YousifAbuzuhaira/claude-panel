@@ -2,7 +2,7 @@
 // is tested as the player would draw it, repaired, or rebuilt from the page. Then someone who only
 // watches answers the questions, and a check compares the script with the page, both ways.
 import { READER_SCHEMA, readerPrompt } from './prompts.mjs';
-import { faultsBySection, firstTaught, flattenPage, hearing, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
+import { codeNeeds, faultsBySection, firstTaught, flattenPage, hearing, keptOnScreen, layoutNotes, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
 import { OPENER_SCHEMA, OPENER_WORDS, applyPlan, checkPlan, makePlan } from './video-plan.mjs';
 
 const REPAIRS = 2;
@@ -45,7 +45,7 @@ export const CLAIM_SCHEMA = {
 
 const PRONUNCIATION = `PRONUNCIATION. A text-to-speech voice will read "say" aloud. In "pronounce", list every word it would get wrong, with "written" exactly as it appears in "say" and "spoken" as it should be read: an ID or exact value read digit by digit or in full, a letter-by-letter acronym, a name from code. For example {"written":"1917","spoken":"1 thousand 9 hundred and 17"} or {"written":"cl100k_base","spoken":"C L 100 K base"}. Leave out ordinary words and acronyms said as words. An empty list is fine.`;
 
-const DRAWING = `THE STAGE is 1120 wide and 630 high. Keep everything inside x 40 to 1080 and y 96 to 500. The title sits above and subtitles below. Do not let objects overlap unless one is an outline around another or a label inside a box.
+const DRAWING = `THE STAGE is 1120 wide and 630 high. Keep everything inside x 40 to 1080 and y 96 to 500. The title sits above and subtitles below. Do not let objects overlap unless one is an outline around another or a label inside a box, and never draw over a faded object. An outline is either all around what it holds or clear of it, never half over something. An outline around other objects shows its text as a small name on its top edge: leave 20 free under its top. An arrow runs straight from edge to edge, so place what it joins with nothing else between them, and its text needs about 9 per character of clear line.
 
 OBJECTS. Each has a unique "id", a "shape", and starts hidden unless "show" is true. Optional on most: "tone" (ink, dim, accent, green, red, gold, blue), "fade" (true dims it), "spawnAt" (the id of an object it comes out of).
 - box: x, y, w, h, text, sub (small line under it), style ("solid", "fill" for a bright filled box, "outline" for an empty frame around something).
@@ -54,17 +54,17 @@ OBJECTS. Each has a unique "id", a "shape", and starts hidden unless "show" is t
 - bar: x, y, w, h. Changing w or h grows it smoothly, and it grows from nothing when shown.
 - dot: x, y, w (its diameter). Good for something travelling along a path.
 - arrow: "from" and "to" (object ids), or x, y, x2, y2. "flow" true makes it move. "text" for a very short label.
-- row: x, y, w, items [{label, sub}], mark [positions to light up]. Boxes in a line, sized for you. Setting a new "items" animates the change, so a merge really collapses on screen.
-- code: x, y, w, h, asset (which code block), lines [first, last] lights up lines, from 0.
+- row: x, y, w, items [{label, sub}], mark [positions to light up]. Boxes in a line, sized for you; a box widens to fit its label, and boxes that don't fit in w wrap to a second line. Setting a new "items" animates the change, so a merge really collapses on screen.
+- code: x, y, w, h, asset (which code block), lines [first, last] lights up lines, from 0. Give it at least the size its block's heading says it needs.
 - table: x, y, w, asset (which table), rows [body rows shown so far], now [rows lit].
 - diagram: x, y, w, h, asset (which diagram), nodes [node numbers shown so far]. Give the whole list each time. Show one or two more per beat.
 
-BEATS. {"say": one sentence, "do": [actions]}. An action fires when the voice reaches the word in "on" (null means the start of the sentence): {"on": "word", "show": [ids], "hide": [ids], "set": {"id": {changed fields}}, "camera": {"x": 560, "y": 315, "zoom": 1.5}}. x and y are the point to centre; zoom 1 at the centre is the normal view. "on" must be one exact word from "say". A sentence may have several actions.
+BEATS. {"say": one sentence, "do": [actions]}. An action fires when the voice reaches the word in "on" (null means the start of the sentence): {"on": "word", "show": [ids], "hide": [ids], "set": {"id": {changed fields}}}. "on" must be one exact word from "say". A sentence may have several actions.
 
 A SCENE. Example, on another subject:
 {"title":"Adding two numbers","covers":[3],"quote":"exact words from the block","check":null,
 "objects":[{"id":"a","shape":"box","x":120,"y":200,"w":200,"h":130,"text":"12","sub":"first"},{"id":"b","shape":"box","x":360,"y":200,"w":200,"h":130,"text":"30","sub":"second"},{"id":"go","shape":"arrow","from":"b","to":"sum","flow":true},{"id":"sum","shape":"number","x":740,"y":210,"w":280,"value":0,"sub":"total","tone":"accent","size":"xl"}],
-"beats":[{"say":"Start with 12.","do":[{"on":"12","show":["a"]}]},{"say":"Bring in 30 beside it.","do":[{"on":"30","show":["b"]}]},{"say":"Now watch the total climb to 42.","do":[{"on":"total","show":["go","sum"]},{"on":"climb","set":{"sum":{"value":42},"a":{"fade":true},"b":{"fade":true}}}]},{"say":"Look closer at the result.","do":[{"on":"closer","camera":{"x":880,"y":270,"zoom":1.6}}]}]}`;
+"beats":[{"say":"Start with 12.","do":[{"on":"12","show":["a"]}]},{"say":"Bring in 30 beside it.","do":[{"on":"30","show":["b"]}]},{"say":"Now watch the total climb to 42.","do":[{"on":"total","show":["go","sum"]},{"on":"climb","set":{"sum":{"value":42},"a":{"fade":true},"b":{"fade":true}}}]}]}`;
 
 const RULES = `You write one section of a narrated, animated explainer video for a page of a course. It sits beside the page and teaches ALL of it: someone who only watches must learn everything in the blocks below. The learner is a strong software engineer who knows nothing of this subject.
 
@@ -73,9 +73,9 @@ MOTION IS THE POINT. The learner should SEE the idea happen, like a great animat
 - Things move instead of just appearing. If a byte becomes a token, that same object travels or changes. Use "spawnAt" so a new object comes out of the one that produced it.
 - Show processes running: an outline box sliding along a row one position per beat, a number counting up, bars growing and shrinking together, a row collapsing, arrows that flow.
 - Trade-offs are two things moving against each other at once.
-- Code is traced: put it on the left and, on the right, the values changing as the voice reaches each line. This layout always fits: code at x 40, y 100, w 540, h 396, and two rows at x 600, w 480, one at y 120 for what goes in and one at y 290 for what comes out. Move the code's "lines" and set the rows' "items" as the voice walks through it. If the code needs more width than that, give it what the check asks for and move the rows below it or drop them.
+- Code is traced: give the code object at least the size its block's heading states, never less, at x 40, y 100. When that leaves 240 or more of width to its right, put two rows there, one at y 120 for what goes in and one at y 290 for what comes out, and set their items as the voice walks the lines. When it doesn't, give the code the full width (w 1040) and put one row under it, or none. Move the code's "lines" as the voice walks through it.
 - A worked example runs step by step with its real values, never summarised.
-- Fade what is not being discussed (set fade true). The camera frames the picture by itself, so you never need "camera": lay things out and let the scene grow.
+- Fade what is not being discussed (set fade true). The camera frames the picture by itself: lay things out and let the scene grow.
 - Keep the picture growing through a scene. Do not clear and restart. Never hide something the voice will name again: fade it instead, so the learner can look back at it.
 - This section is one clip of the video. Start each new scene of it by carrying at least one object over by its id, at a new place, unless the new scene shows code, a table or a diagram.
 - Very little text on screen: 1 to 5 words per object, and never a sentence. The voice carries the words. Never a bullet list of text.
@@ -103,6 +103,13 @@ const MASK_RULE = 'MASKED LINE: once in this clip, after you have shown the mech
 
 const describe = block => `[${block.n}] (${block.t}${block.asset !== undefined ? ` ${block.asset}` : ''}${block.callout ? `, ${block.callout}` : ''})`;
 
+/** What a code block needs on stage, told with its heading, so the first script already gives it room. */
+function codeRoom(block) {
+  if (block.t !== 'code') return '';
+  const needs = codeNeeds(block.text);
+  return needs.wide ? ` wider than the stage: give it x 40, w 1040, at least ${needs.h} high, and nothing beside it` : ` needs at least ${needs.w} by ${needs.h} on stage`;
+}
+
 /** Glossary words a section before this one already explains. */
 const earlierTerms = ({ taught, sections }, section) => [...(taught || [])].filter(([, at]) => sections.indexOf(at) < sections.indexOf(section)).map(([term]) => term);
 
@@ -120,7 +127,7 @@ function sectionRequest(page, material, section, repair) {
     'GLOSSARY:', ...(page.terms || []).map(term => `- ${term.term}: ${term.def}`), '',
     ...(earlierTerms(material, section).length ? [`ALREADY EXPLAINED IN EARLIER SECTIONS (use these words, don't explain them again): ${earlierTerms(material, section).join('; ')}`, ''] : []),
     'BLOCKS OF THIS SECTION:',
-    ...mine.flatMap(block => [describe(block), block.text, '']),
+    ...mine.flatMap(block => [`${describe(block)}${codeRoom(block)}`, block.text, '']),
     ...(material.masks?.has(section) ? [`${MASK_RULE}${material.patterns?.[section] ? ` This clip repeats the pattern of clip "${material.patterns[section]}": show the shape briefly, and mask the step that repeats.` : ''}`, ''] : []),
     ...(material.traps?.[section]?.length ? [`REAL FAILURE: blocks ${material.traps[section].join(', ')} describe something that really went wrong. Open this clip by showing that failure as it happened${asking ? ' (after any GUESS FIRST question)' : ''} and give the scenes that show it "trap": true. A trap scene shows only what went wrong, never the fix; the player marks it as a wrong turn. Then teach the rest.`, ''] : []),
     ...(asking ? ['QUIZ:', ...(questions.length ? questions.flatMap(q => [`[${q.id}] ${q.guess ? 'GUESS FIRST, before this is taught' : `after block ${q.after} is taught`}: ${q.q}`, `  Answer: ${q.options.find(option => option.right)?.text}`]) : ['(none in this section)'])] : []),
@@ -276,7 +283,7 @@ export async function writeScript({ page, ask, onStep = () => {}, plan = null, q
       // only when the answer still passes and is no worse on either.
       const limit = spokenBudget(blocks.filter(block => block.section === section));
       const lengthHint = result => (spokenWords(result?.scenes) > limit * 1.3 ? [`The narration runs ${spokenWords(result.scenes)} words for about ${limit} words of page: say each fact once, cut signposts and summaries, and keep every block covered.`] : []);
-      const softAll = result => [...keptOnScreen(result?.scenes), ...(maskNotes.get(result) || [])];
+      const softAll = result => [...keptOnScreen(result?.scenes), ...layoutNotes(result?.scenes, assets), ...(maskNotes.get(result) || [])];
       const soft = result => softAll(result).slice(0, 8);
       const polish = result => [...lengthHint(result), ...soft(result)];
       let result = await attempt(section, null);
@@ -410,6 +417,8 @@ export async function writeScript({ page, ask, onStep = () => {}, plan = null, q
       polished,
       firstSoft,
       softLeft: Object.fromEntries(sections.filter(section => !rebuilt.has(section)).map(section => [section, keptOnScreen(scenes.filter(scene => scene.section === section))]).filter(([, left]) => left.length)),
+      // Arrows through objects, arrow text with no room, covered container names: shipped, noted here.
+      layoutLeft: Object.fromEntries(sections.filter(section => !rebuilt.has(section)).map(section => [section, layoutNotes(scenes.filter(scene => scene.section === section), assets)]).filter(([, left]) => left.length)),
       quizShown: quiz.length,
       quizAll: allQuiz.length,
       readOut,

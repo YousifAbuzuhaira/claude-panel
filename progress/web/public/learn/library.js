@@ -1,5 +1,6 @@
-// Library: a new course, the builds, and the courses by category.
-import { upload } from '../shared/api.js';
+// Library: a new course, the builds, every explainer (/explain), and the courses by category.
+import { openWindow, upload, withToken } from '../shared/api.js';
+import { isNative } from '../shared/look.js';
 import { GLYPH, S, act, action, armed, categoryName, chip, formatDate, h, inlineEdit, isHttp, nav, onEnter, short, toast, videoBar } from './core.js';
 
 const L = {
@@ -39,11 +40,12 @@ export function buildLibraryView(host) {
   pickChip.title = 'Research first, then you tick which videos and pages the course is built from';
   const build = h('button.ui-btn.primary', { type: 'button', onclick: submitNewCourse }, 'Build');
   const categoryChips = h('div.chips.category-chips');
-  const search = h('input.ui-input.search', { type: 'search', placeholder: 'Search your courses', 'aria-label': 'Search courses' });
+  const search = h('input.ui-input.search', { type: 'search', placeholder: 'Search your courses and explainers', 'aria-label': 'Search courses and explainers' });
   const jobs = h('section.jobs');
+  const explainers = h('section.explainers');
   const courses = h('section.courses');
   onEnter(topic, submitNewCourse);
-  search.addEventListener('input', showCourses);
+  search.addEventListener('input', () => { showExplainers(); showCourses(); });
 
   // A document in place of the topic: a box that picks one; a file dropped on the Library too.
   const fileInput = h('input', { type: 'file', accept: DOCUMENT_TYPES.join(','), hidden: true, 'aria-hidden': 'true' });
@@ -85,6 +87,7 @@ export function buildLibraryView(host) {
       categoryChips),
     search,
     jobs,
+    explainers,
     courses);
   view.addEventListener('dragover', event => {
     if ([...(event.dataTransfer?.types || [])].includes('Files')) {
@@ -102,7 +105,7 @@ export function buildLibraryView(host) {
     setDocument(file);
   });
   host.append(view);
-  ui = { topic, category, pickChip, autoChip, categoryChips, search, jobs, courses, docBox, docName, docClear, modes, sourceChips, chatBox, chatSelect, chatFocus, audience, teamChip, selfChip };
+  ui = { topic, category, pickChip, autoChip, categoryChips, search, jobs, explainers, courses, docBox, docName, docClear, modes, sourceChips, chatBox, chatSelect, chatFocus, audience, teamChip, selfChip };
 }
 
 function setAudience(audience) {
@@ -266,6 +269,7 @@ function showLibrary() {
     }
   }
   showJobs();
+  showExplainers();
   showCourses();
 }
 
@@ -284,7 +288,10 @@ function jobRow(job) {
   const actions = h('div.row-actions');
   const add = (text, fn, cls) => actions.append(action(text, fn, cls));
   switch (job.state) {
-    case 'running': add('Pause', jobAction('build.cancel', job.id), 'dim'); break;
+    case 'running':
+      if (job.kind === 'explain' && job.explain) add('Open clips', () => openExplainer(job.explain), 'accent');
+      add('Pause', jobAction('build.cancel', job.id), 'dim');
+      break;
     case 'waiting-picks':
       add(L.pickingJob === job.id ? 'Hide sources' : 'Pick sources', () => togglePicker(job), 'gold');
       add('Dismiss', jobAction('build.dismiss', job.id), 'dim');
@@ -296,6 +303,7 @@ function jobRow(job) {
       break;
     case 'done':
       if (job.courseId) add('Open course', () => nav.openCourse(job.courseId, null), 'green');
+      if (job.kind === 'explain' && job.explain) add('Open clips', () => openExplainer(job.explain), 'green');
       add('Dismiss', jobAction('build.dismiss', job.id), 'dim');
       break;
     default: break;
@@ -310,10 +318,41 @@ function jobRow(job) {
     const ratio = Math.max(0, Math.min(1, job.done / job.total));
     row.append(h('div.job-bar', null,
       h('div.bar', null, h('div.bar-fill', { style: { width: `${Math.round(ratio * 100)}%` } })),
-      h('span.mono.dim', null, `${job.done}/${job.total} ${job.kind === 'video' ? 'videos' : 'pages'}`)));
+      h('span.mono.dim', null, `${job.done}/${job.total} ${{ video: 'videos', explain: 'clips' }[job.kind] || 'pages'}`)));
   }
   if (job.state === 'waiting-picks' && L.pickingJob === job.id) row.append(picker(job));
   return row;
+}
+
+// --- Explainers (/explain) --------------------------------------------------------------------
+
+const EXPLAINER_STATES = { making: ['accent', 'Being made'], ready: ['green', 'Ready'], waiting: ['faint', 'Waiting: opening it carries on'] };
+
+/** Every explainer, newest first: the way back to clips /explain made, whenever they were made. */
+function showExplainers() {
+  if (!ui || !S.library) return;
+  const query = ui.search.value.trim().toLowerCase();
+  const shown = (S.library.explainers || []).filter(item => !query || String(item.title).toLowerCase().includes(query));
+  ui.explainers.replaceChildren(...(shown.length ? [h('h3.label', null, 'Explainers'), ...shown.map(explainerRow)] : []));
+}
+
+function explainerRow(item) {
+  const [tone, text] = EXPLAINER_STATES[item.state] || EXPLAINER_STATES.waiting;
+  const open = () => openExplainer(item.id, item.at);
+  return h('article.course-row.explainer-row', {
+    tabindex: '0',
+    onclick: open,
+    onkeydown: event => { if (event.key === 'Enter' && event.target === event.currentTarget) open(); },
+  },
+  h('div.course-top', null, h('span.course-title', null, item.title), h('span.counts.mono', null, `${item.ready}/${item.clips} clips`)),
+  h('div.course-foot', null, h(`span.${tone}`, null, text), item.createdAt ? h('span.faint', null, `Made ${formatDate(item.createdAt)}`) : null));
+}
+
+/** The player on an explainer, at the clip you were on: its own window where there is one. */
+async function openExplainer(id, at = null) {
+  const clip = Number.isInteger(at) && at > 1 ? at : null;
+  if (isNative() && await openWindow('learn/video', { explain: id, ...(clip ? { clip } : {}) })) return;
+  window.open(withToken(`video/?explain=${encodeURIComponent(id)}${clip ? `&clip=${clip}` : ''}`), 'learn-video', 'popup,width=1180,height=760');
 }
 
 function togglePicker(job) {

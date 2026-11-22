@@ -16,7 +16,9 @@ param(
   [string]$SessionId = 'default',
   # Where to open: -View library|course|review|learned|ask|settings|overlap and -CourseId <id>.
   [string]$View = '',
-  [string]$CourseId = ''
+  [string]$CourseId = '',
+  # An explainer's clips (/clips, the panel's Watch clips): the player on it, in a window of its own.
+  [string]$Explain = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,10 +74,16 @@ public static class ClaudeLearnLaunch {
 # The server's `open learn ...`: its last JSON line, or $null. `-New` asks for a link even with a
 # Learn page open (its window couldn't be found here).
 function Invoke-WebOpen([switch]$New) {
+  $page = 'learn'
   $extra = ''
-  if ($VIEWS -contains $View) { $extra += " --view $View" }
-  if ($CourseId -match '^[\w.-]{1,160}$') { $extra += " --course $CourseId" }
-  $start = New-WebOpenStart 'learn' $extra -New:$New
+  if ($Explain -match '^x[0-9a-f]{12,20}$') {
+    $page = 'learn/video'
+    $extra = " --explain $Explain"
+  } else {
+    if ($VIEWS -contains $View) { $extra += " --view $View" }
+    if ($CourseId -match '^[\w.-]{1,160}$') { $extra += " --course $CourseId" }
+  }
+  $start = New-WebOpenStart $page $extra -New:$New
   if (-not $start) { Write-Log (Get-WebOpenTrouble); return $null }
   $child = [System.Diagnostics.Process]::Start($start)
   $reading = $child.StandardOutput.ReadToEndAsync()
@@ -122,7 +130,8 @@ function Open-Link([string]$Link) {
     if (Test-Path -LiteralPath $edge) {
       [void][System.Diagnostics.Process]::Start($edge, "--app=$Link")
       Write-Log 'opened an Edge app window'
-      Move-ToSecondScreen
+      # The player's caption is its clip's title, not Learn's: left where Edge puts it.
+      if (-not $Explain) { Move-ToSecondScreen }
       return
     }
   }

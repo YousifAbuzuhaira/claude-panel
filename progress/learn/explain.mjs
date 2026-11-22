@@ -5,7 +5,7 @@
 // session, which fixes the plan. Each clip is then a one-section page in memory, made by
 // writeScript as any page's clip is: its guess, its openers, its masked line, the watcher and the
 // claim check. Code on screen is always the lines read from disk, never text the session typed.
-import { createReadStream, existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
@@ -31,7 +31,7 @@ const LANGS = { '.ts': 'ts', '.tsx': 'tsx', '.js': 'js', '.mjs': 'js', '.cjs': '
 /**
  * What's wrong with a plan's shape, before anything is read: Claude's session fixes these. The plan:
  * `{ title, shape, boxes, clips: [{ title, box, level, facts: [{ text, basis, quote? }],
- * anchors: [{ file, from, to, expect }], guess: { q, options, quote }, failure?, handoff?, patternOf? }] }`.
+ * anchors: [{ file, from, to, expect }], guess: { q, options, quote }, failure?, handoff?, patternOf? }], depth? }`.
  */
 export function explainProblems(plan) {
   const problems = [];
@@ -43,6 +43,8 @@ export function explainProblems(plan) {
   if (clips.length && clips[0]?.level !== 1) problems.push('Clip 1 is the mental model: its level is 1');
   const shape = ['flow', 'parts', 'none'].includes(plan?.shape) ? plan.shape : null;
   if (!shape) problems.push('"shape" is flow, parts or none');
+  // The depth you picked in the chat (asked before the plan was handed over); left out, the player asks.
+  if (plan?.depth != null && ![1, 2, 3].includes(plan.depth)) problems.push('"depth" is 1, 2 or 3, or left out');
   const boxes = Array.isArray(plan?.boxes) ? plan.boxes : [];
   if (shape && shape !== 'none') {
     const ids = new Set(boxes.map(box => box?.id));
@@ -258,12 +260,23 @@ export async function checkExplainer({ plan, sessionId, cwd, io, model = 'opus',
         failure: (clip.failure || []).filter(Number.isInteger),
         patternOf: clip.patternOf ? tidy(clip.patternOf) : null,
       })),
-      depth: null,
+      depth: [1, 2, 3].includes(plan.depth) ? plan.depth : null,
       at: 1,
       seenAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
     },
   };
+}
+
+/** Code past this many lines is shown in parts: more never fits the stage at a readable size. */
+export const PART_LINES = 18;
+
+/** An anchor's code in parts of at most PART_LINES lines, as even as can be (40 lines: 14, 13, 13). */
+export function codeParts(code) {
+  const lines = String(code).split('\n');
+  const count = Math.ceil(lines.length / PART_LINES);
+  const size = Math.ceil(lines.length / count);
+  return Array.from({ length: count }, (_, k) => lines.slice(k * size, (k + 1) * size).join('\n')).filter(Boolean);
 }
 
 /** A clip as a page of one section: its facts as paragraphs, then the code it anchors, from disk. */
@@ -273,7 +286,7 @@ export function clipPage(explainer, n) {
   const markdown = [
     `## ${clip.title}`,
     ...clip.facts.map(fact => fact.text),
-    ...clip.anchors.map(anchor => `${fence(anchor.code)}${anchor.lang}\n${anchor.code}\n${fence(anchor.code)}`),
+    ...clip.anchors.flatMap(anchor => codeParts(anchor.code).map(code => `${fence(code)}${anchor.lang}\n${code}\n${fence(code)}`)),
   ].join('\n\n');
   return { v: 1, n, title: clip.title, markdown, blocks: markdownToBlocks(markdown), terms: [], checks: [], outcomes: [], subtopics: clip.facts.map(fact => fact.text), stats: {} };
 }
@@ -344,6 +357,39 @@ export function explainInfo(lib, explainer, making = null) {
   };
 }
 
+/** The clips an explainer makes: those in the depth picked, or all of them before a pick. */
+export const wantedClips = explainer => explainer.clips.filter(clip => !explainer.depth || inDepth(clip, explainer.depth)).length;
+
+/**
+ * Every explainer in the library, newest first, for the Library's list: `state` is `making` (a job
+ * is on it), `ready` (every clip in depth is made) or `waiting` (opening it carries on).
+ */
+export function listExplainers(lib, jobs = []) {
+  const dir = join(lib.root, 'explainers');
+  if (!existsSync(dir)) return [];
+  const making = new Set(jobs.filter(job => job.kind === 'explain' && job.state === 'running').map(job => job.explain));
+  return readdirSync(dir)
+    .filter(id => /^x[0-9a-f]{12,20}$/.test(id))
+    .map(id => readExplainer(lib, id))
+    .filter(explainer => explainer?.id && Array.isArray(explainer.clips))
+    .map(explainer => {
+      const info = explainInfo(lib, explainer);
+      const ready = info.clips.filter(clip => clip.state === 'ready').length;
+      const clips = wantedClips(explainer);
+      return {
+        id: explainer.id,
+        title: explainer.title,
+        createdAt: explainer.createdAt,
+        at: explainer.at || 1,
+        depth: explainer.depth,
+        clips,
+        ready,
+        state: making.has(explainer.id) ? 'making' : ready >= clips ? 'ready' : 'waiting',
+      };
+    })
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
 /**
  * The next clip worth making now: in the depth picked (clip 1 before a pick), and at most AHEAD
  * clips of that depth past the one watched.
@@ -399,6 +445,8 @@ export async function makeExplainer({ lib, io, id, save, isStopping, poll = 3000
     return scripts.get(n);
   };
   let made = 0;
+  // The bar on the panel: clips made of the clips wanted.
+  const counts = explainer => ({ done: explainer.clips.filter((clip, k) => existsSync(`${explainPaths(lib, id).clip(k + 1)}.json`)).length, total: wantedClips(explainer) });
   for (;;) {
     if (isStopping()) throw new Error('stopped');
     const explainer = readExplainer(lib, id);
@@ -407,18 +455,18 @@ export async function makeExplainer({ lib, io, id, save, isStopping, poll = 3000
     if (next.done) break;
     if (next.wait) {
       if (Date.now() - Date.parse(explainer.seenAt || explainer.createdAt) > IDLE_MS) break;
-      save({ message: `${explainer.title}: waiting for you to watch on` });
+      save({ message: `${explainer.title}: waiting for you to watch on`, ...counts(explainer) });
       await sleep(poll);
       continue;
     }
     const { n } = next;
-    save({ message: `${explainer.title}: clip ${n} of ${explainer.clips.length}, writing`, making: n });
+    save({ message: `${explainer.title}: clip ${n} of ${explainer.clips.length}, writing`, making: n, ...counts(explainer) });
     await scriptFor(explainer, n);
     // The clip after this one, written while this one records.
     const after = nextClip(lib, { ...explainer, at: Math.max(explainer.at || 1, n) }, new Set([n]));
     if (after.n) scriptFor(explainer, after.n);
     const base = explainPaths(lib, id).clip(n);
-    save({ message: `${explainer.title}: clip ${n} of ${explainer.clips.length}, recording`, making: n });
+    save({ message: `${explainer.title}: clip ${n} of ${explainer.clips.length}, recording`, making: n, ...counts(explainer) });
     try {
       await io.record({ scriptFile: `${base}.script.json`, out: `${base}.new` });
       renameRetry(`${base}.new.mp3`, `${base}.mp3`);

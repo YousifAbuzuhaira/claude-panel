@@ -635,8 +635,8 @@ function serve() {
       // A page in a native window opening another page in its own window (Learn's games mark):
       // one window per page, as `open` gives. Only where the window app is already built.
       if (path === '/api/open' && req.method === 'POST') {
-        const { page, view, course, n, from } = JSON.parse((await readBody(req, MAX_SMALL_BODY)) || '{}') || {};
-        const target = typeof page === 'string' && page ? pagePath(page, { view, course, n }) : null;
+        const { page, view, course, n, explain, clip, from } = JSON.parse((await readBody(req, MAX_SMALL_BODY)) || '{}') || {};
+        const target = typeof page === 'string' && page ? pagePath(page, { view, course, n, explain, clip }) : null;
         if (!target) return send(400, { error: 'no such page' });
         const app = nativeApp({ build: false });
         if (!app) return send(200, { ok: false, error: 'no window app here' });

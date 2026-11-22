@@ -109,6 +109,8 @@ const sceneAt = t => sceneIndex(scenes, t);
 
 let shownScene = -1, shownCue = -1;
 let cam = { x: 560, y: 298, zoom: 1 }, camFrom = cam, camTo = cam, camT0 = 0;
+// Pulling back is quicker, so the camera has made room before something new has faded in (520 ms).
+const camMs = () => (camTo.zoom < camFrom.zoom ? 600 : 1000);
 
 function syncTo(t, instant) {
   if (mode === 'opener') return syncOpener(t, instant);
@@ -522,7 +524,7 @@ function showFrame(t) {
   const now = performance.now();
   stepObjects(now);
   const scene = mode === 'opener' ? openerScene : scenes[shownScene];
-  const kc = ease(clamp((now - camT0) / 1000, 0, 1));
+  const kc = ease(clamp((now - camT0) / camMs(), 0, 1));
   cam = { x: camFrom.x + (camTo.x - camFrom.x) * kc, y: camFrom.y + (camTo.y - camFrom.y) * kc, zoom: camFrom.zoom + (camTo.zoom - camFrom.zoom) * kc };
   // A slow push-in through every scene, so the picture is never quite still.
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches;

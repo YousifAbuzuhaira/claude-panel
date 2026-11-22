@@ -252,5 +252,6 @@ export const buildStatus = job => job && {
   done: job.done || 0,
   total: job.total || 0,
   courseId: job.courseId || null,
+  explain: job.kind === 'explain' ? job.explain || null : null,
   ...(job.kind === 'video' ? { working: job.working || [], leftMinutes: job.leftMinutes ?? null } : {}),
 };

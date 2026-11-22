@@ -142,6 +142,7 @@ export function widgetArgv(options: {
 
 // A course id as Learn's helper writes it: safe to pass through bash and on to Windows unquoted.
 const COURSE_ID = /^[\w.-]{1,80}$/
+const EXPLAIN_ID = /^x[0-9a-f]{12,20}$/
 
 /**
  * The command that starts a game window, or Learn's launcher, from WSL (`distro`) or on
@@ -158,9 +159,10 @@ export function windowArgv(options: {
   ownerHwnd?: number | null
   view?: string
   courseId?: string
+  explain?: string
   powershell?: string
 }): string[] {
-  const { distro, pluginRoot, script, sessionId, ownerHwnd, view, courseId, powershell } = options
+  const { distro, pluginRoot, script, sessionId, ownerHwnd, view, courseId, explain, powershell } = options
   const file = `${pluginRoot}/widget/${script}`
   const argv = [
     distro ? POWERSHELL : (powershell ?? windowsPowerShell()), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
@@ -172,6 +174,7 @@ export function windowArgv(options: {
   if (script === LEARN_SCRIPT) {
     if (view) argv.push('-View', view)
     if (courseId && COURSE_ID.test(courseId)) argv.push('-CourseId', courseId)
+    if (explain && EXPLAIN_ID.test(explain)) argv.push('-Explain', explain)
   }
 
   return argv

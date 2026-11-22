@@ -4,6 +4,10 @@
 
 export type LearnBuild = {
   id: string
+  /** `explain` for an explainer's clips (/explain), else a course's build, pages or videos. */
+  kind?: string
+  /** The explainer an `explain` build makes: what the tab's "Watch clips" opens. */
+  explain?: string | null
   topic: string
   step: string
   state: 'running' | 'waiting-picks' | 'paused' | 'failed' | 'done'
@@ -16,6 +20,7 @@ export type LearnCourse = { id: string; title: string; page: number; total: numb
 
 export type LearnStatus = { build: LearnBuild | null; course: LearnCourse | null }
 
+const EXPLAIN_ID = /^x[0-9a-f]{12,20}$/
 const STATES = new Set(['running', 'waiting-picks', 'paused', 'failed', 'done'])
 // A finished build still shows for this long ("Ready: ...").
 const DONE_SHOWN_MS = 60 * 60_000
@@ -64,6 +69,8 @@ export function readLearnStatus(raw: string, now: number): LearnStatus | null {
     if (!isStale) {
       build = {
         id: text(b.id, 60),
+        kind: text(b.kind, 20),
+        explain: b.kind === 'explain' && typeof b.explain === 'string' && EXPLAIN_ID.test(b.explain) ? b.explain : null,
         topic: text(b.topic),
         step: text(b.step, 20),
         state: b.state as LearnBuild['state'],

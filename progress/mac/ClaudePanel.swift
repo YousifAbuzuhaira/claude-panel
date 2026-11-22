@@ -993,8 +993,9 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
                 defaults.removeObject(forKey: "panel.tabSeen")
             }
         case "open":
-            // A Learn view ("settings" from Custom colours, "course" from Carry on reading) or a game.
-            if let page = body["page"] as? String { openPage(page, view: body["view"] as? String, course: body["course"] as? String) }
+            // A Learn view ("settings" from Custom colours, "course" from Carry on reading), a game, or
+            // an explainer's clips (Watch clips).
+            if let page = body["page"] as? String { openPage(page, view: body["view"] as? String, course: body["course"] as? String, explain: body["explain"] as? String) }
         case "appearance":
             // A swatch or a see-through bar in the ◐ strip: every window follows the file.
             if let value = body["value"] as? [String: Any], writeAppearance(cleanAppearance(value, over: readAppearance())) {
@@ -1014,10 +1015,15 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandl
         }
     }
 
-    /// `web.sh open <page> [--view <view>] [--course <id>]`: the window comes forward if it is open.
-    func openPage(_ page: String, view: String? = nil, course: String? = nil) {
-        guard let root = options.root, page.range(of: "^(learn|games(/[a-z0-9]+)?)$", options: .regularExpression) != nil else { return }
+    /// `web.sh open <page> [--view <view>] [--course <id>] [--explain <id>]`: the window comes forward
+    /// if it is open. `learn/video` only with an explainer: the player on its clips.
+    func openPage(_ page: String, view: String? = nil, course: String? = nil, explain: String? = nil) {
+        guard let root = options.root else { return }
+        let explainer = explain.flatMap { $0.range(of: "^x[0-9a-f]{12,20}$", options: .regularExpression) != nil ? $0 : nil }
+        let isClips = page == "learn/video" && explainer != nil
+        guard isClips || page.range(of: "^(learn|games(/[a-z0-9]+)?)$", options: .regularExpression) != nil else { return }
         var arguments = ["\(root)/web/web.sh", "open", page]
+        if isClips, let explainer { arguments += ["--explain", explainer] }
         if let view, view.range(of: "^[a-z]{1,20}$", options: .regularExpression) != nil { arguments += ["--view", view] }
         if let course, course.range(of: "^[A-Za-z0-9_.-]{1,160}$", options: .regularExpression) != nil { arguments += ["--course", course] }
         arguments += ["--terminal", options.terminal, "--iterm-session", options.itermSession]

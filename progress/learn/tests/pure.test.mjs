@@ -24,9 +24,9 @@ import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, sourceDisputes, ti
 import { voicePlatform } from '../voice.mjs';
 import { applyPlan, checkPlan, maskable, planRequest, planSchema } from '../video-plan.mjs';
 import { writeScript } from '../video-script.mjs';
-import { anchorFile, clipPage, clipPlan, explainInfo, explainPaths, explainProblems, looksSecret, nextClip, quotesInChat, readAnchors } from '../explain.mjs';
-import { estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, simulate, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
-import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
+import { anchorFile, checkExplainer, clipPage, clipPlan, codeParts, explainInfo, explainPaths, explainProblems, listExplainers, looksSecret, nextClip, quotesInChat, readAnchors, saveExplainer, wantedClips } from '../explain.mjs';
+import { codeNeeds, estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, layoutNotes, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, simulate, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
+import { buildCameras, buildStates, containers, crosses, dedent, edgePoint, fitCamera, frameFor, labelPoint, labelSpot, legendRect, roughRect, sceneAt, wireEnds } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
 import { overlapReport } from '../overlap.mjs';
 import { claudeBinary, isAbsoluteLocal, normalizeSettings, toLocalPath, toWslPath } from '../settings.mjs';
@@ -1189,13 +1189,15 @@ describe('the stage', () => {
     const states = buildStates(scene);
     const cameras = buildCameras(scene, states, assets);
     assert.equal(cameras.length, states.length);
-    assert.ok(cameras.every(camera => camera.zoom >= 1 && camera.zoom <= 1.5));
+    assert.ok(cameras.every(camera => camera.zoom >= 0.85 && camera.zoom <= 1.5));
   });
 
-  test('a camera told where to go goes there', () => {
+  test('a camera a script asks for is not followed: it cropped what was shown, so the picture frames itself', () => {
     const told = { ...scene, cues: [{ show: ['a'], camera: { x: 300, y: 250, zoom: 2 } }] };
     const states = buildStates(told);
-    assert.equal(buildCameras(told, states, assets)[1].zoom, 2);
+    const plain = { ...scene, cues: [{ show: ['a'] }] };
+    assert.deepEqual(buildCameras(told, states, assets)[1], buildCameras(plain, buildStates(plain), assets)[1]);
+    assert.ok(buildCameras(told, states, assets)[1].zoom <= 1.5);
   });
 
   test('the scene at a time is the last one started', () => {
@@ -1911,13 +1913,30 @@ describe('an explainer: your session plans clips about code, Learn checks and ma
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('/explain is a prompt the person types, never one the model runs, and it hands the plan to the tool', () => {
-    const command = readFileSync(join(import.meta.dirname, '..', '..', 'commands', 'explain.md'), 'utf8');
-    assert.match(command, /^---\n[\s\S]*disable-model-invocation: true[\s\S]*?\n---\n/);
-    assert.match(command, /\$ARGUMENTS/);
-    assert.match(command, /mcp__progress__explain_plan/);
-    assert.match(command, /Don't explain it here in text/);
-    assert.match(command, /First reply with one short line/);
+  test('the depth you picked in the chat comes with the plan: 1, 2 or 3, or left out for the player to ask', () => {
+    assert.deepEqual(explainProblems({ ...plan(), depth: 2 }), []);
+    assert.deepEqual(explainProblems({ ...plan(), depth: null }), []);
+    assert.match(explainProblems({ ...plan(), depth: 4 }).join(), /"depth" is 1, 2 or 3/);
+    assert.match(explainProblems({ ...plan(), depth: '2' }).join(), /"depth" is 1, 2 or 3/);
+  });
+
+  test('a checked plan keeps its depth, so the player never asks; without one it is null', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'explain-'));
+    writeFileSync(join(root, 'gw.js'), 'function forward(request) {\n  const token = mint(request.user);\n  return send(request, token);\n}\n');
+    const one = { ...plan(), shape: 'none', boxes: [], clips: [plan().clips[0]] };
+    const io = { askStructured: async () => ({ wrong: [] }) };
+    const withDepth = await checkExplainer({ plan: { ...one, depth: 2 }, sessionId: 's', cwd: root, io });
+    assert.equal(withDepth.explainer.depth, 2);
+    const without = await checkExplainer({ plan: one, sessionId: 's', cwd: root, io });
+    assert.equal(without.explainer.depth, null);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('an anchor over 18 lines is shown in parts of at most 18, as even as can be; 18 or fewer stay whole', () => {
+    const lines = n => Array.from({ length: n }, (_, k) => `line ${k}`).join('\n');
+    assert.deepEqual(codeParts(lines(40)).map(part => part.split('\n').length), [14, 14, 12]);
+    assert.deepEqual(codeParts(lines(18)).map(part => part.split('\n').length), [18]);
+    assert.equal(codeParts(lines(40)).join('\n'), lines(40), 'nothing lost or repeated');
   });
 
   test("a session fact's quote must be in what the chat said or a tool returned, never in a tool call", async () => {
@@ -1967,5 +1986,158 @@ describe('an explainer: your session plans clips about code, Learn checks and ma
     assert.deepEqual(info.counts, [1, 5, 6]);
     assert.deepEqual(info.clips.slice(0, 4).map(clip => clip.state), ['ready', 'ready', 'left out', 'ready']);
     rmSync(lib.root, { recursive: true, force: true });
+  });
+
+  test('with the depth picked in the chat, clip 1 and the two after it are made at once, never waiting for a pick', () => {
+    const lib = { root: mkdtempSync(join(tmpdir(), 'lib-')) };
+    const picked = { ...explainer(), depth: 3 };
+    const made = n => { mkdirSync(join(explainPaths(lib, picked.id).dir, 'clips'), { recursive: true }); writeFileSync(`${explainPaths(lib, picked.id).clip(n)}.json`, '{}'); };
+    made(1);
+    assert.deepEqual(nextClip(lib, picked), { n: 2 });
+    assert.equal(wantedClips({ ...explainer(), depth: 1 }), 1);
+    assert.equal(wantedClips(explainer()), 3, 'before a pick, all of them');
+    rmSync(lib.root, { recursive: true, force: true });
+  });
+
+  test("the Library lists every explainer, newest first: its clips in depth, how many are made, and what it's doing", () => {
+    const lib = { root: mkdtempSync(join(tmpdir(), 'lib-')) };
+    const older = saveExplainer(lib, { ...explainer(), id: 'x202611010000aaaa', title: 'Older', depth: 1, createdAt: '2026-11-01T00:00:00Z' });
+    const newer = saveExplainer(lib, { ...explainer(), id: 'x202611200000bbbb', title: 'Newer', depth: 2, createdAt: '2026-11-20T00:00:00Z' });
+    saveExplainer(lib, { ...explainer(), id: 'x202611150000cccc', title: 'Waiting', depth: null, createdAt: '2026-11-15T00:00:00Z' });
+    mkdirSync(join(lib.root, 'explainers', 'junk'), { recursive: true });
+    mkdirSync(join(explainPaths(lib, older.id).dir, 'clips'), { recursive: true });
+    writeFileSync(`${explainPaths(lib, older.id).clip(1)}.json`, '{}');
+    const listed = listExplainers(lib, [{ kind: 'explain', explain: newer.id, state: 'running' }]);
+    assert.deepEqual(listed.map(item => item.title), ['Newer', 'Waiting', 'Older']);
+    assert.deepEqual(listed.map(item => item.state), ['making', 'waiting', 'ready']);
+    assert.deepEqual(listed.map(item => [item.ready, item.clips]), [[0, 2], [0, 3], [1, 1]]);
+    assert.deepEqual(listExplainers({ root: join(lib.root, 'none') }), []);
+    rmSync(lib.root, { recursive: true, force: true });
+  });
+
+  test("a clip's request tells the writer the room its code needs, without the file's indentation, and offers no camera", async () => {
+    const indented = { ...explainer(), clips: explainer().clips.map(clip => ({ ...clip, anchors: clip.anchors.map(anchor => ({ ...anchor, code: anchor.code.split('\n').map(line => `          ${line}`).join('\n') })) })) };
+    const prompts = [];
+    const ask = async (prompt, schema) => {
+      prompts.push(prompt);
+      if (schema.properties.scenes) return { scenes: [], pronounce: [] };
+      if (schema.properties.answers) return { answers: [], closing: [], unknown: [], missing: [] };
+      return { added: [], dropped: [] };
+    };
+    await writeScript({ page: clipPage(indented, 1), ask, plan: clipPlan(indented, 1), questions: false });
+    const request = prompts.find(prompt => /THE STAGE/.test(prompt));
+    const needs = codeNeeds(indented.clips[0].anchors[0].code);
+    assert.match(request, new RegExp(`needs at least ${needs.w} by ${needs.h} on stage`));
+    assert.equal(needs.w, codeNeeds(explainer().clips[0].anchors[0].code).w, 'indentation is not counted');
+    assert.doesNotMatch(request, /w 540|"camera"/);
+  });
+});
+
+describe('the picture: measured as drawn, framed without cropping, arrows and containers kept clear', () => {
+  const assets = { code: [], table: [], diagram: [] };
+  const sim = scene => { const problems = []; simulate(scene, 'S', assets, problems); return problems; };
+  const shown = objects => ({ objects: objects.map(o => ({ show: true, ...o })), beats: [] });
+
+  test('a row is as wide as its cells, which grow with their text, and wraps within its width', () => {
+    // A one-cell row in a wide space is drawn where its cell is, not across its whole width.
+    const one = roughRect({ shape: 'row', x: 820, y: 300, w: 240, items: [{ label: 'explain.md', sub: 'prompt file' }] });
+    assert.ok(one.x + one.w > 1040, 'its long label widens the cell past the old guess');
+    // The row that cut off "mcp": four cells under long subs, drawn far wider than the old 478.
+    const src = roughRect({ shape: 'row', x: 60, y: 380, w: 1000, items: [{ label: 'builtin', sub: 'ships with Claude Code' }, { label: 'plugin', sub: 'markdown command' }, { label: 'user', sub: 'your own file' }, { label: 'mcp', sub: 'server prompt' }] });
+    assert.ok(src.w > 700 && src.x < 200, JSON.stringify(src));
+    const narrow = roughRect({ shape: 'row', x: 100, y: 100, w: 300, items: ['alpha', 'bravo', 'charlie', 'delta'].map(label => ({ label })) });
+    const wide = roughRect({ shape: 'row', x: 100, y: 100, w: 1000, items: ['alpha', 'bravo', 'charlie', 'delta'].map(label => ({ label })) });
+    assert.ok(narrow.h > wide.h, 'cells that do not fit wrap to a second line');
+  });
+
+  test('a label with no width is one line as long as its text; a centred number sits in the middle of its width', () => {
+    const label = roughRect({ shape: 'label', x: 100, y: 100, text: 'x'.repeat(30), size: 'm' });
+    assert.ok(label.w > 300 && label.h < 30, 'one line, wider than the old 300');
+    const number = roughRect({ shape: 'number', x: 100, y: 100, w: 400, value: 7, align: 'center' });
+    assert.ok(number.x > 250);
+  });
+
+  test('the camera crops nothing: it pulls back and moves until everything shown is inside the frame', () => {
+    const inFrame = (cam, r) => (r.x - cam.x) * cam.zoom + 560 >= 29 && (r.x + r.w - cam.x) * cam.zoom + 560 <= 1091 && (r.y - cam.y) * cam.zoom + 298 >= 85 && (r.y + r.h - cam.y) * cam.zoom + 298 <= 511;
+    const rects = [{ x: 60, y: 200, w: 640, h: 70 }, { x: 780, y: 200, w: 280, h: 290 }];
+    const fitted = fitCamera({ x: 380, y: 160, zoom: 1.4 }, rects);
+    assert.ok(rects.every(r => inFrame(fitted, r)), JSON.stringify(fitted));
+    const fine = { x: 560, y: 298, zoom: 1 };
+    assert.equal(fitCamera(fine, [{ x: 200, y: 200, w: 300, h: 100 }]), fine, 'a camera that fits is left alone');
+    const state = new Map([['r', { id: 'r', shape: 'row', x: 800, y: 300, w: 280, visible: true, items: [{ label: 'register.tsx', sub: 'hooks' }] }], ['b', { id: 'b', shape: 'box', x: 60, y: 300, w: 200, h: 100, visible: true }]]);
+    const cam = frameFor(state, null, assets);
+    assert.ok([...state.values()].every(o => inFrame(cam, roughRect(o, assets))), JSON.stringify(cam));
+  });
+
+  test("an outline with something inside it is a container, its name on its top edge; an empty outline or a solid box isn't", () => {
+    const state = new Map([
+      ['c', { id: 'c', shape: 'box', style: 'outline', x: 100, y: 150, w: 500, h: 300, text: 'Code part', visible: true }],
+      ['in', { id: 'in', shape: 'box', x: 150, y: 200, w: 200, h: 100, visible: true }],
+      ['e', { id: 'e', shape: 'box', style: 'outline', x: 700, y: 150, w: 300, h: 100, visible: true }],
+      ['s', { id: 's', shape: 'box', x: 700, y: 300, w: 300, h: 150, visible: true }],
+    ]);
+    assert.deepEqual([...containers(state, assets)], ['c']);
+    assert.deepEqual(legendRect({ x: 100, y: 150, text: 'Code part' }).y, 140);
+  });
+
+  test("code is drawn without the indentation its lines share; blank lines don't count, tabs are four spaces, no line is lost", () => {
+    assert.equal(dedent('    a\n      b\n\n    c'), 'a\n  b\n\nc');
+    assert.equal(dedent('\ta\n\t\tb'), 'a\n    b');
+    assert.equal(dedent('a\n  b'), 'a\n  b');
+    assert.equal(dedent('  x\n  y\n  z').split('\n').length, 3);
+  });
+
+  test("an arrow runs edge to edge between what it joins, as before; its text moves along the line off what's there", () => {
+    const a = { x: 100, y: 200, w: 200, h: 100 }, b = { x: 600, y: 200, w: 200, h: 100 };
+    assert.deepEqual(wireEnds({ from: 'a', to: 'b' }, id => ({ a, b })[id]), [...edgePoint(a, 700, 250), ...edgePoint(b, 200, 250)]);
+    assert.deepEqual(wireEnds({ x: 1, y: 2, x2: 3, y2: 4 }, () => null), [1, 2, 3, 4]);
+    assert.equal(wireEnds({ from: 'a', to: 'gone' }, id => ({ a })[id]), null);
+    const ends = wireEnds({ from: 'a', to: 'b' }, id => ({ a, b })[id]);
+    assert.deepEqual(labelSpot(ends, 'sends', [a, b]), { t: 0.5, side: 'above', free: true });
+    const blocker = { x: 420, y: 220, w: 60, h: 20 };
+    const moved = labelSpot(ends, 'sends', [a, b, blocker]);
+    assert.ok(moved.free && (moved.t !== 0.5 || moved.side !== 'above'));
+    assert.equal(labelSpot(ends, 'x'.repeat(80), [a, b]).free, false, 'no spot fits text that long');
+    assert.deepEqual(labelPoint(ends, 'sends', { t: 0.5, side: 'above' }), [(ends[0] + ends[2]) / 2, (ends[1] + ends[3]) / 2 - 10]);
+    assert.ok(crosses([0, 0, 100, 100], { x: 40, y: 40, w: 20, h: 20 }));
+    assert.ok(!crosses([0, 0, 100, 0], { x: 40, y: 40, w: 20, h: 20 }));
+  });
+
+  test("before recording: an arrow through a third object, text with no room, and a covered container name are polish, never failures", () => {
+    const scene = shown([
+      { id: 'a', shape: 'box', x: 60, y: 250, w: 160, h: 100, text: 'A' },
+      { id: 'mid', shape: 'box', x: 480, y: 260, w: 120, h: 80, text: 'M' },
+      { id: 'b', shape: 'box', x: 900, y: 250, w: 160, h: 100, text: 'B' },
+      { id: 'go', shape: 'arrow', from: 'a', to: 'b', text: 'a label far too long to fit anywhere at all on this line here' },
+    ]);
+    const notes = layoutNotes([{ title: 'T', ...scene }], assets);
+    assert.ok(notes.some(note => /arrow go passes through mid/.test(note)), notes.join('\n'));
+    assert.ok(notes.some(note => /text of arrow go/.test(note)));
+    assert.ok(!sim(scene).some(problem => /passes through|text of arrow/.test(problem)), 'not a failure');
+    const ends = layoutNotes([{ title: 'T', ...shown([{ id: 'a', shape: 'box', x: 60, y: 250, w: 160, h: 100 }, { id: 'b', shape: 'box', x: 600, y: 250, w: 160, h: 100 }, { id: 'go', shape: 'arrow', from: 'a', to: 'b' }, { id: 'frame', shape: 'box', style: 'outline', x: 40, y: 230, w: 220, h: 140 }]) }], assets);
+    assert.deepEqual(ends, [], 'its own ends and a container around an end are fine');
+    const covered = layoutNotes([{ title: 'T', ...shown([{ id: 'c', shape: 'box', style: 'outline', x: 100, y: 150, w: 500, h: 300, text: 'Code part' }, { id: 'in', shape: 'box', x: 110, y: 145, w: 200, h: 100 }]) }], assets);
+    assert.ok(covered.some(note => /in covers the name of c/.test(note)));
+  });
+
+  test('before recording: an outline half over something, a box over a faded one, or a sub wider than its box fail', () => {
+    assert.ok(sim(shown([{ id: 'o', shape: 'box', style: 'outline', x: 100, y: 150, w: 300, h: 200 }, { id: 'b', shape: 'box', x: 350, y: 200, w: 200, h: 100 }])).some(problem => /o cuts across b/.test(problem)));
+    assert.ok(!sim(shown([{ id: 'o', shape: 'box', style: 'outline', x: 100, y: 150, w: 500, h: 300 }, { id: 'b', shape: 'box', x: 150, y: 200, w: 200, h: 100 }])).some(problem => /cuts across/.test(problem)), 'all around it is fine');
+    assert.ok(sim(shown([{ id: 'a', shape: 'box', x: 100, y: 200, w: 300, h: 150, fade: true }, { id: 'b', shape: 'box', x: 200, y: 250, w: 300, h: 100 }])).some(problem => /overlaps/.test(problem)));
+    assert.ok(sim(shown([{ id: 'a', shape: 'box', x: 100, y: 200, w: 120, h: 100, text: 'A', sub: 'a small line far too long for it' }])).some(problem => /small text under box a/.test(problem)));
+  });
+
+  test('code is measured without its indentation: it fits at its stated size, fails at 540 by 396 naming the size, and too-wide code takes the full width', () => {
+    // 72 characters once its 10 spaces are gone: wider than 540 at a readable size, well inside the stage.
+    const lines = Array.from({ length: 6 }, (_, k) => `          const value${k} = compute(request.user, options.timeout, retries.limit, ${k});`);
+    const code = { code: [{ text: lines.join('\n') }], table: [], diagram: [] };
+    const needs = codeNeeds(lines.join('\n'));
+    const run = (w, h, codeAssets = code) => { const problems = []; simulate(shown([{ id: 'k', shape: 'code', x: 40, y: 100, w, h, asset: 0 }]), 'S', codeAssets, problems); return problems; };
+    assert.deepEqual(run(needs.w, needs.h), []);
+    assert.match(run(540, 396).join(), new RegExp(`at least ${needs.w} by ${needs.h}`));
+    const long = { code: [{ text: `x = ${'y'.repeat(140)};` }], table: [], diagram: [] };
+    assert.ok(codeNeeds(long.code[0].text).wide);
+    assert.deepEqual(run(1040, 100, long), []);
+    assert.match(run(700, 100, long).join(), /wider than the stage/);
   });
 });

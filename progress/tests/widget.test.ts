@@ -148,6 +148,13 @@ describe('panel helpers', () => {
     expect(windowArgv({ ...base, script: 'Sudoku.ps1', ownerHwnd: 0 })).not.toContain('-OwnerHwnd')
   })
 
+  test("an explainer's clips go to Learn.ps1 as -Explain; a malformed id, or a game, never gets it", () => {
+    const base = { distro: 'Ubuntu', pluginRoot: '/home/y/mods/progress', sessionId: 's' }
+    expect(windowArgv({ ...base, script: 'Learn.ps1', explain: 'x202611181332459e' }).slice(-2)).toEqual(['-Explain', 'x202611181332459e'])
+    expect(windowArgv({ ...base, script: 'Learn.ps1', explain: 'x1"; rm -rf' })).not.toContain('-Explain')
+    expect(windowArgv({ ...base, script: 'Sudoku.ps1', explain: 'x202611181332459e' })).not.toContain('-Explain')
+  })
+
   test('an empty title is left out of the command', () => {
     const argv = widgetArgv({ distro: 'Ubuntu', pluginRoot: '/home/y/mods/progress', sessionId: 's', title: '' })
     expect(argv).not.toContain('-Title')

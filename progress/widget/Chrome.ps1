@@ -545,7 +545,7 @@ public static class ClaudeUiWin32 {
 # Opens a sibling window by id ('learn', 'sudoku', '2048', 'typing', 'chess'), or brings it
 # forward when it is already open. Learn can be sent to a view and a course: its launcher
 # (Learn.ps1) always runs, and brings an open Learn forward itself.
-function Open-Sibling([string]$Id, [int64]$OwnerHwnd, [string]$SessionId, [string]$View, [string]$CourseId) {
+function Open-Sibling([string]$Id, [int64]$OwnerHwnd, [string]$SessionId, [string]$View, [string]$CourseId, [string]$Explain) {
   try {
     $sibling = $UI_SIBLINGS | Where-Object { $_.id -eq $Id } | Select-Object -First 1
     if (-not $sibling) { return }
@@ -554,6 +554,7 @@ function Open-Sibling([string]$Id, [int64]$OwnerHwnd, [string]$SessionId, [strin
     if ($sibling.id -eq 'learn') {
       if ($View -match '^[a-z]{1,20}$') { $extra += " -View $View" }
       if ($CourseId -match '^[\w.-]{1,160}$') { $extra += " -CourseId $CourseId" }
+      if ($Explain -match '^x[0-9a-f]{12,20}$') { $extra += " -Explain $Explain" }
     } else {
       $title = if ($sibling.shared) { $sibling.title } else { '{0}:{1}' -f $sibling.title, $SessionId }
       $existing = [ClaudeUiWin32]::WindowByText($title)

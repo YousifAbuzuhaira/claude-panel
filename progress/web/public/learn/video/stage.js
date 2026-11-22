@@ -1,5 +1,7 @@
 // The picture: objects made, moved and removed to match a state from model.mjs. It only ever
 // sets text through textContent, so nothing in a script can become markup.
+import { containers, dedent, labelPoint, labelSpot, roughRect, wireEnds } from './model.mjs';
+
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const ease = k => 1 - Math.pow(1 - k, 3);
 const TONE = { ink: 'var(--ink)', dim: 'var(--dim)', accent: 'var(--accent)', green: 'var(--green)', red: 'var(--red)', gold: 'var(--gold)', blue: 'var(--blue)' };
@@ -117,22 +119,13 @@ function rectOf(item) {
   return { x: cur.x, y: cur.y, w: cur.w || el.offsetWidth, h: cur.h || el.offsetHeight };
 }
 
-function edgePoint(r, tx, ty) {
-  const cx = r.x + r.w / 2, cy = r.y + r.h / 2, dx = tx - cx, dy = ty - cy;
-  const k = 1 / Math.max(Math.abs(dx) / (r.w / 2 + 8), Math.abs(dy) / (r.h / 2 + 8), 1e-6);
-  return [cx + dx * k, cy + dy * k];
-}
+const liveRect = id => { const item = live.get(id); return item ? rectOf(item) : null; };
 
 function drawWire(item) {
   const o = item.o;
-  let x1, y1, x2, y2;
-  const a = o.from && live.get(o.from), b = o.to && live.get(o.to);
-  if (a && b) {
-    const ra = rectOf(a), rb = rectOf(b);
-    [x1, y1] = edgePoint(ra, rb.x + rb.w / 2, rb.y + rb.h / 2);
-    [x2, y2] = edgePoint(rb, ra.x + ra.w / 2, ra.y + ra.h / 2);
-  } else { x1 = o.x; y1 = o.y; x2 = o.x2; y2 = o.y2; }
-  if ([x1, y1, x2, y2].some(v => v === undefined)) { item.el.style.opacity = 0; return; }
+  const ends = wireEnds(o, liveRect);
+  if (!ends) { item.el.style.opacity = 0; return; }
+  const [x1, y1, x2, y2] = ends;
   const p = item.cur.p;
   const ex = x1 + (x2 - x1) * p, ey = y1 + (y2 - y1) * p;
   const len = Math.hypot(ex - x1, ey - y1) || 1, ux = (ex - x1) / len, uy = (ey - y1) / len;
@@ -140,7 +133,8 @@ function drawWire(item) {
   const [path, head, text] = item.el.children;
   path.setAttribute('d', `M${x1},${y1} L${bx},${by}`);
   head.setAttribute('points', `${ex},${ey} ${bx - uy * 6},${by + ux * 6} ${bx + uy * 6},${by - ux * 6}`);
-  if (text) { text.setAttribute('x', (x1 + x2) / 2); text.setAttribute('y', (y1 + y2) / 2 - 10); }
+  // The text sits where applyState found it clear of everything, along the line as it is now.
+  if (text) { const [lx, ly] = labelPoint(ends, o.text, item.spot || { t: 0.5, side: 'above' }); text.setAttribute('x', lx); text.setAttribute('y', ly); }
   item.el.style.opacity = item.cur.a;
 }
 
@@ -215,7 +209,8 @@ function drawCode(item, o) {
   if (!pre) {
     pre = document.createElement('pre');
     pre.className = 'code';
-    const lines = code.text.split('\n');
+    // Without the indentation its lines share in the file: the code starts at the left edge.
+    const lines = dedent(code.text).split('\n');
     const widest = Math.max(...lines.map(line => line.length));
     pre.style.fontSize = `${clamp(Math.min(((o.w || 600) - 36) / (widest * 0.61), ((o.h || 380) - 30) / (lines.length * 1.45)), 11, 21)}px`;
     lines.forEach(line => { const span = document.createElement('span'); span.textContent = line || ' '; pre.append(span); });
@@ -327,6 +322,21 @@ export function applyState(state, instant) {
   for (const item of [...live.values()]) {
     const o = state.get(item.id);
     if (!o || !o.visible) retire(item, instant);
+  }
+  placeLabels(state);
+  // A container shows its name on its top edge, where what's inside can't cover it.
+  const held = containers(state, assets);
+  for (const item of live.values()) if (item.shape === 'box') item.el.classList.toggle('holds', held.has(item.id));
+}
+
+/** Each arrow's text, at the first spot along its line that covers nothing, picked from where things are going. */
+function placeLabels(state) {
+  const rectOf = id => { const o = state.get(id); return o?.visible ? roughRect(o, assets) : null; };
+  const rects = [...state.values()].filter(o => o.visible && o.shape !== 'arrow').map(o => roughRect(o, assets));
+  for (const o of state.values()) {
+    const item = o.visible && o.shape === 'arrow' && o.text ? live.get(o.id) : null;
+    const ends = item && wireEnds(o, rectOf);
+    if (ends) item.spot = labelSpot(ends, o.text, rects);
   }
 }
 

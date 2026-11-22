@@ -834,20 +834,21 @@ function Add-RunRows($Runs) {
   }
 }
 
-# A link that opens Learn (at a view and a course, when given): its Edge window, through Learn.ps1.
-function New-LearnLink([string]$Text, [string]$View, [string]$CourseId) {
+# A link that opens Learn (at a view and a course, when given), or an explainer's clips: its Edge
+# window, through Learn.ps1.
+function New-LearnLink([string]$Text, [string]$View, [string]$CourseId, [string]$Explain = '') {
   $link = New-Link $Text ''
-  $link.Tag = @{ view = $View; course = $CourseId }
-  $link.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Open-PanelSibling 'learn' $sender.Tag.view $sender.Tag.course })
+  $link.Tag = @{ view = $View; course = $CourseId; explain = $Explain }
+  $link.Add_MouseLeftButtonUp({ param($sender, $e) $e.Handled = $true; Open-PanelSibling 'learn' $sender.Tag.view $sender.Tag.course $sender.Tag.explain })
   return $link
 }
 
 # Learn's link, in a row of its own, as the tab lays it out.
-function New-LearnLinks([string]$Text, [string]$View, [string]$CourseId) {
+function New-LearnLinks([string]$Text, [string]$View, [string]$CourseId, [string]$Explain = '') {
   $row = New-Object System.Windows.Controls.StackPanel
   $row.Orientation = 'Horizontal'
   $row.HorizontalAlignment = 'Left'
-  [void]$row.Children.Add((New-LearnLink $Text $View $CourseId))
+  [void]$row.Children.Add((New-LearnLink $Text $View $CourseId $Explain))
   return $row
 }
 
@@ -925,10 +926,17 @@ function Add-LearnRows($Learn) {
       $barRun = New-Object System.Windows.Documents.Run((Get-Bar ([double]$build.done / [double]$build.total)))
       $barRun.Foreground = $color
       [void]$counts.Inlines.Add($barRun)
-      $countRun = New-Object System.Windows.Documents.Run(" $([int]$build.done)/$([int]$build.total) pages")
+      $unit = if ([string]$build.kind -eq 'explain') { 'clips' } else { 'pages' }
+      $countRun = New-Object System.Windows.Documents.Run(" $([int]$build.done)/$([int]$build.total) $unit")
       $countRun.Foreground = $ink
       [void]$counts.Inlines.Add($countRun)
       [void]$body.Children.Add($counts)
+    }
+    # An explainer's clips (/explain): nothing opens by itself, so the way to them is here.
+    if ([string]$build.explain) {
+      $watch = New-LearnLinks "Watch clips $GLYPH_ARROW" '' '' ([string]$build.explain)
+      $watch.Margin = New-Gap $MARK_W 6 0 0
+      [void]$body.Children.Add($watch)
     }
   }
   if ($course) {
@@ -1399,7 +1407,7 @@ $closeMark.Add_MouseLeftButtonUp({
 # sent to a view and a course. A game open already comes forward at once, through this panel's
 # own Win32 (the shared Open-Sibling compiles its own the first time); a new one starts through
 # Open-Sibling. Learn always goes through its launcher, which sends an open Learn where it's asked.
-function Open-PanelSibling([string]$Id, [string]$View, [string]$CourseId) {
+function Open-PanelSibling([string]$Id, [string]$View, [string]$CourseId, [string]$Explain = '') {
   try {
     $sibling = $UI_SIBLINGS | Where-Object { $_.id -eq $Id } | Select-Object -First 1
     if (-not $sibling) { return }
@@ -1413,7 +1421,7 @@ function Open-PanelSibling([string]$Id, [string]$View, [string]$CourseId) {
         return
       }
     }
-    Open-Sibling $Id ([int64]$owner) $SessionId -View $View -CourseId $CourseId
+    Open-Sibling $Id ([int64]$owner) $SessionId -View $View -CourseId $CourseId -Explain $Explain
   } catch {
     # No game is no reason to lose the panel.
   }

@@ -3,7 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PhasePlan, TestRun } from '../types'
 import { courseArgv, isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus } from './learn'
-import { EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, readExplainAnswer, refusalText } from './explain'
+import { acceptedText, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, readExplainAnswer, refusalText } from './explain'
 import type { LearnStatus } from './learn'
 import { GAMES, isGame, openingText, windowScript } from './pages'
 import {
@@ -40,6 +40,8 @@ const RUNS_KEPT = 4
 const TOTALS_KEY = 'totals'
 const TOTALS_KEPT = 100
 const LEARN_POLL_MS = 3_000
+// /explain's brief goes in this long after the command returns: by then the session is idle and it starts a turn.
+const EXPLAIN_SUBMIT_MS = 300
 // The body rows the pane asks for inline (a request: the layout may give it fewer).
 const PANE_ROWS = 12
 // The body columns it asks for docked (a request: at most 45% of the terminal): the tab
@@ -82,6 +84,8 @@ let isOff = false
 let learn: LearnStatus | null = null
 let learnText = ''
 let learnTimer: Timer | null = null
+// The explainer Learn last accepted in this session: what /clips opens.
+let lastExplainer: string | null = null
 let syncing: Promise<void> = Promise.resolve()
 // The pane (off WezTerm-on-WSL): the tab in front, the one the person clicked (it stays
 // until a new run or a new plan), and the newest run and plan it has seen.
@@ -324,12 +328,12 @@ async function openPage(
     try {
       const sessionId = await $.session.id()
       if (distro) {
-        const argv = windowArgv({ distro, pluginRoot: $.plugin.root, script, sessionId, ownerHwnd, view, courseId })
+        const argv = windowArgv({ distro, pluginRoot: $.plugin.root, script, sessionId, ownerHwnd, view, courseId, explain })
         // Detached: the window stays when the session ends, as the panel's own launches do.
         await $.process.run(['bash', '-c', 'nohup "$@" >/dev/null 2>&1 &', 'open-window', ...argv])
       } else {
         const powershell = windowsPowerShell(await $.env.get('SystemRoot').catch(() => undefined))
-        const argv = windowArgv({ pluginRoot: $.plugin.root, script, sessionId, ownerHwnd, view, courseId, powershell })
+        const argv = windowArgv({ pluginRoot: $.plugin.root, script, sessionId, ownerHwnd, view, courseId, explain, powershell })
         // Windows has no nohup: detach.mjs starts it on its own, hidden, and returns.
         await $.process.run(['node', `${$.plugin.root}/web/detach.mjs`, ...argv])
       }
@@ -604,6 +608,17 @@ export const register: Register = on => {
       argumentHint: '[sudoku|2048|typing|chess]',
       immediate: true,
     })
+    // Not immediate: typed during a turn, it waits for that turn to end, then starts its own.
+    await $.command.register({
+      name: 'explain',
+      description: 'Have Claude explain code from this chat as short video clips in Learn, e.g. /explain how the gateway mints tokens',
+      argumentHint: '<what to explain>',
+    })
+    await $.command.register({
+      name: 'clips',
+      description: "Open the clips /explain made; with none in this session, Learn's Library, which lists every explainer",
+      immediate: true,
+    })
     await $.command.register({
       name: 'phases',
       description: 'Open the floating progress panel, empty or not (/phases clear empties and closes it)',
@@ -755,8 +770,8 @@ export const register: Register = on => {
     return { text: `Building a Learn course about "${focus}" from this chat. Learn reads the chat's saved record (it asks this chat nothing). Its progress shows on the panel's Learn tab; /learn opens it.` }
   })
 
-  // /explain is the prompt file commands/explain.md: this session plans the clips (it has the code
-  // and the context) and hands them over here; Learn makes them. Matched by pattern: the typed list
+  // /explain's brief has this session plan the clips (it has the code and the context) and hand
+  // them over here; Learn makes them. Matched by pattern: the typed list
   // of MCP tools is the one saved with the mod, made before this tool.
   on('tool.call', { tool: new RegExp(`^mcp__progress__${EXPLAIN_TOOL}$`) }, async ($, e) => {
     if (e.agentId !== undefined) return { deny: 'Only the main session hands Learn an explainer.' }
@@ -764,16 +779,32 @@ export const register: Register = on => {
     void tool
     void tool_use_id
     void consent
-    for (const key of Object.keys(plan)) if (!['title', 'shape', 'boxes', 'clips'].includes(key)) delete plan[key]
+    for (const key of Object.keys(plan)) if (!['title', 'shape', 'boxes', 'clips', 'depth'].includes(key)) delete plan[key]
     const [sessionId, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
     // Learn checks the plan against the files and this chat, with one Claude call: up to a few minutes.
     const ran = await $.process.run(explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($) }), { stdin: JSON.stringify(plan), timeoutMs: 6 * 60_000 })
     const answer = readExplainAnswer(ran.stdout)
     if (!answer) return { deny: `Learn couldn't take the plan: ${(ran.stderr.trim() || ran.stdout.trim()).split('\n').at(-1) || 'no answer'}` }
     if (!answer.ok) return { deny: refusalText(answer.problems) }
-    const opened = await openPage($, 'learn/video', { explain: answer.id })
-    return { result: `Learn accepted the plan: ${answer.clips} clip${answer.clips === 1 ? '' : 's'}, made in order, the first in about 2 to 4 minutes. ${opened}` }
+    // Nothing opens by itself: /clips, the Library and the panel's Learn tab open it.
+    lastExplainer = answer.id
+    return { result: acceptedText(answer) }
   }).catch(() => ({ deny: 'Learn failed to take the plan; tell the person, and explain in text instead if they want.' }))
+
+  // /explain hands the session the brief as your message. Submitted from inside this hook it would
+  // wait for your next message; submitted once the command has returned (the session idle), it
+  // starts a turn at once (tried: a hidden `context` note and `$.command.run` start none).
+  on('command.run', { command: 'explain' }, async ($, e) => {
+    const brief = explainBrief(e.args)
+    $.clock.after(EXPLAIN_SUBMIT_MS, () => void $.prompt.submit({ text: brief, asUser: true }).catch(() => undefined))
+    return { text: 'Asking Claude to plan the clips.' }
+  })
+
+  // The clips /explain made last in this session; else the Library, which lists every explainer.
+  on('command.run', { command: 'clips' }, async $ => {
+    if (lastExplainer) return { text: await openPage($, 'learn/video', { explain: lastExplainer }) }
+    return { text: await openPage($, 'learn', { view: 'library' }) }
+  })
 
   on('command.run', { command: 'games' }, async ($, e) => {
     const name = e.args.trim().toLowerCase()
@@ -821,7 +852,7 @@ export const register: Register = on => {
       manualTab = tab
       $.ui.invalidate('ui.render')
     }
-    const open = (page: string, deep?: { view?: string; courseId?: string; courseTitle?: string }) => () => {
+    const open = (page: string, deep?: { view?: string; courseId?: string; courseTitle?: string; explain?: string }) => () => {
       void openPage($, page, deep).then(text => $.ui.toast(text))
     }
     // Every tab is drawn plain, so none changes width when it comes to the front: the
@@ -965,7 +996,7 @@ export const register: Register = on => {
           )}
           {build && hasBar && (
             <Text>
-              <Text color={buildColor(build)}>{bar(buildRatio(build))}</Text> {build.done}/{build.total} pages
+              <Text color={buildColor(build)}>{bar(buildRatio(build))}</Text> {build.done}/{build.total} {build.kind === 'explain' ? 'clips' : 'pages'}
             </Text>
           )}
           {course && (
@@ -979,7 +1010,12 @@ export const register: Register = on => {
             </Text>
           )}
           {!build && !course && <Text dimColor>Courses from free videos and docs, written by your own Claude.</Text>}
-          <Box flexDirection="row" marginTop={1}>
+          <Box flexDirection="row" marginTop={1} columnGap={1}>
+            {build?.explain && (
+              <Button key="open:clips" onPress={open('learn/video', { explain: build.explain })}>
+                Watch clips
+              </Button>
+            )}
             <Button
               key="open:learn"
               variant="primary"

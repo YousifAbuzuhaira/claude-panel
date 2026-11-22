@@ -203,6 +203,9 @@ describe('the tab in front', () => {
     expect(isGame('2048')).toBe(true)
     expect(isGame('learn')).toBe(false)
     expect(windowScript('learn')).toBe('Learn.ps1')
+    // An explainer's clips: Learn.ps1 -Explain opens the player in an Edge app window.
+    expect(windowScript('learn/video')).toBe('Learn.ps1')
+    expect(pageLabel('learn/video')).toBe('the clips')
     expect(windowScript('games/typing')).toBe('TypeTest.ps1')
     // The games page is a web page alone: no WPF window behind it.
     expect(windowScript('games')).toBeUndefined()
@@ -513,6 +516,38 @@ describe('/learn and /games', () => {
     expect(await $.command.run({ command: 'learn', args: 'course', ...COMMAND_RUN })).toMatchObject({ text: 'Opening DevOps basics in Learn.' })
     const learn = host.runs.filter(argv => argv[0] === 'bash').at(-1) ?? []
     expect(learn).toEqual(expect.arrayContaining(['-View', 'course', '-CourseId', 'devops-1a2b']))
+  })
+
+  test('/clips with no explainer made in this session opens the Library, which lists every one', async ($, on) => {
+    const { host } = answerHost(on, { panel: 'comes-up' })
+    expect(await $.command.run({ command: 'clips', args: '', ...COMMAND_RUN })).toMatchObject({ text: 'Opening Learn (library).' })
+    expect(host.runs.filter(argv => argv[0] === 'bash').at(-1) ?? []).toEqual(expect.arrayContaining(['-View', 'library']))
+  })
+
+  test("an explainer being made gives the Learn tab Watch clips, which opens its player; its bar counts clips", async ($, on) => {
+    const learnStatus = JSON.stringify({
+      v: 1,
+      at: '2026-10-27T10:00:00.000Z',
+      build: { id: 'j2', kind: 'explain', explain: 'x202611181332459e', topic: 'Tokens', step: 'clips', state: 'running', message: 'Tokens: clip 2 of 4, writing', done: 1, total: 4 },
+      course: null,
+    })
+    const { clock, host } = answerHost(on, { panel: 'comes-up', terminal: 'iTerm.app', learnStatus })
+    await clock.advance(3_500)
+    await clock.settle()
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'tab:learn' })
+    await ui.unmount()
+
+    const learnTab = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect((await learnTab.find({ key: 'open:clips' }))?.text).toBe('Watch clips')
+    expect((await learnTab.find({ key: 'open:learn' }))?.text).toBe('Open Learn')
+    expect(await learnTab.find({ type: 'Text', text: /1\/4 clips/ })).toBeDefined()
+    await learnTab.press({ key: 'open:clips' })
+    await clock.settle()
+    const launched = host.runs.filter(argv => argv[0] === 'bash').at(-1) ?? []
+    expect(launched).toEqual(expect.arrayContaining(['-Explain', 'x202611181332459e']))
+    expect(host.toasts.at(-1)).toBe('Opening the clips.')
+    await learnTab.unmount()
   })
 
   test('/learn course with no course open yet opens the Library and says so', async ($, on) => {

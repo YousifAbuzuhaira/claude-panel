@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { EXPLAIN_TOOL, EXPLAIN_TOOL_SCHEMA, explainArgv, readExplainAnswer, refusalText } from '../hooks/explain'
+import { acceptedText, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, readExplainAnswer, refusalText } from '../hooks/explain'
 import { courseArgv, isLearnBusy, learnStatusPath, readLearnStatus } from '../hooks/learn'
 import { panelState } from '../hooks/widget'
 import { answerHost, PLAN, STATE } from './host'
@@ -34,6 +34,13 @@ describe('Learn status file', () => {
     expect(later?.build).toBeNull()
     expect(later?.course).toMatchObject({ title: 'DevOps basics', page: 4, next: 'Rollbacks' })
     expect(isLearnBusy(later)).toBe(false)
+  })
+
+  test("an explainer's build keeps its kind and the explainer it makes, for Watch clips; a bad id or another kind has none", () => {
+    const explaining = (build: Record<string, unknown>) => readLearnStatus(JSON.stringify({ v: 1, at: AT, build: { id: 'j2', topic: 'Tokens', step: 'clips', state: 'running', message: 'clip 1 of 3', done: 0, total: 3, ...build }, course: null }), NOW)?.build
+    expect(explaining({ kind: 'explain', explain: 'x202611181332459e' })).toMatchObject({ kind: 'explain', explain: 'x202611181332459e' })
+    expect(explaining({ kind: 'explain', explain: '../x' })?.explain).toBeNull()
+    expect(explaining({ kind: 'video', explain: 'x202611181332459e' })?.explain).toBeNull()
   })
 
   test('nonsense, half a write, or an unknown state reads as nothing', () => {
@@ -125,10 +132,45 @@ describe('/explain', () => {
   })
 
   test("the helper's last line says the explainer started, or what to fix; anything else is no answer", () => {
-    expect(readExplainAnswer('checking\n{"ok":true,"id":"x202611181332459e","clips":3}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 3 })
+    // A 0.17 helper's line: no depth, every clip wanted.
+    expect(readExplainAnswer('checking\n{"ok":true,"id":"x202611181332459e","clips":3}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 3, wanted: 3, depth: null })
+    expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":6,"wanted":4,"depth":2}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 6, wanted: 4, depth: 2 })
+    expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":6,"depth":7}')).toMatchObject({ depth: null })
     expect(readExplainAnswer('{"ok":false,"problems":["Clip 2: moved",3]}')).toEqual({ ok: false, problems: ['Clip 2: moved'] })
     expect(readExplainAnswer('{"ok":true,"id":"../x"}')).toBeNull()
     expect(readExplainAnswer('learn: that is not a chat id')).toBeNull()
     expect(refusalText(['a', 'b'])).toBe(`Learn refused the plan. Fix these and call ${EXPLAIN_TOOL} again:\n- a\n- b`)
+  })
+
+  test('the plan may carry the depth picked in the chat, 1 to 3, and nothing says the player opens', () => {
+    const depth = EXPLAIN_TOOL_SCHEMA.properties.depth
+    expect(depth).toMatchObject({ type: 'integer', enum: [1, 2, 3] })
+    expect(EXPLAIN_TOOL_SCHEMA.required).not.toContain('depth')
+    expect(EXPLAIN_TOOL_DESCRIPTION).not.toMatch(/opens the player/)
+    expect(EXPLAIN_TOOL_DESCRIPTION).toContain('Nothing opens by itself')
+  })
+
+  test('when Learn takes the plan, nothing has opened, and the session replies with one line naming /clips and the Library', () => {
+    const picked = acceptedText({ clips: 6, wanted: 4, depth: 2 })
+    expect(picked).toContain('making 4 clips (of 6; depth: the mechanism)')
+    expect(picked).toContain('Nothing was opened')
+    expect(picked).toContain('"Making 4 clips; the first is ready in about 3 minutes. /clips opens them; /learn library lists every explainer."')
+    const unpicked = acceptedText({ clips: 1, wanted: 1, depth: null })
+    expect(unpicked).toContain('1 clip; the player will ask how deep to go')
+    expect(unpicked).toContain('"Making 1 clip;')
+  })
+
+  test("/explain's brief: what you typed, one line first, the depth asked in the chat, then the tool with it", () => {
+    const brief = explainBrief('  how the gateway\n mints tokens ')
+    expect(brief.split('\n')[0]).toBe('Explain this to me as short narrated video clips, made by Learn: how the gateway mints tokens')
+    expect(explainBrief('')).toContain('made by Learn: what we are working on')
+    expect(brief).toContain('First reply with one short line')
+    expect(brief).toContain('write the whole plan and hold it')
+    expect(brief).toContain('AskUserQuestion')
+    expect(brief).toContain('"How deep should it go?"')
+    expect(brief).toContain(`mcp__progress__${EXPLAIN_TOOL} with the plan and "depth"`)
+    expect(brief).toContain('at most 18 lines')
+    expect(brief).toContain('Nothing opens by itself')
+    expect(brief).not.toContain('$ARGUMENTS')
   })
 })

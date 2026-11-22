@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.18.0",
+      "date": "2026-11-22",
+      "by": "Yousif",
+      "notes": [
+        "/explain asks how deep in the chat; nothing opens by itself",
+        "/clips, the Library and the panel open every explainer you made",
+        "Clips: no cropped rows, clear arrow labels, code without indent"
+      ]
+    },
+    {
       "version": "0.17.1",
       "date": "2026-11-22",
       "by": "Yousif",

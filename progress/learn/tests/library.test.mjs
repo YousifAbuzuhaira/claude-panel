@@ -13,7 +13,7 @@ process.env.LEARN_CONFIG_DIR = join(root, 'config');
 after(() => rmSync(root, { recursive: true, force: true }));
 
 const { createJob, createPageJob, createRefreshJob, readJob, runJob, tidyCandidates, cleanOutline } = await import('../build.mjs');
-const { listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCourse, readPage, readStatus, removeCourse, removePage, renamePage, updateCatalogue } = await import('../library.mjs');
+const { buildStatus, listCourses, movePage, openLibrary, pruneConcepts, readCatalogue, readCourse, readPage, readStatus, removeCourse, removePage, renamePage, updateCatalogue } = await import('../library.mjs');
 const { addConcept, ensureCategory, setPassed } = await import('../catalogue.mjs');
 const { createServer } = await import('../serve.mjs');
 const { withLock, writeJson, readJson } = await import('../store.mjs');
@@ -411,6 +411,13 @@ describe('helpers', () => {
     assert.deepEqual(older.teaches, []);
   });
 
+  test("the status an explainer's job writes names the explainer, for the panel's Watch clips; other jobs name none", () => {
+    const job = { id: 'j1', kind: 'explain', explain: 'x202611181332459e', topic: 'Tokens', step: 'clips', state: 'running', done: 1, total: 3 };
+    assert.equal(buildStatus(job).explain, 'x202611181332459e');
+    assert.equal(buildStatus({ ...job, kind: 'video' }).explain, null);
+    assert.equal(buildStatus({ ...job, kind: undefined, explain: undefined }).explain, null);
+  });
+
   test('the lock nests within one process and is gone afterwards', () => {
     const lib = openLibrary();
     const value = withLock(lib.root, () => withLock(lib.root, () => 7));
@@ -433,6 +440,7 @@ describe('serve', () => {
     const server = createServer({ write: text => lines.push(text.trim()) });
     const library = await ask(server, lines, { rid: 1, cmd: 'library.get' });
     assert.equal(library.ok, true);
+    assert.deepEqual(library.result.explainers, [], 'no explainer made yet: an empty list, not a missing one');
     const courseId = library.result.courses[0].id;
     const course = await ask(server, lines, { rid: 2, cmd: 'course.get', id: courseId });
     assert.equal(course.rid, 2);

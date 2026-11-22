@@ -4,7 +4,7 @@
 // anything or lose anything, so a video always covers the whole page.
 import { createHash } from 'node:crypto';
 import { inlineText } from './markdown.mjs';
-import { STAGE, numberWidth } from '../web/public/learn/video/model.mjs';
+import { STAGE, containers, crosses, dedent, labelSpot, legendRect, numberWidth, roughRect, wireEnds } from '../web/public/learn/video/model.mjs';
 
 export const MAX_SAY_WORDS = 30;
 const MIN_QUOTE_WORDS = 5;
@@ -162,23 +162,27 @@ export const longClips = (sections, scenes) => sections.filter(name => spokenWor
 
 // --- Testing a scene ---------------------------------------------------------------------
 
+// Where things are, as the stage draws them (model.mjs): one model for the player's camera and
+// for these checks. A shape with no size of its own keeps its missing size, so it's reported.
 function rectOf(o, assets) {
-  if (o.shape === 'row') {
-    const n = (o.items || []).length || 1;
-    const cell = Math.max(52, Math.min(112, (o.w - 10 * (n - 1)) / n));
-    return { x: o.x, y: o.y, w: o.w, h: cell * 1.05 };
-  }
-  if (o.shape === 'label') {
-    const size = ROUGH[o.size || 'm'];
-    const lines = Math.ceil((String(o.text).length * size * 0.56) / (o.w || 300));
-    return { x: o.x, y: o.y, w: o.w || 300, h: lines * size * 1.3 };
-  }
-  if (o.shape === 'number') {
-    const size = ROUGH[o.size || 'l'];
-    return { x: o.x, y: o.y, w: o.w || 240, h: size * 1.3 + (o.sub ? 24 : 0) };
-  }
   if (o.shape === 'table') return { x: o.x, y: o.y, w: o.w, h: 56 * (assets.table[o.asset]?.length || 1) };
+  if (['row', 'label', 'number'].includes(o.shape)) return roughRect(o, assets);
   return { x: o.x, y: o.y, w: o.w, h: o.h };
+}
+
+// Code is drawn at 14 px or more to be read; its box has 36 of padding across and 30 down.
+const CODE_FONT = 14;
+const STAGE_CODE_W = 1040;
+
+/**
+ * The room a code block needs on stage, without the indentation its lines share: `wide` when its
+ * longest line can't fit the stage at a readable size (it's then given the full width, drawn smaller).
+ */
+export function codeNeeds(text) {
+  const lines = dedent(text).split('\n');
+  const widest = Math.max(1, ...lines.map(line => line.length));
+  const w = Math.round(widest * 0.61 * CODE_FONT + 36);
+  return { w, h: Math.round(lines.length * 1.45 * CODE_FONT + 30), wide: w > STAGE_CODE_W };
 }
 
 const inside = (inner, outer) => inner.x >= outer.x - 2 && inner.y >= outer.y - 2 && inner.x + inner.w <= outer.x + outer.w + 2 && inner.y + inner.h <= outer.y + outer.h + 2;
@@ -193,21 +197,44 @@ function testPicture(objects, assets, name, when, problems) {
     }
     if (r.x < LIMITS.left || r.y < LIMITS.top || r.x + r.w > LIMITS.right || r.y + r.h > LIMITS.bottom) problems.push(`${name}, ${when}: ${o.id} leaves the stage (x ${Math.round(r.x)}-${Math.round(r.x + r.w)}, y ${Math.round(r.y)}-${Math.round(r.y + r.h)})`);
     if (o.shape === 'box' && o.text) {
-      const fit = Math.min(r.h * 0.42, (r.w - 30) / (String(o.text).length * 0.62));
+      // As the stage sizes it: a box with small text under its name gives the name less height.
+      const fit = Math.min(r.h * (o.sub ? 0.34 : 0.42), (r.w - 30) / (String(o.text).length * 0.62));
       if (fit < 16) problems.push(`${name}: "${o.text}" is too long for box ${o.id}`);
     }
+    if (o.shape === 'box' && o.sub && String(o.sub).length * 14 * 0.61 > r.w - 16) problems.push(`${name}: the small text under box ${o.id} ("${String(o.sub).slice(0, 40)}") is wider than the box: shorten it or widen the box`);
     if (o.shape === 'number') {
       const wide = numberWidth(o, ROUGH[o.size || 'l'] * (o.size === 'xl' ? 1.3 : 1)) - 10;
       if (wide > (o.w || 240) || o.x + wide > STAGE.right + 5) problems.push(`${name}: number ${o.id} needs ${Math.round(wide)} of width at x ${o.x}: move it left, widen it or use a smaller size`);
     }
     if (o.shape === 'code') {
-      const lines = String(assets.code[o.asset]?.text || '').split('\n');
-      const widest = Math.max(...lines.map(line => line.length));
+      // Measured as drawn: without the indentation its lines share. A block too wide for the stage
+      // passes at the full width (drawn smaller), as long as it is tall enough.
+      const text = dedent(assets.code[o.asset]?.text || '');
+      const lines = text.split('\n');
+      const widest = Math.max(1, ...lines.map(line => line.length));
+      const needs = codeNeeds(text);
       const font = Math.min((o.w - 36) / (widest * 0.61), (o.h - 30) / (lines.length * 1.45));
-      if (font < 13.5) problems.push(`${name}: code ${o.id} is too small to read at ${o.w} by ${o.h}. It needs about ${Math.round(widest * 0.61 * 14 + 36)} by ${Math.round(lines.length * 1.45 * 14 + 30)}: give it the main part of the stage`);
+      const fits = needs.wide ? o.w >= STAGE_CODE_W - 10 && o.h >= needs.h - 4 : font >= 13.5;
+      if (!fits) problems.push(needs.wide
+        ? `${name}: code ${o.id} is wider than the stage: give it x 40, w 1040 and at least ${needs.h} of height, with nothing beside it`
+        : `${name}: code ${o.id} is too small to read at ${o.w} by ${o.h}: give it at least ${needs.w} by ${needs.h}`);
     }
   }
-  const solid = shown.filter(o => o.style !== 'outline' && !o.fade && o.shape !== 'bar');
+  // Faded objects count: something new drawn over a faded one looks like a mistake, not a fade.
+  const solid = shown.filter(o => o.style !== 'outline' && o.shape !== 'bar');
+  // An outline or a bar may hold things, or sit apart from them, but not half over one.
+  const isFrame = o => o.style === 'outline' || o.shape === 'bar';
+  for (const frame of shown.filter(isFrame)) {
+    const p = rectOf(frame, assets);
+    for (const o of shown) {
+      // Two frames are one pair: looked at once.
+      if (o === frame || (isFrame(o) && String(o.id) < String(frame.id))) continue;
+      const q = rectOf(o, assets);
+      const across = Math.min(p.x + p.w, q.x + q.w) - Math.max(p.x, q.x);
+      const down = Math.min(p.y + p.h, q.y + q.h) - Math.max(p.y, q.y);
+      if (across > 6 && down > 6 && !inside(q, p) && !inside(p, q)) problems.push(`${name}, ${when}: ${frame.id} cuts across ${o.id}: put ${o.id} inside it or clear of it`);
+    }
+  }
   for (let a = 0; a < solid.length; a++) {
     for (let b = a + 1; b < solid.length; b++) {
       const p = rectOf(solid[a], assets);
@@ -217,6 +244,61 @@ function testPicture(objects, assets, name, when, problems) {
       if (across > 6 && down > 6 && !(solid[a].shape === 'label' && inside(p, q)) && !(solid[b].shape === 'label' && inside(q, p))) problems.push(`${name}, ${when}: ${solid[a].id} overlaps ${solid[b].id}`);
     }
   }
+}
+
+/**
+ * Layout polish the stage can't fix by itself, for one picture: an arrow's line through an object
+ * it doesn't join, an arrow's text with no clear spot, a container's name covered. Told to Claude
+ * with every repair and asked for once more, never a failure: a crossing is better than a read-out.
+ */
+function layoutPicture(objects, assets, name, when, notes) {
+  const shown = [...objects.values()].filter(o => o.visible);
+  const things = shown.filter(o => o.shape !== 'arrow');
+  const rects = new Map(things.map(o => [o.id, rectOf(o, assets)]));
+  const usable = r => r && [r.x, r.y, r.w, r.h].every(Number.isFinite);
+  const rectById = id => (usable(rects.get(id)) ? rects.get(id) : null);
+  const holds = (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  for (const arrow of shown.filter(o => o.shape === 'arrow')) {
+    const ends = wireEnds(arrow, rectById);
+    if (!ends) continue;
+    for (const o of things) {
+      const r = rectById(o.id);
+      if (!r || o.shape === 'dot' || o.id === arrow.from || o.id === arrow.to) continue;
+      // A container around either end is crossed by design.
+      if (o.style === 'outline' && (holds(r, ends[0], ends[1]) || holds(r, ends[2], ends[3]))) continue;
+      if (crosses(ends, { x: r.x - 4, y: r.y - 4, w: r.w + 8, h: r.h + 8 })) notes.push(`${name}, ${when}: arrow ${arrow.id} passes through ${o.id}: move one of them, or have the arrow join other objects`);
+    }
+    if (arrow.text && !labelSpot(ends, arrow.text, [...rects.values()].filter(usable)).free) notes.push(`${name}, ${when}: the text of arrow ${arrow.id} ("${String(arrow.text).slice(0, 30)}") has no clear space beside its line: shorten it, or leave about ${Math.round(String(arrow.text).length * 9 + 20)} of free line`);
+  }
+  for (const id of containers(objects, assets)) {
+    const legend = legendRect(objects.get(id));
+    for (const o of things) {
+      const r = rectById(o.id);
+      if (!r || o.id === id) continue;
+      if (Math.min(legend.x + legend.w, r.x + r.w) - Math.max(legend.x, r.x) > 2 && Math.min(legend.y + legend.h, r.y + r.h) - Math.max(legend.y, r.y) > 2) notes.push(`${name}, ${when}: ${o.id} covers the name of ${id}, which sits on its top edge: leave 20 free under the top of ${id}`);
+    }
+  }
+}
+
+/** The layout polish of a section's scenes (see layoutPicture), at most one note per problem. */
+export function layoutNotes(scenes, assets) {
+  const notes = [];
+  (scenes || []).forEach((scene, index) => {
+    if (scene.check || scene.plain) return;
+    const name = `Scene ${index} ("${scene.title}")`;
+    const objects = new Map((scene.objects || []).map(o => [o.id, { ...o, visible: Boolean(o.show) }]));
+    layoutPicture(objects, assets, name, 'at the start', notes);
+    (scene.beats || []).forEach((beat, b) => {
+      for (const action of beat.do || []) apply(objects, action);
+      layoutPicture(objects, assets, name, `beat ${b}`, notes);
+    });
+  });
+  // The same crossing at every beat is one note: the first time it shows.
+  const seen = new Set();
+  return notes.filter(note => {
+    const key = note.replace(/, (at the start|beat \d+):/, ':');
+    return !seen.has(key) && seen.add(key);
+  });
 }
 
 const apply = (objects, action) => {

@@ -7,6 +7,8 @@ const LEARN_PAGE = { id: 'learn', label: 'Learn', script: 'Learn.ps1' } as const
 
 export const PAGES = [
   LEARN_PAGE,
+  // An explainer's clips: Learn.ps1 -Explain opens the player in an Edge app window.
+  { id: 'learn/video', label: 'the clips', script: 'Learn.ps1' },
   { id: 'games', label: 'the games', script: null },
   { id: 'games/sudoku', label: 'Sudoku', script: 'Sudoku.ps1' },
   { id: 'games/2048', label: '2048', script: 'Game2048.ps1' },

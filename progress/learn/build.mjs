@@ -20,7 +20,7 @@ import {
 } from './prompts.mjs';
 import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, placeChecks, quoteState, pageMap, tidyAids } from './teach.mjs';
 import { makeVideos, readQueue } from './video.mjs';
-import { checkExplainer, makeExplainer, saveExplainer } from './explain.mjs';
+import { checkExplainer, makeExplainer, saveExplainer, wantedClips } from './explain.mjs';
 import { MAX_DISPUTES, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from './verify.mjs';
 import { ensureVoice, record } from './voice.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
@@ -97,7 +97,7 @@ export async function startExplainer(lib, { plan, sessionId, cwd, io = defaultIo
   if (checked.problems) return { problems: checked.problems };
   const explainer = saveExplainer(lib, checked.explainer);
   const job = explainJob(lib, explainer);
-  return { id: explainer.id, clips: explainer.clips.length, job: job.id };
+  return { id: explainer.id, clips: explainer.clips.length, wanted: wantedClips(explainer), depth: explainer.depth, job: job.id };
 }
 
 /**
@@ -113,7 +113,7 @@ export function explainJob(lib, explainer) {
   const stamp = now().replace(/[-:T]/g, '').slice(0, 12);
   const job = saveJob(lib, {
     v: 1, id: `j${stamp}${randomBytes(2).toString('hex')}`, kind: 'explain', explain: explainer.id, topic: explainer.title, courseTitle: 'Explainer', link: null, category: null, mode: 'page', courseId: null, summary: null,
-    step: 'voice', state: 'running', message: 'Getting ready', done: 0, total: explainer.clips.length, working: [], leftMinutes: null, candidates: null, picks: null, pid: null, error: null, startedAt: now(),
+    step: 'voice', state: 'running', message: 'Getting ready', done: 0, total: wantedClips(explainer), working: [], leftMinutes: null, candidates: null, picks: null, pid: null, error: null, startedAt: now(),
   });
   startDaemon(lib, job.id);
   return job;
