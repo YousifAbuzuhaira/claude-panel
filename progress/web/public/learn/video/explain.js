@@ -1,23 +1,8 @@
 // An explainer's clips (/explain): each clip is its own short video, played as a page's video is,
 // and the next opens when one ends. Before a clip is ready: pick how deep to go (once), then, with
 // questions on, answer the clip's guess question while it's being made, so the wait isn't dead time.
-import { rpc, token } from '../../shared/api.js';
-
-const STORE = id => `claude-learn-explain:${id}`;
-
-/** What you did in this explainer, kept for the tab's life: guesses made while waiting, clips watched or skipped. */
-export function recall(id) {
-  try {
-    return JSON.parse(sessionStorage.getItem(STORE(id)) || '{}') || {};
-  } catch {
-    return {};
-  }
-}
-export function remember(id, change) {
-  const next = { ...recall(id), ...change(recall(id)) };
-  try { sessionStorage.setItem(STORE(id), JSON.stringify(next)); } catch {}
-  return next;
-}
+// In an exported file every clip there is ready and the depth was picked: none of that shows.
+import { explainAt, explainInfo, explainSound, explainVideo, getQuestions, recall, remember } from './data.js';
 
 const make = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -41,7 +26,7 @@ function askDepth(info, gate) {
       if (k && count === info.counts[k - 1]) return; // a depth that adds no clip isn't a choice
       const button = make('button', 'gate-choice');
       button.append(make('span', 'key', String(k + 1)), make('b', '', label), make('span', 'gate-sub', `${sub} · ${count} clip${count === 1 ? '' : 's'}`));
-      button.addEventListener('click', async () => resolve(await rpc('explain.at', { id: info.id, depth: k + 1 })));
+      button.addEventListener('click', async () => resolve(await explainAt(info.id, { depth: k + 1 })));
       gate.append(button);
     });
     gate.hidden = false;
@@ -84,26 +69,25 @@ function showWaiting(info, n, gate, id, questions) {
  * map. Picks the depth first when none is picked; while the clip is being made, shows its guess.
  */
 export async function loadExplainer({ id, n, gate }) {
-  let info = await rpc('explain.get', { id });
+  let info = await explainInfo(id);
   if (!info.clips[n - 1]) throw new Error('it has no such clip');
+  if (info.clips[n - 1].state === 'later') throw new Error('that clip is not in this file yet');
   if (!info.depth) info = { ...info, ...(await askDepth(info, gate)) };
   if (info.clips[n - 1].state !== 'ready') {
-    await rpc('explain.at', { id, n });
-    const settings = await rpc('settings.get').catch(() => null);
-    showWaiting(info, n, gate, id, settings?.videoQuestions === true);
+    await explainAt(id, { n });
+    showWaiting(info, n, gate, id, await getQuestions());
     for (;;) {
       await sleep(3000);
-      info = await rpc('explain.get', { id });
+      info = await explainInfo(id);
       const clip = info.clips[n - 1];
       if (clip.state === 'ready') break;
       const status = document.getElementById('gateStatus');
       if (status) status.textContent = clip.state === 'left out' ? 'This clip is past the depth you picked.' : info.message || 'Waiting its turn';
     }
   }
-  const outer = { ...info, ...(await rpc('explain.at', { id, n })) };
-  const video = await rpc('explain.video', { id, n });
-  const response = await fetch(`/api/video-audio?explain=${encodeURIComponent(id)}&clip=${n}`, { headers: { 'X-Learn-Token': token } });
-  if (!response.ok) throw new Error('its sound is missing');
+  const outer = { ...info, ...(await explainAt(id, { n })) };
+  const video = await explainVideo(id, n);
+  const blob = await explainSound(id, n);
   gate.hidden = true;
-  return { video, blob: new Blob([await response.arrayBuffer()], { type: 'audio/mpeg' }), outer };
+  return { video, blob, outer };
 }

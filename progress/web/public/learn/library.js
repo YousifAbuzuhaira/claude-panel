@@ -345,7 +345,22 @@ function explainerRow(item) {
     onkeydown: event => { if (event.key === 'Enter' && event.target === event.currentTarget) open(); },
   },
   h('div.course-top', null, h('span.course-title', null, item.title), h('span.counts.mono', null, `${item.ready}/${item.clips} clips`)),
-  h('div.course-foot', null, h(`span.${tone}`, null, text), item.createdAt ? h('span.faint', null, `Made ${formatDate(item.createdAt)}`) : null));
+  h('div.course-foot', null, h(`span.${tone}`, null, text), item.createdAt ? h('span.faint', null, `Made ${formatDate(item.createdAt)}`) : null, fileLink(item)));
+}
+
+/**
+ * The explainer as one file you can pass on: where it is, once made (written again with each clip),
+ * or a quiet way to make it for one made before files were.
+ */
+function fileLink(item) {
+  if (item.file) return h('span.faint.mono', { title: item.file }, `File: ${item.file.replace(/^\/(?:home|Users)\/[^/]+/, '~')}`);
+  if (!item.ready) return null;
+  return action('Save as a file', async () => {
+    const done = await act('explain.export', { id: item.id });
+    if (!done) return;
+    toast(`Saved: ${done.file}`);
+    refreshLibrary();
+  });
 }
 
 /** The player on an explainer, at the clip you were on: its own window where there is one. */

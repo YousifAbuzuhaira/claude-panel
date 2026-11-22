@@ -253,5 +253,6 @@ export const buildStatus = job => job && {
   total: job.total || 0,
   courseId: job.courseId || null,
   explain: job.kind === 'explain' ? job.explain || null : null,
+  file: job.kind === 'explain' ? job.file || null : null,
   ...(job.kind === 'video' ? { working: job.working || [], leftMinutes: job.leftMinutes ?? null } : {}),
 };

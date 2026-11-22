@@ -420,8 +420,9 @@ async function markReleasesSeen($: EngineInterface) {
 /** Picks up Learn's status file; a change redraws the panel's Learn tab. */
 async function pollLearn($: EngineInterface) {
   let text = ''
+  let home: string | undefined
   try {
-    const home = await learnHome($)
+    home = await learnHome($)
     if (home) text = await $.fs.read(learnStatusPath(home))
   } catch {
     // Learn has never run here
@@ -431,7 +432,7 @@ async function pollLearn($: EngineInterface) {
   learn = text ? readLearnStatus(text, await $.clock.now()) : null
   // A clip of the explainer this chat asked for is ready: a notice in the chat (the model never
   // reads it, so no turn starts).
-  const notice = readyNotice(learn?.build, lastExplainer, clipsTold)
+  const notice = readyNotice(learn?.build, lastExplainer, clipsTold, home || '')
   if (notice) {
     clipsTold = notice.done
     void $.session.append({ message: { type: 'system', content: [{ type: 'text', text: notice.text }] } }).catch(() => undefined)

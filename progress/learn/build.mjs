@@ -21,6 +21,7 @@ import {
 import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, placeChecks, quoteState, pageMap, tidyAids } from './teach.mjs';
 import { makeVideos, readQueue } from './video.mjs';
 import { checkExplainer, clipCounts, makeExplainer, readExplainer, saveExplainer, wantedClips } from './explain.mjs';
+import { exportExplainer } from './export.mjs';
 import { MAX_DISPUTES, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from './verify.mjs';
 import { ensureVoice, record } from './voice.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
@@ -350,7 +351,7 @@ export function cancelJob(lib, id) {
 // --- Running a job ------------------------------------------------------------------------
 
 /** `io` is what the steps reach out to; the tests swap it. */
-export const defaultIo = { askStructured, ytSearch, ytInfo, ytCaptions, ytPlaylist, fetchPage, ensureYtDlp, readDocument, readClaudeChat, ensureVoice, record };
+export const defaultIo = { askStructured, ytSearch, ytInfo, ytCaptions, ytPlaylist, fetchPage, ensureYtDlp, readDocument, readClaudeChat, ensureVoice, record, exportExplainer };
 
 export async function runJob(lib, id, io = defaultIo) {
   let job = readJob(lib, id);

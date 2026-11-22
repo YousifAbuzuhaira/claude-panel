@@ -1,5 +1,6 @@
 # One video's script spoken into one track, with a time for every word and every visual cue.
-#   python -I narrate.py <model folder> <script.json> <out> <voice>
+#   python -I narrate.py <model folder> <script.json> <out> <voice> [kbps]
+# kbps is the MP3's constant bitrate: 64 (the default), 48, 40 or 32 (explainers, which go out as files).
 # Writes <out>.mp3, then <out>.json (the script with its times), so <out>.json only ever exists
 # with its audio beside it. Runs at low priority: it takes what the machine isn't using.
 # Progress goes to stdout as JSON lines. Run with -I, so nothing near it can stand in for a module.
@@ -13,6 +14,8 @@ SENTENCE_GAP, BEAT_GAP, SCENE_GAP = 0.14, 0.26, 0.55
 # The written form on screen, and what the voice is given. Each page adds its own.
 ALWAYS = [('IDs', "I D's")]
 SKIP = set(' ,.;:!?—–-…"()“”\'')
+# libsndfile's compression level for each constant bitrate, measured at 24 kHz mono.
+LEVELS = {64: 0.6, 48: 0.71, 40: 0.76, 32: 0.83}
 
 
 def clean(word):
@@ -126,6 +129,7 @@ def tell(speaker, scene, all_words):
 
 def main():
     model_dir, script_file, out, voice = sys.argv[1:5]
+    level = LEVELS.get(int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5].isdigit() else 64, LEVELS[64])
     # Low priority where there is nice; on Windows the helper lowers this process itself.
     if hasattr(os, 'nice'):
         try:
@@ -176,7 +180,7 @@ def main():
             missed += tell(speaker, scene, all_words)
     audio_file = out + '.mp3'
     # Constant bitrate: the player seeks by time, and a variable one seeks only roughly.
-    sf.write(audio_file + '.tmp', np.concatenate(speaker.pieces), RATE, format='MP3', subtype='MPEG_LAYER_III', compression_level=0.6, bitrate_mode='CONSTANT')
+    sf.write(audio_file + '.tmp', np.concatenate(speaker.pieces), RATE, format='MP3', subtype='MPEG_LAYER_III', compression_level=level, bitrate_mode='CONSTANT')
     os.replace(audio_file + '.tmp', audio_file)
     script['words'] = all_words
     script['audio'] = {'mainEnd': round(main_end, 3), 'extras': extras, 'voice': voice, 'seconds': round(speaker.at, 3)}

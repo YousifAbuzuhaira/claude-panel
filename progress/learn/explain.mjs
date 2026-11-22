@@ -23,6 +23,7 @@ const MAX_ANCHOR_LINES = 60;
 const MIN_QUOTE_WORDS = 4;
 const MAX_LABEL = 22;
 const IDLE_MS = 20 * 60_000; // an explainer with no depth yet waits this long for the player's pick
+const KBPS = 32; // an explainer's sound: it goes out as a file, so half a page video's 64
 
 const words = text => String(text ?? '').trim().split(/\s+/).filter(Boolean);
 const LANGS = { '.ts': 'ts', '.tsx': 'tsx', '.js': 'js', '.mjs': 'js', '.cjs': 'js', '.jsx': 'jsx', '.py': 'python', '.go': 'go', '.rs': 'rust', '.java': 'java', '.rb': 'ruby', '.sh': 'bash', '.sql': 'sql', '.css': 'css', '.html': 'html', '.json': 'json', '.yaml': 'yaml', '.yml': 'yaml', '.md': 'markdown', '.swift': 'swift', '.kt': 'kotlin', '.cs': 'csharp', '.php': 'php', '.ps1': 'powershell' };
@@ -384,6 +385,7 @@ export function listExplainers(lib, jobs = []) {
         clips,
         ready,
         state: making.has(explainer.id) ? 'making' : ready >= clips ? 'ready' : 'waiting',
+        file: explainer.file || null,
       };
     })
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
@@ -451,6 +453,16 @@ export async function makeExplainer({ lib, io, id, save, isStopping, poll = 3000
   };
   let made = 0;
   const counts = explainer => clipCounts(lib, explainer);
+  // The file you can pass on, written again with each clip made; a failure is noted, never fatal.
+  const exportFile = () => {
+    if (!io.exportExplainer) return;
+    try {
+      const done = io.exportExplainer(lib, id);
+      if (done) save({ file: done.file });
+    } catch (error) {
+      console.error(`explainer file not written: ${error.message}`);
+    }
+  };
   for (;;) {
     if (isStopping()) throw new Error('stopped');
     const explainer = readExplainer(lib, id);
@@ -472,15 +484,18 @@ export async function makeExplainer({ lib, io, id, save, isStopping, poll = 3000
     const base = explainPaths(lib, id).clip(n);
     save({ message: `${explainer.title}: clip ${n} of ${explainer.clips.length}, recording`, making: n, ...counts(explainer) });
     try {
-      await io.record({ scriptFile: `${base}.script.json`, out: `${base}.new` });
+      await io.record({ scriptFile: `${base}.script.json`, out: `${base}.new`, kbps: KBPS });
       renameRetry(`${base}.new.mp3`, `${base}.mp3`);
       renameRetry(`${base}.new.json`, `${base}.json`);
       made++;
+      exportFile();
     } catch (error) {
       for (const end of ['.new.mp3', '.new.json', '.new.mp3.tmp', '.new.json.tmp']) rmSync(`${base}${end}`, { force: true });
       throw error;
     }
   }
   await Promise.allSettled(scripts.values());
+  // Also an explainer made before files were (or with nothing left to make): it gets one now.
+  if (!made) exportFile();
   return made;
 }

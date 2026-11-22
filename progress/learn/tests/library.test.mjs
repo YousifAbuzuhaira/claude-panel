@@ -418,6 +418,8 @@ describe('helpers', () => {
     assert.equal(buildStatus(job).explain, 'x202611181332459e');
     assert.equal(buildStatus({ ...job, kind: 'video' }).explain, null);
     assert.equal(buildStatus({ ...job, kind: undefined, explain: undefined }).explain, null);
+    assert.equal(buildStatus({ ...job, file: '/home/me/explainers/tokens-459e.html' }).file, '/home/me/explainers/tokens-459e.html', 'the file you can pass on');
+    assert.equal(buildStatus({ ...job, kind: 'video', file: '/x.html' }).file, null);
   });
 
   test('the lock nests within one process and is gone afterwards', () => {
@@ -954,5 +956,38 @@ describe("an explainer's job", () => {
     const job = readJob(lib, 'j202611220000cccc');
     assert.equal(job.state, 'done');
     assert.deepEqual([job.done, job.total, job.message], [3, 3, '3 clips ready'], 'clip 4 is past depth 2, and this run made none');
+  });
+
+  test("records an explainer's sound at 32 kbps, and writes its file after each clip, the job keeping where", async () => {
+    const lib = openLibrary();
+    const explainer = saveExplainer(lib, { title: 'Recorded', depth: 1, at: 1, clips: [clip(1), clip(2)], createdAt: new Date().toISOString() });
+    // Its script already written (questions off, as the setting is), so no Claude call is needed.
+    mkdirSync(join(explainPaths(lib, explainer.id).dir, 'clips'), { recursive: true });
+    writeFileSync(`${explainPaths(lib, explainer.id).clip(1)}.script.json`, JSON.stringify({ withQuestions: false, scenes: [] }));
+    saveJob(lib, { v: 1, id: 'j202611220000dddd', kind: 'explain', explain: explainer.id, state: 'running', step: 'clips', done: 0, total: 1, pid: null, startedAt: new Date().toISOString() });
+    const recorded = [];
+    const exported = [];
+    const io = {
+      askStructured: async () => { throw new Error('no Claude call expected'); },
+      ensureVoice: async () => {},
+      record: async ({ out, kbps }) => { recorded.push(kbps); writeFileSync(`${out}.mp3`, 'mp3'); writeFileSync(`${out}.json`, '{}'); },
+      exportExplainer: (_, id) => { exported.push(id); return { file: '/home/me/explainers/recorded-0000.html', clips: 1, bytes: 10 }; },
+    };
+    await buildModule.runJob(lib, 'j202611220000dddd', io);
+    assert.deepEqual(recorded, [32]);
+    assert.deepEqual(exported, [explainer.id], 'once for the clip made; not again at the end');
+    const job = readJob(lib, 'j202611220000dddd');
+    assert.equal(job.file, '/home/me/explainers/recorded-0000.html');
+    assert.equal(buildStatus(job).file, job.file);
+  });
+
+  test("a file that can't be written is noted, never the job's failure", async () => {
+    const lib = openLibrary();
+    const explainer = saveExplainer(lib, { title: 'Unwritable', depth: 1, at: 1, clips: [clip(1)], createdAt: new Date().toISOString() });
+    clipsMade(lib, explainer, 1);
+    saveJob(lib, { v: 1, id: 'j202611220000eeee', kind: 'explain', explain: explainer.id, state: 'running', step: 'clips', done: 0, total: 1, pid: null, startedAt: new Date().toISOString() });
+    const io = { askStructured: async () => { throw new Error('none'); }, ensureVoice: async () => {}, record: async () => { throw new Error('none'); }, exportExplainer: () => { throw new Error('disk full'); } };
+    await buildModule.runJob(lib, 'j202611220000eeee', io);
+    assert.equal(readJob(lib, 'j202611220000eeee').state, 'done');
   });
 });

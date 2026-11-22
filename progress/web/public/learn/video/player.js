@@ -1,12 +1,13 @@
 // The video player: the audio is the clock, and every picture, word and question follows it.
 // A video is a playlist of clips, one per section: each stops at its end, and the next starts when
 // you say so. Opened as /learn/video/?course=<id>&page=<n>. An answer goes through check.answer, as on the
-// page, so it counts towards Review. The audio can't send a header, so it's fetched and played from
-// a Blob. Keeping the event stream open stops the server idling out during a long video.
-import { onEvents, rpc, token } from '../../shared/api.js';
+// page, so it counts towards Review. Everything it needs comes through data.js: Learn's server, or
+// in an explainer exported as one file, the page itself (data-file.js), where this whole module
+// runs again for each clip and `life().signal` ends the run before.
+import { countAnswer, courseVideo, explainAt, getQuestions, go, keepAlive, life, loadPrefs as readPrefs, recall, refresh, remember, savePrefs as writePrefs, saveQuestions, where } from './data.js';
 import { buildCameras, buildStates, sceneAt as sceneIndex } from './model.mjs';
 import { applyState, initStage, stepObjects } from './stage.js';
-import { loadExplainer, recall, remember } from './explain.js';
+import { loadExplainer } from './explain.js';
 
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -27,12 +28,9 @@ const ICONS = {
 };
 const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
 
-const query = new URLSearchParams(location.search);
-const courseId = query.get('course');
-const pageN = Number(query.get('page'));
 // An explainer's clip (/explain): ?explain=<id>&clip=<n>. Each clip is its own video; the next opens when one ends.
-const explainId = query.get('explain');
-const clipN = Number(query.get('clip') || 1);
+const { courseId, pageN, explainId, clipN } = where();
+const { signal } = life();
 
 /** Stops here with a plain sentence where the video would be. */
 function giveUp(text) {
@@ -45,7 +43,7 @@ function giveUp(text) {
 async function load() {
   if (explainId) {
     if (!/^x[0-9a-f]{12,20}$/.test(explainId) || !Number.isInteger(clipN) || clipN < 1) giveUp('This link names no explainer.');
-    onEvents(() => {});
+    keepAlive();
     try {
       return await loadExplainer({ id: explainId, n: clipN, gate: $('gate') });
     } catch (error) {
@@ -53,12 +51,9 @@ async function load() {
     }
   }
   if (!courseId || !Number.isInteger(pageN)) giveUp('This link names no video.');
-  onEvents(() => {});
+  keepAlive();
   try {
-    const video = await rpc('video.get', { courseId, n: pageN });
-    const response = await fetch(`/api/video-audio?course=${encodeURIComponent(courseId)}&page=${pageN}`, { headers: { 'X-Learn-Token': token } });
-    if (!response.ok) throw new Error('its sound is missing');
-    return { video, blob: new Blob([await response.arrayBuffer()], { type: 'audio/mpeg' }) };
+    return await courseVideo(courseId, pageN);
   } catch (error) {
     return giveUp(`This video can't play: ${error.message}`);
   }
@@ -68,14 +63,13 @@ const { video: V, blob, outer = null } = await load();
 // An explainer's playlist: its clips in the depth picked, the map they share, what you did in it.
 const inDepth = outer ? outer.clips.filter(c => c.level <= (outer.depth || 1)) : [];
 const nextOuter = outer ? inDepth.find(c => c.n > clipN) || null : null;
-const goToClip = n => { location.href = `${location.pathname}?explain=${encodeURIComponent(explainId)}&clip=${n}`; };
+const goToClip = n => go(explainId, n);
 if (outer) V.plan = outer.map;
 const { scenes, assets, quiz, sections, audio: track } = V;
 const quizById = new Map(quiz.map(q => [q.id, q]));
 // Questions (Learn's setting, Q here): off, nothing stops the video. A video made without any
 // has nothing to turn on; one made with them hides them while the setting is off.
-const settings = await rpc('settings.get').catch(() => null);
-let wantQuestions = settings?.videoQuestions === true;
+let wantQuestions = await getQuestions();
 const hasQuestions = scenes.some(scene => scene.check || scene.masks?.length);
 const questionsOn = () => wantQuestions && hasQuestions;
 // A question scene is passed over when questions are off, or when it's gone since the video was made.
@@ -281,11 +275,14 @@ function endOpener() {
 }
 
 // --- Sound and time --------------------------------------------------------------------
-const sound = new Audio(URL.createObjectURL(blob));
+const soundUrl = URL.createObjectURL(blob);
+const sound = new Audio(soundUrl);
 sound.preload = 'auto';
+signal.addEventListener('abort', () => { sound.pause(); URL.revokeObjectURL(soundUrl); });
 sound.preservesPitch = true;
 let playing = false, rate = 1, dragging = false, mode = 'main', pinned = 0, extra = null, sleepTimer = 0, againClip = -1, advanceTimer = 0;
 const answers = new Map(); // question id: the option picked, or null for "Not sure"
+signal.addEventListener('abort', () => { clearTimeout(advanceTimer); clearTimeout(sleepTimer); });
 /** A clip's end card counting down to the next clip (questions off), stopped. */
 function cancelAdvance() {
   if (!advanceTimer) return;
@@ -371,6 +368,12 @@ function endExplainerClip() {
     $('coverMeta').textContent = `${inDepth.length} clip${inDepth.length === 1 ? '' : 's'}`;
     coverAction = () => goToClip(inDepth[0].n);
     $('coverPlay').title = 'From the first clip';
+  } else if (nextOuter.state === 'later') {
+    // An exported file made before the rest: a file on disk is written again as each clip is made.
+    $('coverTitle').textContent = `Next: ${nextOuter.title}`;
+    $('coverMeta').textContent = `${inDepth.findIndex(c => c.n === nextOuter.n) + 1} of ${inDepth.length} · not in this file yet`;
+    coverAction = refresh;
+    $('coverPlay').title = refresh ? 'Look again for it' : 'Not in this file yet';
   } else {
     $('coverTitle').textContent = `Next: ${nextOuter.title}`;
     $('coverMeta').textContent = `${inDepth.findIndex(c => c.n === nextOuter.n) + 1} of ${inDepth.length}${nextOuter.state === 'ready' ? '' : ' · still being made'}`;
@@ -380,7 +383,7 @@ function endExplainerClip() {
   againClip = 0;
   $('coverAgain').hidden = false;
   $('cover').hidden = false;
-  if (nextOuter && !questionsOn()) countDown(() => goToClip(nextOuter.n));
+  if (nextOuter && nextOuter.state !== 'later' && !questionsOn()) countDown(() => goToClip(nextOuter.n));
 }
 let coverAction = null;
 function finish() {
@@ -455,7 +458,7 @@ function answer(k) {
   answers.set(q.id, k);
   // Counted as on the page. A question gone since the video was made just isn't recorded; a
   // clip's own guess is the video's alone and never goes to Review.
-  if (!q.videoOnly) rpc('check.answer', { courseId, n: pageN, id: q.id, choice: k }).catch(() => {});
+  if (!q.videoOnly) countAnswer({ courseId, n: pageN, id: q.id, choice: k });
   showQuiz(scene);
   const right = q.options[k].right;
   const tick = document.querySelector(`.tick[data-scene="${shownScene}"]`);
@@ -535,6 +538,7 @@ function showFrame(t) {
   showClock(mode === 'opener' ? pinned : t);
 }
 function loop() {
+  if (signal.aborted) return;
   const t = clockNow();
   syncTo(t, false);
   watch(t);
@@ -621,8 +625,9 @@ function buildClips() {
       button.classList.toggle('now', c.n === clipN);
       button.classList.toggle('done', Boolean(kept.done?.[c.n]));
       const state = document.createElement('small'); state.textContent = c.state === 'ready' ? String(c.n) : `${c.n} ·`;
-      const text = document.createElement('span'); text.textContent = c.title + (c.state === 'ready' ? '' : ` (${c.state === 'making' ? 'being made' : 'waiting'})`);
+      const text = document.createElement('span'); text.textContent = c.title + (c.state === 'ready' ? '' : ` (${{ making: 'being made', later: 'not in this file yet' }[c.state] || 'waiting'})`);
       button.append(state, text);
+      button.disabled = c.state === 'later';
       button.addEventListener('click', () => goToClip(c.n));
       $('chapters').append(button);
     });
@@ -680,24 +685,18 @@ function setQuestions(on, save = true) {
     applyState(unmasked(scene.states[Math.max(0, shownCue)], shownScene), true);
   }
   if (shownClip >= 0) showClipBar(shownClip);
-  if (save) rpc('settings.set', { change: { videoQuestions: on } }).catch(() => {});
+  if (save) saveQuestions(on);
   wake();
 }
 function toggleCaptions(save = true) { showCaptions = !showCaptions; $('cc').classList.toggle('off', !showCaptions); $('captions').classList.toggle('off', !showCaptions); if (save) savePrefs(); }
 
-// Speed and subtitles carry over to every video. Kept by the server, since the port, and so the
-// browser's storage, changes with each start; the server keeps the page's own prefs beside these.
+// Speed and subtitles carry over to every video (data.js keeps them).
 async function loadPrefs() {
-  try {
-    const response = await fetch('/api/prefs', { headers: { 'X-Learn-Token': token } });
-    const saved = response.ok ? await response.json() : null;
-    if (typeof saved?.videoRate === 'number') setRate(saved.videoRate, false);
-    if (saved?.videoCaptions === false && showCaptions) toggleCaptions(false);
-  } catch {}
+  const saved = await readPrefs();
+  if (typeof saved?.videoRate === 'number') setRate(saved.videoRate, false);
+  if (saved?.videoCaptions === false && showCaptions) toggleCaptions(false);
 }
-function savePrefs() {
-  fetch('/api/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Learn-Token': token }, body: JSON.stringify({ videoRate: rate, videoCaptions: showCaptions }), keepalive: true }).catch(() => {});
-}
+function savePrefs() { writePrefs({ videoRate: rate, videoCaptions: showCaptions }); }
 function toggleFull() { if (!document.fullscreenEnabled) return; if (document.fullscreenElement) document.exitFullscreen(); else frame.requestFullscreen().catch(() => {}); }
 function fit() {
   const w = frame.clientWidth, h = frame.clientHeight;
@@ -748,7 +747,7 @@ $('speed').addEventListener('click', () => { $('speedMenu').hidden = !$('speedMe
   button.addEventListener('click', () => setRate(value));
   $('speedMenu').append(button);
 });
-frame.addEventListener('pointermove', wake);
+frame.addEventListener('pointermove', wake, { signal });
 $('stage').addEventListener('click', event => {
   if (event.target.closest('.quiz') || $('drawer').classList.contains('open')) { toggleDrawer(false); return; }
   setPlaying(!playing);
@@ -784,9 +783,11 @@ document.addEventListener('keydown', event => {
   else if (activeMask && !maskPicks.has(maskKey(activeMask.scene, activeMask.mask.id)) && /^[1-3]$/.test(key)) pickMask(Number(key) - 1);
   else if (asking && key === 'n' && quizById.get(scene.check)?.guess) notSure();
   else if (asking && /^[1-5]$/.test(key)) { const k = quizById.get(scene.check).order?.[Number(key) - 1]; if (k !== undefined) answer(k); }
-});
+}, { signal });
 
-new ResizeObserver(fit).observe(frame);
+const resized = new ResizeObserver(fit);
+resized.observe(frame);
+signal.addEventListener('abort', () => resized.disconnect());
 fit();
 wireScrub();
 buildClips();
@@ -806,7 +807,10 @@ if (questionsOn() && keptGuess && firstGuess && scenes[shownScene]?.check === fi
 } else if (outer && !questionsOn()) autoStart();
 // An open clip says where you are every minute: the job makes that clip first, and one whose
 // process died (a reboot) carries on.
-if (outer) setInterval(() => rpc('explain.at', { id: explainId, n: clipN }).catch(() => {}), 60_000);
+if (outer) {
+  const here = setInterval(() => explainAt(explainId, { n: clipN }).catch(() => {}), 60_000);
+  signal.addEventListener('abort', () => clearInterval(here));
+}
 loop();
 
 // For stills of a moment: tools/shoot.mjs --eval "player.hold(120)".

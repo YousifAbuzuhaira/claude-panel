@@ -19,6 +19,7 @@ import { cancelJob, createJob, createPageJob, createRefreshJob, dropJobFiles, ex
 import { videoStamp } from './video-check.mjs';
 import { clearQueue, courseVideos, queueVideos, swapVideo, videoInfo } from './video.mjs';
 import { explainInfo, explainPaths, inDepth, listExplainers, readExplainer, updateExplainer } from './explain.mjs';
+import { exportExplainer } from './export.mjs';
 import { voiceStatus } from './voice.mjs';
 import { ensureYtDlp, installedYtDlp } from './deps.mjs';
 import {
@@ -209,6 +210,12 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
     },
     // Every explainer, newest first, as the Library lists them.
     'explain.list': () => listExplainers(lib, listJobs(lib)),
+    // An explainer as one file you can pass on (~/explainers), written now with every clip made.
+    'explain.export': ({ id }) => {
+      const done = exportExplainer(lib, safeId(id));
+      if (!done) throw new Error('no clip of it is made yet');
+      return done;
+    },
     'explain.video': ({ id, n }) => {
       const explainer = readExplainer(lib, safeId(id));
       const clip = Number(n);
@@ -228,8 +235,9 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
         depth: [1, 2, 3].includes(Number(depth)) ? Number(depth) : now.depth,
         seenAt: new Date().toISOString(),
       }));
-      // A clip asked for that isn't made, with nothing making it (the job stopped after 20 minutes
-      // nobody watched): it starts again. The player also says it's here every minute it's open.
+      // A clip asked for that isn't made, with nothing making it (a job whose process died, or one
+      // with no depth that stopped waiting for a pick): it starts again. The player also says it's
+      // here every minute it's open.
       const clip = explainer.clips[explainer.at - 1];
       const wanted = explainer.at === 1 || (explainer.depth && clip && inDepth(clip, explainer.depth));
       if (wanted && !existsSync(`${explainPaths(lib, explainer.id).clip(explainer.at)}.json`)) explainJob(lib, explainer);

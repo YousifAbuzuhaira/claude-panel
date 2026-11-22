@@ -120,10 +120,11 @@ export async function ensureVoice({ onProgress = () => {} } = {}) {
 
 /**
  * Records a script. Resolves when `<out>.json` and `<out>.mp3` exist. `onProgress(said, of)` runs
- * as sentences are done. A job's stop kills it through `running`, like a Claude run.
+ * as sentences are done. A job's stop kills it through `running`, like a Claude run. `kbps` is the
+ * MP3's constant bitrate (narrate.py's LEVELS); left out, 64.
  */
-export function record({ scriptFile, out, onProgress = () => {} }) {
-  const child = spawn(PYTHON_BIN, ['-I', NARRATE, MODEL_DIR, scriptFile, out, VOICE], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+export function record({ scriptFile, out, kbps = null, onProgress = () => {} }) {
+  const child = spawn(PYTHON_BIN, ['-I', NARRATE, MODEL_DIR, scriptFile, out, VOICE, ...(kbps ? [String(kbps)] : [])], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   // Windows has no nice (narrate.py lowers itself elsewhere): Node sets its priority class instead.
   if (IS_WINDOWS && child.pid) {
     try { setPriority(child.pid, constants.priority.PRIORITY_LOW); } catch {}

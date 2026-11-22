@@ -8,6 +8,8 @@ export type LearnBuild = {
   kind?: string
   /** The explainer an `explain` build makes: what the tab's "Watch clips" opens. */
   explain?: string | null
+  /** That explainer as one file you can pass on (~/explainers/...html), once a clip is in it. */
+  file?: string | null
   topic: string
   step: string
   state: 'running' | 'waiting-picks' | 'paused' | 'failed' | 'done'
@@ -71,6 +73,7 @@ export function readLearnStatus(raw: string, now: number): LearnStatus | null {
         id: text(b.id, 60),
         kind: text(b.kind, 20),
         explain: b.kind === 'explain' && typeof b.explain === 'string' && EXPLAIN_ID.test(b.explain) ? b.explain : null,
+        file: b.kind === 'explain' && typeof b.file === 'string' && /\.html$/.test(b.file) && b.file.length <= 400 ? b.file : null,
         topic: text(b.topic),
         step: text(b.step, 20),
         state: b.state as LearnBuild['state'],
@@ -96,11 +99,14 @@ export const isLearnBusy = (status: LearnStatus | null) => status?.build?.state 
 /**
  * The notice this chat gets when more clips of the explainer it asked for are ready: shown in the
  * chat, never read by the model. `told` is how many it was already told about. Null when there's
- * nothing new, or the build is another chat's explainer or a course's.
+ * nothing new, or the build is another chat's explainer or a course's. The last one names the file
+ * you can pass on, under `home` shown as ~.
  */
-export function readyNotice(build: LearnBuild | null | undefined, explainer: string | null, told: number): { done: number; text: string } | null {
+export function readyNotice(build: LearnBuild | null | undefined, explainer: string | null, told: number, home = ''): { done: number; text: string } | null {
   if (!build || !explainer || build.kind !== 'explain' || build.explain !== explainer || build.done <= told) return null
-  const text =
+  const ready =
     build.total <= 1 ? `The clip of "${build.topic}" is ready · /clips opens it` : `${build.done} of ${build.total} clips of "${build.topic}" are ready · /clips opens them`
+  const file = build.file && home && build.file.startsWith(`${home}/`) ? `~${build.file.slice(home.length)}` : build.file
+  const text = file && build.done >= build.total ? `${ready} · as one file: ${file}` : ready
   return { done: build.done, text }
 }

@@ -171,6 +171,18 @@ describe('/explain', () => {
     expect(readyNotice(null, 'x202611181332459e', 0)).toBeNull()
   })
 
+  test('the last notice names the file you can pass on, under home as ~; earlier ones and other builds have none', () => {
+    const file = '/home/me/explainers/tokens-459e.html'
+    const build = (done: number, total: number) => ({ id: 'j2', kind: 'explain', explain: 'x202611181332459e', file, topic: 'Tokens', step: 'clips', state: 'running' as const, message: '', done, total })
+    expect(readyNotice(build(4, 4), 'x202611181332459e', 3, '/home/me')?.text).toBe('4 of 4 clips of "Tokens" are ready · /clips opens them · as one file: ~/explainers/tokens-459e.html')
+    expect(readyNotice(build(1, 1), 'x202611181332459e', 0, '/home/other')?.text).toBe(`The clip of "Tokens" is ready · /clips opens it · as one file: ${file}`)
+    expect(readyNotice(build(2, 4), 'x202611181332459e', 1, '/home/me')?.text).not.toContain('file')
+    const raw = (b: Record<string, unknown>) => JSON.stringify({ at: new Date(0).toISOString(), build: { id: 'j2', topic: 'Tokens', step: 'clips', state: 'running', done: 1, total: 2, ...b } })
+    expect(readLearnStatus(raw({ kind: 'explain', explain: 'x202611181332459e', file }), 0)?.build?.file).toBe(file)
+    expect(readLearnStatus(raw({ kind: 'explain', explain: 'x202611181332459e', file: '/etc/passwd' }), 0)?.build?.file).toBeNull()
+    expect(readLearnStatus(raw({ kind: 'video', file }), 0)?.build?.file).toBeNull()
+  })
+
   test("/explain's brief: what you typed, one line first, the depth asked in the chat, then the tool with it", () => {
     const brief = explainBrief('  how the gateway\n mints tokens ')
     expect(brief.split('\n')[0]).toBe('Explain this to me as short narrated video clips, made by Learn: how the gateway mints tokens')

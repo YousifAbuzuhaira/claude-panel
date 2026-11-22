@@ -11,6 +11,8 @@ let assets;
 
 export function initStage(parts) {
   ({ objects: objectsLayer, wires, assets } = parts);
+  // A clip played after another in the same page (an exported file) starts with nothing drawn.
+  live.clear();
 }
 
 const live = new Map();

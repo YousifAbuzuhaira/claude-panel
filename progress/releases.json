@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.19.0",
+      "date": "2026-11-22",
+      "by": "Yousif",
+      "notes": [
+        "Each explainer is also one file in ~/explainers you can pass on",
+        "The file plays anywhere, no server; the Library can save old ones",
+        "Explainer sound is half the size (32 kbps)"
+      ]
+    },
+    {
       "version": "0.18.2",
       "date": "2026-11-22",
       "by": "Yousif",
