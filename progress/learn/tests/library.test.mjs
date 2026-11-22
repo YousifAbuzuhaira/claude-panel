@@ -19,6 +19,7 @@ const { createServer } = await import('../serve.mjs');
 const { withLock, writeJson, readJson } = await import('../store.mjs');
 const { clearQueue, courseVideos, makeVideos, queueVideos, readQueue, swapVideo, videoInfo } = await import('../video.mjs');
 const { readDocument } = await import('../documents.mjs');
+const { writeSettings } = await import('../settings.mjs');
 
 const CHUNKS = Array.from({ length: 60 }, (_, i) => ({ t: i * 30, text: `part ${i} about volumes` }));
 
@@ -709,6 +710,22 @@ describe('videos', () => {
     const counting = { askStructured: async options => { asked++; return videoAsk.askStructured(options); } };
     await makeVideos({ lib, io: { ...counting, record: recording() }, save: () => {}, isStopping: () => false });
     assert.equal(asked, 0);
+  });
+
+  test('a script waiting to record, made with the other Questions setting, is written again', async () => {
+    const lib = courseWith('queue-q', [1]);
+    queueVideos(lib, 'queue-q', [1]);
+    await assert.rejects(run(lib, async () => { throw new Error('stopped'); }), /stopped/);
+    assert.equal(readJson(`${lib.paths.videoBase('queue-q', 1)}.script.json`).withQuestions, false);
+    writeSettings({ videoQuestions: true });
+    try {
+      let asked = 0;
+      const counting = { askStructured: async options => { asked++; return videoAsk.askStructured(options); } };
+      await makeVideos({ lib, io: { ...counting, record: recording() }, save: () => {}, isStopping: () => false });
+      assert.ok(asked > 0);
+    } finally {
+      writeSettings({ videoQuestions: false });
+    }
   });
 
   test('a page or course gone from the queue is passed over', async () => {

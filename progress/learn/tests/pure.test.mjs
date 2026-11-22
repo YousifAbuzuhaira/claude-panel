@@ -11,7 +11,7 @@ import { readMarkers } from '../chat.mjs';
 import { cleanLabel, diagramBlock, parseFlow, parseSequence, wrapLabel } from '../diagram.mjs';
 import { chatTitle, condenseChat, listClaudeChats, maskSecrets, projectSlug, projectsDir } from '../chats.mjs';
 import { cutLongSections, docxToSections, documentType, mergeSections, pageIsJunk, pagesForClaude, pdfSections, readZip, uniqueHeadings } from '../documents.mjs';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32, deflateRawSync } from 'node:zlib';
@@ -22,8 +22,9 @@ import { markTerms, pageGlossary } from '../terms.mjs';
 import { applyReader, checkBlock, checkId, closingFor, givesItselfAway, isTerm, mergeAids, mergeTerms, pageMap, placeChecks, quoteState, shuffled, spanOf, tidyAids } from '../teach.mjs';
 import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from '../verify.mjs';
 import { voicePlatform } from '../voice.mjs';
-import { applyPlan, checkPlan, maskable } from '../video-plan.mjs';
-import { clipPage, clipPlan, explainInfo, explainPaths, explainProblems, insideFolder, nextClip, quotesInChat, readAnchors } from '../explain.mjs';
+import { applyPlan, checkPlan, maskable, planRequest, planSchema } from '../video-plan.mjs';
+import { writeScript } from '../video-script.mjs';
+import { anchorFile, clipPage, clipPlan, explainInfo, explainPaths, explainProblems, looksSecret, nextClip, quotesInChat, readAnchors } from '../explain.mjs';
 import { estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, simulate, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, sceneAt } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
@@ -519,6 +520,12 @@ describe('settings', () => {
     assert.equal(settings.models.build, 'sonnet');
     assert.equal(settings.models.chat, 'opus');
     assert.deepEqual(settings.workFolders, ['/a']);
+  });
+
+  test('questions in videos are off unless turned on, and only true turns them on', () => {
+    assert.equal(normalizeSettings({}).videoQuestions, false);
+    assert.equal(normalizeSettings({ videoQuestions: 'yes' }).videoQuestions, false);
+    assert.equal(normalizeSettings({ videoQuestions: true }).videoQuestions, true);
   });
 
   test('on Windows itself a Windows path stays one, so a settings change never moves the library', () => {
@@ -1643,6 +1650,84 @@ describe("a video's plan: the map, each clip's guess, the failures it opens on",
   });
 });
 
+describe('a video without questions', () => {
+  const many = (word, n) => `${Array.from({ length: n }, (_, k) => `${word}${k}`).join(' ')}.`;
+  const pageCheck = id => ({ t: 'check', id, guess: false, q: parseInline(`Question ${id}?`), concepts: [], options: [{ inlines: parseInline('Right'), why: parseInline('Yes.'), right: 1 }, { inlines: parseInline('Wrong'), why: parseInline('No.') }] });
+  const page = {
+    title: 'Requests',
+    markdown: 'x',
+    stats: {},
+    terms: [],
+    blocks: [
+      ...markdownToBlocks(`## Browser\n\nThe browser sends the request to the edge first. ${many('alpha', 80)}\n\n## Edge\n\nThe edge forwards the request to the api server. ${many('beta', 80)}`),
+      pageCheck('p1'),
+      ...markdownToBlocks(`## Api\n\nThe api reads the record and answers in one hop. ${many('gamma', 80)}`),
+    ],
+  };
+  const material = mergeTiny(flattenPage(page));
+  const guess = quote => ({ q: 'Where does the request go first?', options: ['The edge', 'The api', 'The database'].map((text, k) => ({ text, why: `Because ${k}.`, right: k === 0 })), quote });
+  const fullPlan = () => ({
+    shape: 'flow',
+    boxes: [{ id: 'b', label: 'Browser', parent: null }, { id: 'e', label: 'Edge', parent: null }, { id: 'a', label: 'Api server', parent: null }],
+    clips: [
+      { clip: 'Browser', box: 'b', handoff: null, handoffQuote: null, guess: guess('The browser sends the request to the edge first'), trap: [], mask: false, patternOf: null, patternQuote: null },
+      { clip: 'Edge', box: 'e', handoff: null, handoffQuote: null, guess: guess('The edge forwards the request to the api server'), trap: [], mask: false, patternOf: null, patternQuote: null },
+      { clip: 'Api', box: 'a', handoff: null, handoffQuote: null, guess: null, trap: [], mask: false, patternOf: null, patternQuote: null },
+    ],
+    splits: [],
+    groups: [{ box: 'b', q: 'Q?', options: [], needs: [], quotes: [] }],
+  });
+
+  test('the plan is asked for no guess, masked line, pattern or group question, and none is a problem', () => {
+    const prompt = planRequest(page, material, null, false);
+    assert.doesNotMatch(prompt, /GUESS QUESTION|"mask"|"groups"|HAS A GUESS ALREADY|\(CODE\)/);
+    assert.match(planRequest(page, material), /GUESS QUESTION/);
+    const schema = planSchema(false);
+    assert.ok(!('groups' in schema.properties));
+    assert.ok(!schema.required.includes('groups'));
+    assert.deepEqual(Object.keys(schema.properties.clips.items.properties).sort(), ['box', 'clip', 'handoff', 'handoffQuote', 'trap']);
+    const { problems, plan } = checkPlan(fullPlan(), material, { questions: false });
+    assert.ok(!problems.some(problem => /guess|group/i.test(problem)), problems.join('\n'));
+    assert.ok(plan.clips.every(entry => entry.guess === null && entry.mask === false && entry.patternOf === null));
+    assert.deepEqual(plan.groups, []);
+    assert.equal(plan.shape, 'flow');
+    // With questions on, the clip with no guess is still a problem.
+    assert.ok(checkPlan(fullPlan(), material).problems.some(problem => /"Api" needs a guess question/.test(problem)));
+  });
+
+  const scriptWith = async questions => {
+    const prompts = [];
+    const ask = async (prompt, schema) => {
+      prompts.push({ prompt, schema });
+      if (schema.properties.shape) return fullPlan();
+      if (schema.properties.openers) return { openers: [], pronounce: [] };
+      if (schema.properties.scenes) return { scenes: [], pronounce: [] };
+      if (schema.properties.answers) return { answers: [], closing: [], unknown: [], missing: [] };
+      return { added: [], dropped: [] };
+    };
+    return { script: await writeScript({ page, ask, questions }), prompts };
+  };
+
+  test('off: nothing that stops the video is written, asked for or kept, though the watcher still has the page\'s questions', async () => {
+    const { script, prompts } = await scriptWith(false);
+    assert.equal(script.withQuestions, false);
+    assert.deepEqual(script.quiz, []);
+    assert.deepEqual(script.openers, {});
+    assert.ok(!script.scenes.some(scene => scene.check || scene.masks?.length));
+    assert.ok(!prompts.some(({ schema }) => schema.properties.openers), 'no opener was asked for');
+    assert.ok(!prompts.some(({ prompt }) => /^QUIZ:|^QUESTIONS\./m.test(prompt)), 'no section was told about questions');
+  });
+
+  test('on: the guesses and the page\'s own question are in the video', async () => {
+    const { script, prompts } = await scriptWith(true);
+    assert.equal(script.withQuestions, true);
+    assert.ok(script.quiz.some(q => q.guess));
+    assert.ok(script.quiz.some(q => q.id === 'p1'));
+    assert.ok(prompts.some(({ schema }) => schema.properties.openers));
+    assert.ok(prompts.some(({ prompt }) => /^QUIZ:/m.test(prompt)));
+  });
+});
+
 describe('a masked line, group questions and repeated patterns', () => {
   const many = (word, n) => `${Array.from({ length: n }, (_, k) => `${word}${k}`).join(' ')}.`;
   const code = ['function forward(request) {', '  const token = mint(request.user);', '  request.headers.auth = token;', '  return send(request);', '}'].join('\n');
@@ -1780,25 +1865,59 @@ describe('an explainer: your session plans clips about code, Learn checks and ma
     assert.match(explainProblems(long).join(), /over 60 lines/);
   });
 
-  test('code is read from disk inside the folder: a file outside it, lines past its end, or lines without "expect" are refused', () => {
+  test('code is read from disk inside the folder or under home: a file outside both, lines past its end, or lines without "expect" are refused', () => {
     const root = mkdtempSync(join(tmpdir(), 'explain-'));
     mkdirSync(join(root, 'work'));
     writeFileSync(join(root, 'work', 'gw.js'), 'function forward(request) {\n  const token = mint(request.user);\n  return send(request, token);\n}\n');
     writeFileSync(join(root, 'secret.txt'), 'outside');
     const cwd = join(root, 'work');
-    assert.equal(insideFolder(cwd, '../secret.txt'), null);
-    assert.ok(insideFolder(cwd, 'gw.js'));
-    const read = readAnchors(plan(), cwd);
+    const home = join(root, 'home');
+    mkdirSync(home);
+    assert.equal(anchorFile(cwd, '../secret.txt', { home }).error, 'outside');
+    assert.equal(anchorFile(cwd, 'gw.js', { home }).shown, 'gw.js');
+    const read = readAnchors(plan(), cwd, { home });
     assert.deepEqual(read.problems, []);
     assert.match(read.clips[0].anchors[0].code, /const token = mint/);
     assert.equal(read.clips[0].anchors[0].lang, 'js');
     const moved = plan();
-    moved.clips[0].anchors.push({ file: 'gw.js', from: 1, to: 9, expect: 'x' }, { file: 'gw.js', from: 1, to: 2, expect: 'send(' }, { file: '../secret.txt', from: 1, to: 1, expect: 'outside' });
-    const problems = readAnchors(moved, cwd).problems.join('\n');
+    moved.clips[0].anchors.push({ file: 'gw.js', from: 1, to: 9, expect: 'x' }, { file: 'gw.js', from: 1, to: 2, expect: 'send(' }, { file: '../secret.txt', from: 1, to: 1, expect: 'outside' }, { file: 'nope.js', from: 1, to: 1, expect: 'x' });
+    const problems = readAnchors(moved, cwd, { home }).problems.join('\n');
     assert.match(problems, /the file has 5 lines/);
     assert.match(problems, /"send\(" is not in those lines/);
-    assert.match(problems, /no such file in this project's folder/);
+    assert.match(problems, /not a file in this project or under your home folder/);
+    assert.match(problems, /nope\.js:1-1: no such file/);
     rmSync(root, { recursive: true, force: true });
+  });
+
+  test('a file anywhere under home is read and shown as ~/...; files that look like secrets never are, even through a link', () => {
+    const root = mkdtempSync(join(tmpdir(), 'explain-'));
+    const cwd = join(root, 'work');
+    const home = join(root, 'home');
+    for (const dir of [cwd, join(home, 'lib'), join(home, '.ssh')]) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(home, 'lib', 'util.js'), 'export const retry = n => n + 1;\nconst API_KEY = "sk-abcdef1234567890";\n');
+    for (const name of ['.env', '.env.example', 'id_ed25519', '.ssh/config']) writeFileSync(join(home, name), 'x');
+    symlinkSync(join(home, '.ssh', 'config'), join(cwd, 'harmless.txt'));
+    assert.deepEqual(anchorFile(cwd, join(home, 'lib', 'util.js'), { home }).shown, '~/lib/util.js');
+    assert.equal(anchorFile(cwd, '~/lib/util.js', { home }).shown, '~/lib/util.js');
+    for (const file of ['~/.env', '~/id_ed25519', '~/.ssh/config', 'harmless.txt']) assert.equal(anchorFile(cwd, file, { home }).error, 'secret', file);
+    assert.ok(anchorFile(cwd, '~/.env.example', { home }).real);
+    assert.equal(anchorFile(cwd, '/etc/hostname', { home }).error, 'outside');
+    for (const path of ['a/.aws/credentials', 'key.pem', 'secrets.yaml', '.npmrc', 'x/.config/gh/hosts.yml']) assert.ok(looksSecret(path), path);
+    for (const path of ['src/credentials.ts', 'keys.ts', 'gw.js', '.env.sample']) assert.ok(!looksSecret(path), path);
+    const read = readAnchors({ clips: [{ anchors: [{ file: '~/lib/util.js', from: 1, to: 2, expect: 'retry' }, { file: '~/.env', from: 1, to: 1, expect: 'x' }] }] }, cwd, { home });
+    assert.match(read.problems.join('\n'), /Learn doesn't read files that look like secrets/);
+    assert.equal(read.clips[0].anchors[0].file, '~/lib/util.js');
+    assert.doesNotMatch(read.clips[0].anchors[0].code, /sk-abcdef1234567890/);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('/explain is a prompt the person types, never one the model runs, and it hands the plan to the tool', () => {
+    const command = readFileSync(join(import.meta.dirname, '..', '..', 'commands', 'explain.md'), 'utf8');
+    assert.match(command, /^---\n[\s\S]*disable-model-invocation: true[\s\S]*?\n---\n/);
+    assert.match(command, /\$ARGUMENTS/);
+    assert.match(command, /mcp__progress__explain_plan/);
+    assert.match(command, /Don't explain it here in text/);
+    assert.match(command, /First reply with one short line/);
   });
 
   test("a session fact's quote must be in what the chat said or a tool returned, never in a tool call", async () => {

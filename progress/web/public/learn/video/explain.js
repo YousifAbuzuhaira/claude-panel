@@ -1,6 +1,6 @@
 // An explainer's clips (/explain): each clip is its own short video, played as a page's video is,
-// and the next opens when one ends. Before a clip is ready: pick how deep to go (once), then answer
-// the clip's guess question while it's being made, so the wait isn't dead time.
+// and the next opens when one ends. Before a clip is ready: pick how deep to go (once), then, with
+// questions on, answer the clip's guess question while it's being made, so the wait isn't dead time.
 import { rpc, token } from '../../shared/api.js';
 
 const STORE = id => `claude-learn-explain:${id}`;
@@ -48,33 +48,26 @@ function askDepth(info, gate) {
   });
 }
 
-/** While a clip is made: its guess question, answered now and played out when it's ready. */
-function showWaiting(info, n, gate, id) {
+/** While a clip is made: its title and how it's going, and with questions on its guess, answered now and played out when it's ready. */
+function showWaiting(info, n, gate, id, questions) {
   const clip = info.clips[n - 1];
   const kept = recall(id).guesses?.[n];
   gate.replaceChildren(make('div', 'gate-meta', `Clip ${n} of ${info.clips.filter(item => item.level <= (info.depth || 1)).length}`), make('div', 'gate-title', clip.title));
   const status = make('div', 'gate-status', info.message || 'Being made: usually 2 to 4 minutes');
   status.id = 'gateStatus';
   gate.append(status);
-  if (kept) {
+  if (!questions) {
+    // Nothing to answer: the clip plays when it's made.
+  } else if (kept) {
     gate.append(make('div', 'gate-ask', kept.unsure ? 'It will start from the beginning.' : 'Your answer is kept: the clip starts from it.'));
   } else {
     const box = make('div', 'gate-quiz');
     box.append(make('div', 'quiz-tag', 'Guess first, while you wait'), make('div', 'gate-q', clip.guess.q));
-    const keep = guess => { remember(id, now => ({ guesses: { ...(now.guesses || {}), [n]: guess } })); showWaiting(info, n, gate, id); };
+    const keep = guess => { remember(id, now => ({ guesses: { ...(now.guesses || {}), [n]: guess } })); showWaiting(info, n, gate, id, questions); };
     clip.guess.options.forEach((option, k) => {
       const button = make('button', 'option');
       button.append(make('span', 'key', String(k + 1)), make('span', '', option.text));
-      button.addEventListener('click', () => {
-        box.querySelectorAll('button').forEach(other => { other.disabled = true; });
-        button.classList.add('picked');
-        const sure = make('div', 'quiz-foot');
-        const ask = (label, knew) => { const node = make('button', 'quiet', label); node.addEventListener('click', () => keep({ k, knew })); sure.append(node); };
-        sure.append(make('div', 'quiz-ask', 'How sure were you?'));
-        ask('I knew it', true);
-        ask('I guessed', false);
-        box.append(sure);
-      });
+      button.addEventListener('click', () => keep({ k }));
       box.append(button);
     });
     const unsure = make('button', 'option unsure');
@@ -96,7 +89,8 @@ export async function loadExplainer({ id, n, gate }) {
   if (!info.depth) info = { ...info, ...(await askDepth(info, gate)) };
   if (info.clips[n - 1].state !== 'ready') {
     await rpc('explain.at', { id, n });
-    showWaiting(info, n, gate, id);
+    const settings = await rpc('settings.get').catch(() => null);
+    showWaiting(info, n, gate, id, settings?.videoQuestions === true);
     for (;;) {
       await sleep(3000);
       info = await rpc('explain.get', { id });

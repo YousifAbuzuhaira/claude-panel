@@ -8,7 +8,7 @@
 //   learn.sh extract <file>                          what Learn reads from a document (no build)
 //   learn.sh build run|pick|resume|cancel <job> [s1,s3]
 //   learn.sh build list
-//   learn.sh settings get | set key=value ...        (library=, build=, chat=, work=a:b)
+//   learn.sh settings get | set key=value ...        (library=, build=, chat=, work=a:b, questions=on|off)
 //   learn.sh deps install                             yt-dlp, fetched and checked
 //   learn.sh library | status | transcript <url> | ping
 import { cancelJob, createJob, listJobs, pickSources, resumeJob, runJob, startDaemon, startExplainer } from './build.mjs';
@@ -88,6 +88,7 @@ try {
         // Folders are joined like PATH: by ; on Windows (C:\a;D:\b), by : elsewhere.
         else if (key === 'work') change.workFolders = text ? text.split(process.platform === 'win32' ? ';' : ':') : [];
         else if (key === 'claude') change.claudePath = text || null;
+        else if (key === 'questions' && ['on', 'off'].includes(text)) change.videoQuestions = text === 'on';
         else fail(`unknown setting ${key}`);
       }
       print(writeSettings(change));

@@ -7,10 +7,12 @@
 // claim check. Code on screen is always the lines read from disk, never text the session typed.
 import { createReadStream, existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { findClaudeChat } from './chats.mjs';
+import { findClaudeChat, maskSecrets } from './chats.mjs';
 import { markdownToBlocks } from './markdown.mjs';
+import { readSettings } from './settings.mjs';
 import { readJson, renameRetry, withLock, writeJson } from './store.mjs';
 import { norm } from './video-check.mjs';
 import { writeScript } from './video-script.mjs';
@@ -75,31 +77,72 @@ export function explainProblems(plan) {
   return problems;
 }
 
-/** A file inside the session's folder, by the path the plan gives: never one outside it. */
-export function insideFolder(cwd, file) {
-  const root = realpathSync(cwd);
-  const full = resolve(root, String(file));
-  if (!existsSync(full)) return null;
-  const real = realpathSync(full);
-  const rel = relative(root, real);
-  return rel && !rel.startsWith('..') && !isAbsolute(rel) && statSync(real).isFile() ? real : null;
+// Files Learn never reads for an explainer, whatever the plan says: keys, tokens, credentials.
+const SECRET_DIRS = ['.ssh', '.aws', '.gnupg', '.kube', '.docker', '.azure', '.password-store', '.config/gh', '.config/gcloud'];
+const SECRET_NAMES = /^(\.netrc|_netrc|\.npmrc|\.pypirc|\.pgpass|\.git-credentials|\.htpasswd|\.claude\.json|\.credentials\.json|id_(rsa|dsa|ecdsa|ed25519)(\..*)?|\.?credentials?(\.(json|ya?ml|toml|ini|txt|xml|csv))?|.*_credentials\.json|secrets?\.(json|ya?ml|toml|env))$/;
+const SECRET_EXTS = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.kdbx', '.ovpn', '.tfvars', '.tfstate']);
+
+/** Whether a path looks like it holds a secret: by its folders, its name or its extension. */
+export function looksSecret(path) {
+  const parts = String(path ?? '').replace(/\\/g, '/').toLowerCase().split('/').filter(Boolean);
+  const name = parts.at(-1) || '';
+  const joined = `/${parts.join('/')}/`;
+  if (SECRET_DIRS.some(dir => joined.includes(`/${dir}/`))) return true;
+  if (/^\.env(\..+)?$/.test(name) && !/\.(example|sample|template)$/.test(name)) return true;
+  return SECRET_NAMES.test(name) || SECRET_EXTS.has(extname(name));
 }
 
-/** Each anchor's lines read from disk, and what doesn't hold: a file outside the folder, lines that aren't there, `expect` not in them. */
-export function readAnchors(plan, cwd) {
+/**
+ * The file an anchor names, by a path relative to the session's folder, a full path or a ~/ path:
+ * `{ real, shown }`, or `{ error }` (missing, outside, secret). It must be a file inside the folder
+ * or under the home folder, after links are followed, and never one that looks like a secret.
+ * `shown` is relative inside the folder, `~/...` elsewhere.
+ */
+export function anchorFile(cwd, file, { home = homedir() } = {}) {
+  const given = String(file ?? '').trim();
+  if (!given) return { error: 'missing' };
+  const root = realpathSync(cwd);
+  const homeReal = existsSync(home) ? realpathSync(home) : resolve(home);
+  const expanded = /^~(?=$|[\\/])/.test(given) ? join(home, given.slice(1)) : given;
+  const full = resolve(root, expanded);
+  if (looksSecret(given) || looksSecret(full)) return { error: 'secret' };
+  if (!existsSync(full)) return { error: 'missing' };
+  const real = realpathSync(full);
+  const inside = base => {
+    const rel = relative(base, real);
+    return Boolean(rel) && rel.split(sep)[0] !== '..' && !isAbsolute(rel);
+  };
+  if (!(inside(root) || inside(homeReal)) || !statSync(real).isFile()) return { error: 'outside' };
+  if (looksSecret(real)) return { error: 'secret' }; // a link to one
+  const shown = inside(root) ? relative(root, real).split(sep).join('/') : `~/${relative(homeReal, real).split(sep).join('/')}`;
+  return { real, shown };
+}
+
+const ANCHOR_ERRORS = {
+  missing: 'no such file',
+  outside: 'not a file in this project or under your home folder',
+  secret: "Learn doesn't read files that look like secrets",
+};
+
+/**
+ * Each anchor's lines read from disk, and what doesn't hold: a file it may not read, lines that
+ * aren't there, `expect` not in them. What looks like a secret inside the lines is hidden before
+ * they go anywhere (the check, the clip, the screen).
+ */
+export function readAnchors(plan, cwd, { home = homedir() } = {}) {
   const problems = [];
   const read = new Map();
   const clips = plan.clips.map((clip, k) => ({
     ...clip,
     anchors: (clip.anchors || []).map(anchor => {
       const where = `Clip ${k + 1}, ${anchor.file}:${anchor.from}-${anchor.to}`;
-      const file = insideFolder(cwd, anchor.file);
-      if (!file) {
-        problems.push(`${where}: no such file in this project's folder`);
+      const found = anchorFile(cwd, anchor.file, { home });
+      if (found.error) {
+        problems.push(`${where}: ${ANCHOR_ERRORS[found.error]}`);
         return null;
       }
-      if (!read.has(file)) read.set(file, readFileSync(file, 'utf8').split(/\r?\n/));
-      const lines = read.get(file);
+      if (!read.has(found.real)) read.set(found.real, readFileSync(found.real, 'utf8').split(/\r?\n/));
+      const lines = read.get(found.real);
       if (anchor.to > lines.length) {
         problems.push(`${where}: the file has ${lines.length} lines`);
         return null;
@@ -109,8 +152,7 @@ export function readAnchors(plan, cwd) {
         problems.push(`${where}: "${String(anchor.expect).slice(0, 60)}" is not in those lines (has the file changed?)`);
         return null;
       }
-      const shown = relative(realpathSync(cwd), file).split(sep).join('/');
-      return { file: shown, from: anchor.from, to: anchor.to, lang: LANGS[extname(file).toLowerCase()] || '', code };
+      return { file: found.shown, from: anchor.from, to: anchor.to, lang: LANGS[extname(found.real).toLowerCase()] || '', code: maskSecrets(code) };
     }).filter(Boolean),
   }));
   return { problems, clips };
@@ -342,9 +384,11 @@ export async function makeExplainer({ lib, io, id, save, isStopping, poll = 3000
     if (!scripts.has(n)) {
       const base = explainPaths(lib, id).clip(n);
       const writing = (async () => {
+        // Learn's Questions setting, read for each clip: turned on while clip 1 plays, clip 3 has them.
+        const questions = readSettings().videoQuestions;
         const cached = readJson(`${base}.script.json`);
-        if (cached) return cached;
-        const script = await writeScript({ page: clipPage(explainer, n), ask, plan: clipPlan(explainer, n) });
+        if (cached && (cached.withQuestions ?? true) === questions) return cached;
+        const script = await writeScript({ page: clipPage(explainer, n), ask, plan: clipPlan(explainer, n), questions });
         Object.assign(script, { model, effort, explainer: id, clip: n });
         writeJson(`${base}.script.json`, script);
         return script;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { EXPLAIN_TOOL, explainArgv, explainBrief, readExplainAnswer, refusalText } from '../hooks/explain'
+import { EXPLAIN_TOOL, EXPLAIN_TOOL_SCHEMA, explainArgv, readExplainAnswer, refusalText } from '../hooks/explain'
 import { courseArgv, isLearnBusy, learnStatusPath, readLearnStatus } from '../hooks/learn'
 import { panelState } from '../hooks/widget'
 import { answerHost, PLAN, STATE } from './host'
@@ -112,12 +112,11 @@ describe('/course', () => {
 })
 
 describe('/explain', () => {
-  test('asks this session to plan the clips and hand them to Learn, not to explain in text', () => {
-    const brief = explainBrief('  how the gateway\nmints tokens ')
-    expect(brief).toContain('"how the gateway mints tokens"')
-    expect(brief).toContain(`mcp__progress__${EXPLAIN_TOOL}`)
-    expect(brief).toContain("Don't explain it here in text")
-    expect(explainBrief('')).toContain('what we are working on')
+  test("the tool is explain_plan, and an anchor may name a file anywhere under home, never a secret", () => {
+    expect(EXPLAIN_TOOL).toBe('explain_plan')
+    const anchor = EXPLAIN_TOOL_SCHEMA.properties.clips.items.properties.anchors.items.properties.file.description
+    expect(anchor).toContain('home folder')
+    expect(anchor).toContain('secrets are refused')
   })
 
   test('the plan goes to the helper with this chat and its folder; on Windows Node runs it', () => {

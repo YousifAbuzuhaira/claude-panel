@@ -69,6 +69,8 @@ export function showSettings() {
     const current = settings.models?.[key];
     out.push(title(label, note), h('div.chips', null, MODEL_CHOICES.map(([model, name]) => chip(name, current === model, () => save({ models: { [key]: model } })))));
   }
+  out.push(title('Questions in videos', 'Guesses, quick checks and hidden lines that stop a video. Off: videos play straight through and are quicker to make. Also Q in the player.'),
+    h('div.chips', null, [['Off', false], ['On', true]].map(([name, on]) => chip(name, Boolean(settings.videoQuestions) === on, () => save({ videoQuestions: on })))));
 
   const folderBox = h('input.ui-input.grow.mono', { type: 'text', placeholder: 'A folder, e.g. ~/code/my-app', 'aria-label': 'Work folder' });
   const addFolder = () => {

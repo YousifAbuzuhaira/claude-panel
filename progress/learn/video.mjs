@@ -6,6 +6,7 @@ import { readCourse, readPage, recordUsage } from './library.mjs';
 import { estimate, isOldPage, videoStamp } from './video-check.mjs';
 import { writeScript } from './video-script.mjs';
 import { voiceStatus } from './voice.mjs';
+import { readSettings } from './settings.mjs';
 import { readJson, renameRetry, withLock, writeJson } from './store.mjs';
 
 export const readQueue = lib => readJson(lib.paths.videoQueue) || [];
@@ -226,13 +227,16 @@ export async function makeVideos({ lib, io, save, isStopping }) {
     const entry = entryFor(next);
     const base = lib.paths.videoBase(next.course.id, page.n);
     const stamp = videoStamp(page);
-    // Saved before recording, so a stop never repeats Claude's work.
+    // Saved before recording, so a stop never repeats Claude's work. Learn's Questions setting is
+    // read for each page: a script waiting to record with the other setting is written again.
+    const questions = readSettings().videoQuestions;
     let script = readJson(`${base}.script.json`);
-    if (script?.stamp !== stamp) {
+    if (script?.stamp !== stamp || (script.withQuestions ?? true) !== questions) {
       refresh();
       script = await writeScript({
         page,
         ask,
+        questions,
         onStep: (note, share) => {
           entry.note = note;
           entry.live.fractionDone = share;

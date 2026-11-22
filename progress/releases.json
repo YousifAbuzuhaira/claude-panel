@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.17.0",
+      "date": "2026-11-22",
+      "by": "Yousif",
+      "notes": [
+        "Videos play straight through; questions are off unless turned on",
+        "Q in the player or Settings turns them on; no more 'How sure?' step",
+        "/explain starts at once and can show any file under your home folder"
+      ]
+    },
+    {
       "version": "0.16.0",
       "date": "2026-11-18",
       "by": "Yousif",

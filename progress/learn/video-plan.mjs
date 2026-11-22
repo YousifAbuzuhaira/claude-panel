@@ -65,43 +65,61 @@ export const PLAN_SCHEMA = {
   required: ['shape', 'boxes', 'clips', 'splits', 'groups'],
 };
 
-const PLAN_RULES = `You plan a narrated, animated explainer video made from a page of a course. The video is a playlist of clips, one per section below, each written separately later. You decide four things. Use only the page: nothing from outside it.
-
-1. THE MAP, drawn in the title band of every clip, the current clip's box lit, so the learner always sees where they are in the whole.
+// The plan's rules, one per thing it decides. With questions off (Learn's setting), a video has no
+// guess, masked line, repeated-pattern step or group question, so the plan isn't asked for them.
+const PLAN_INTRO = `You plan a narrated, animated explainer video made from a page of a course. The video is a playlist of clips, one per section below, each written separately later. You decide what follows. Use only the page: nothing from outside it.`;
+const PLAN_MAP = `THE MAP, drawn in the title band of every clip, the current clip's box lit, so the learner always sees where they are in the whole.
 - "shape": "flow" when the clips follow something moving from one part to the next (a request through services, data through stages); "parts" when they are parts of one whole (components, rules, options); "none" when there is no such structure or there are fewer than 3 clips.
 - "boxes": at most 4 with "parent" null. A box may have up to 4 children (parent: its id), two levels at most. Labels are 1 to 3 words and at most 22 characters, naming the thing itself (a service, a stage, a part), never a sentence.
-- Each clip goes in exactly one box ("box"), the most specific one. Several clips may share a box. With "none", boxes is empty and every "box" is null.
-
-2. THE HANDOFF, flow only. For a clip whose box differs from the previous clip's, "handoff" is at most 8 words naming what passes from the previous box into this one (a request, a token, a page), and "handoffQuote" copies at least 5 words, word for word, from a block that says so. Otherwise both are null.
-
-3. THE GUESS QUESTION that opens each clip, before anything is taught: someone who already knows the clip's central mechanism gets it right; someone who doesn't plausibly gets it wrong. Exactly 3 options and one right. Each wrong option is a believable mistake a strong engineer new to this would make, never a joke. Each option has a one-sentence "why". The clip's own blocks must state the right answer: "quote" copies at least 5 words of them, word for word, that back it. A clip marked HAS A GUESS ALREADY gets null.
-
-4. "trap": the numbers of the clip's blocks that describe something that really went wrong: a bug, a failed approach, a rejected option, an idea that turned out false. The clip will open by showing it. Empty for most clips. Never stretch this.
-
-5. "mask": true for a clip whose code (marked CODE below) carries out the mechanism the clip explains, so the clip can show the mechanism first, then hide the one line that does it and let the learner pick it. Only a clip marked CODE can have it, and most clips don't.
-
-6. "patternOf": the name of an EARLIER clip whose pattern this clip repeats (the same check in another route, a second adapter on the same interface), with "patternQuote" copying at least 5 words of this clip's blocks that show the repeat. This clip will show the shape and leave the repeated step for the learner, so give it "mask" true when it is marked CODE. Otherwise both are null.
-
-7. "groups": for a top box (parent null) holding two or more clips, at most one question that needs two or three of its clips together to answer: what connects them, not a fact from one. "needs" names those clips; "quotes" gives, for each, at least 5 words of its blocks, word for word, that the answer rests on. 3 options, one right, each with a why. It is asked at the end of the box's last clip. Leave groups empty when the shape is "none".
-
-"splits": only for a clip marked LONG. If it really holds two separate mechanisms, give the block number where the second begins ("at", not the clip's first block) and a title for the new clip. Otherwise leave splits empty.
+- Each clip goes in exactly one box ("box"), the most specific one. Several clips may share a box. With "none", boxes is empty and every "box" is null.`;
+const PLAN_HANDOFF = `THE HANDOFF, flow only. For a clip whose box differs from the previous clip's, "handoff" is at most 8 words naming what passes from the previous box into this one (a request, a token, a page), and "handoffQuote" copies at least 5 words, word for word, from a block that says so. Otherwise both are null.`;
+const PLAN_GUESS = `THE GUESS QUESTION that opens each clip, before anything is taught: someone who already knows the clip's central mechanism gets it right; someone who doesn't plausibly gets it wrong. Exactly 3 options and one right. Each wrong option is a believable mistake a strong engineer new to this would make, never a joke. Each option has a one-sentence "why". The clip's own blocks must state the right answer: "quote" copies at least 5 words of them, word for word, that back it. A clip marked HAS A GUESS ALREADY gets null.`;
+const PLAN_TRAP = `"trap": the numbers of the clip's blocks that describe something that really went wrong: a bug, a failed approach, a rejected option, an idea that turned out false. The clip will open by showing it. Empty for most clips. Never stretch this.`;
+const PLAN_MASK = `"mask": true for a clip whose code (marked CODE below) carries out the mechanism the clip explains, so the clip can show the mechanism first, then hide the one line that does it and let the learner pick it. Only a clip marked CODE can have it, and most clips don't.`;
+const PLAN_PATTERN = `"patternOf": the name of an EARLIER clip whose pattern this clip repeats (the same check in another route, a second adapter on the same interface), with "patternQuote" copying at least 5 words of this clip's blocks that show the repeat. This clip will show the shape and leave the repeated step for the learner, so give it "mask" true when it is marked CODE. Otherwise both are null.`;
+const PLAN_GROUPS = `"groups": for a top box (parent null) holding two or more clips, at most one question that needs two or three of its clips together to answer: what connects them, not a fact from one. "needs" names those clips; "quotes" gives, for each, at least 5 words of its blocks, word for word, that the answer rests on. 3 options, one right, each with a why. It is asked at the end of the box's last clip. Leave groups empty when the shape is "none".`;
+const PLAN_TAIL = `"splits": only for a clip marked LONG. If it really holds two separate mechanisms, give the block number where the second begins ("at", not the clip's first block) and a title for the new clip. Otherwise leave splits empty.
 
 Give one entry in "clips" for every clip below, in order, with "clip" its exact name.`;
+
+/** The planning rules, numbered: everything with questions on, the map, handoff and traps without. */
+export function planRules(questions = true) {
+  const parts = questions ? [PLAN_MAP, PLAN_HANDOFF, PLAN_GUESS, PLAN_TRAP, PLAN_MASK, PLAN_PATTERN, PLAN_GROUPS] : [PLAN_MAP, PLAN_HANDOFF, PLAN_TRAP];
+  return [PLAN_INTRO, ...parts.map((text, k) => `${k + 1}. ${text}`), PLAN_TAIL].join('\n\n');
+}
+
+const QUESTION_FIELDS = ['guess', 'mask', 'patternOf', 'patternQuote'];
+
+/** The plan's schema: without questions, no guess, mask, pattern or groups to fill in. */
+export function planSchema(questions = true) {
+  if (questions) return PLAN_SCHEMA;
+  const clip = PLAN_SCHEMA.properties.clips.items;
+  const { groups, ...properties } = PLAN_SCHEMA.properties;
+  void groups;
+  return {
+    ...PLAN_SCHEMA,
+    properties: {
+      ...properties,
+      clips: { ...PLAN_SCHEMA.properties.clips, items: { ...clip, properties: Object.fromEntries(Object.entries(clip.properties).filter(([key]) => !QUESTION_FIELDS.includes(key))), required: clip.required.filter(key => !QUESTION_FIELDS.includes(key)) } },
+    },
+    required: PLAN_SCHEMA.required.filter(key => key !== 'groups'),
+  };
+}
 
 const describe = block => `[${block.n}] (${block.t}${block.callout ? `, ${block.callout}` : ''})`;
 
 /** The planning request: every clip with its blocks, its size and the guess it already has. */
-export function planRequest(page, material, repair = null) {
+export function planRequest(page, material, repair = null, questions = true) {
   const { blocks, sections, quiz } = material;
   return [
-    PLAN_RULES, '',
+    planRules(questions), '',
     `PAGE: ${page.title}`, '',
     ...sections.flatMap(section => {
       const mine = blocks.filter(block => block.section === section);
       const size = spokenBudget(mine);
-      const guess = quiz.find(q => q.section === section && q.guess);
+      const guess = questions && quiz.find(q => q.section === section && q.guess);
       return [
-        `## CLIP: ${section}${size > LONG_CLIP ? ' (LONG)' : ''}${maskable(material, section) ? ' (CODE)' : ''}${guess ? ` (HAS A GUESS ALREADY: ${guess.q})` : ''}`,
+        `## CLIP: ${section}${size > LONG_CLIP ? ' (LONG)' : ''}${questions && maskable(material, section) ? ' (CODE)' : ''}${guess ? ` (HAS A GUESS ALREADY: ${guess.q})` : ''}`,
         ...mine.flatMap(block => [describe(block), block.text]),
         '',
       ];
@@ -120,9 +138,10 @@ const quoted = (quote, text) => words(norm(quote)).length >= MIN_QUOTE_WORDS && 
 /**
  * What's wrong with a plan, as problems Claude can fix, and the plan cut back to what passes: a
  * map that fails goes (no map), a guess that fails goes (that clip has no gate), a trap or a split
- * that doesn't hold is dropped. The video is made either way.
+ * that doesn't hold is dropped. The video is made either way. With questions off, the plan's guesses,
+ * masked lines, patterns and group questions are dropped unasked: none is a problem.
  */
-export function checkPlan(plan, material) {
+export function checkPlan(plan, material, { questions = true } = {}) {
   const { blocks, sections, quiz } = material;
   const problems = [];
   const clipText = section => blocks.filter(block => block.section === section).map(block => block.text).join(' ');
@@ -162,7 +181,7 @@ export function checkPlan(plan, material) {
       else handoff = String(entry.handoff).trim();
     }
     let guess = null;
-    const hasOne = quiz.some(q => q.section === section && q.guess);
+    const hasOne = !questions || quiz.some(q => q.section === section && q.guess);
     if (entry.guess && !hasOne) {
       const options = entry.guess.options || [];
       const before = problems.length;
@@ -175,20 +194,20 @@ export function checkPlan(plan, material) {
     const mine = new Set(blocks.filter(block => block.section === section).map(block => block.n));
     const trap = (entry.trap || []).filter(n => mine.has(n));
     let patternOf = null;
-    if (entry.patternOf) {
+    if (questions && entry.patternOf) {
       if (sections.indexOf(entry.patternOf) === -1 || sections.indexOf(entry.patternOf) >= k) problems.push(`Clip "${section}": "patternOf" must name an earlier clip`);
       else if (!quoted(entry.patternQuote, clipText(section))) problems.push(`Clip "${section}": the pattern's quote is not word for word from this clip's blocks`);
       else patternOf = entry.patternOf;
     }
     // A masked line only where there's code to mask; never a problem, just not done.
-    const mask = Boolean(entry.mask || patternOf) && maskable(material, section);
+    const mask = questions && Boolean(entry.mask || patternOf) && maskable(material, section);
     return { clip: section, box, handoff, guess, trap, mask, patternOf };
   });
 
   // Group questions: one per top box with two clips or more, asked at the end of its last clip.
   const inBox = id => clips.filter(entry => entry.box === id || boxes.find(box => box.id === entry.box)?.parent === id).map(entry => entry.clip);
   const groups = [];
-  for (const group of shape === 'none' ? [] : plan?.groups || []) {
+  for (const group of shape === 'none' || !questions ? [] : plan?.groups || []) {
     const box = boxes.find(item => item.id === group?.box && !item.parent);
     const members = box ? inBox(box.id) : [];
     const needs = [...new Set(group?.needs || [])];
@@ -263,13 +282,13 @@ export function applyPlan(page, material, plan) {
 }
 
 /** The plan for a page: asked once, repaired once, then cut back to what passes. Null when nothing came back. */
-export async function makePlan({ page, material, ask }) {
-  let plan = await ask(planRequest(page, material), PLAN_SCHEMA);
-  let checked = checkPlan(plan, material);
+export async function makePlan({ page, material, ask, questions = true }) {
+  let plan = await ask(planRequest(page, material, null, questions), planSchema(questions));
+  let checked = checkPlan(plan, material, { questions });
   const first = checked.problems;
   if (first.length) {
-    plan = await ask(planRequest(page, material, { plan, problems: first.slice(0, 20) }), PLAN_SCHEMA);
-    checked = checkPlan(plan, material);
+    plan = await ask(planRequest(page, material, { plan, problems: first.slice(0, 20) }, questions), planSchema(questions));
+    checked = checkPlan(plan, material, { questions });
   }
   return { plan: checked.plan, firstProblems: first, problemsLeft: checked.problems };
 }

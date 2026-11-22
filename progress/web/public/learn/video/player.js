@@ -23,6 +23,7 @@ const ICONS = {
   cc: '<rect x="3" y="5.5" width="18" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M10.6 10.3a2.2 2.2 0 1 0 0 3.4M17 10.3a2.2 2.2 0 1 0 0 3.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
   list: '<path d="M4 6.5h2M4 12h2M4 17.5h2M9 6.5h11M9 12h11M9 17.5h11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   full: '<path d="M4 9V4.5h4.5M15.5 4.5H20V9M20 15v4.5h-4.5M8.5 19.5H4V15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  questions: '<circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.4 2.3c-.7.3-1 .8-1 1.5v.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="16.9" r="1.05" fill="currentColor"/>',
 };
 const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
 
@@ -71,6 +72,14 @@ const goToClip = n => { location.href = `${location.pathname}?explain=${encodeUR
 if (outer) V.plan = outer.map;
 const { scenes, assets, quiz, sections, audio: track } = V;
 const quizById = new Map(quiz.map(q => [q.id, q]));
+// Questions (Learn's setting, Q here): off, nothing stops the video. A video made without any
+// has nothing to turn on; one made with them hides them while the setting is off.
+const settings = await rpc('settings.get').catch(() => null);
+let wantQuestions = settings?.videoQuestions === true;
+const hasQuestions = scenes.some(scene => scene.check || scene.masks?.length);
+const questionsOn = () => wantQuestions && hasQuestions;
+// A question scene is passed over when questions are off, or when it's gone since the video was made.
+const skipped = scene => Boolean(scene.check) && (!questionsOn() || !quizById.has(scene.check));
 const total = track.mainEnd;
 
 // --- Clips: the page's sections, each a span of the one track ------------------------------
@@ -95,8 +104,6 @@ initStage({ objects: $('objects'), wires: $('wires'), assets });
 for (const scene of scenes) {
   scene.states = buildStates(scene);
   scene.cameras = buildCameras(scene, scene.states, assets);
-  // A question flagged as wrong since the video was made is passed over.
-  scene.skip = Boolean(scene.check) && !quizById.has(scene.check);
 }
 const sceneAt = t => sceneIndex(scenes, t);
 
@@ -147,7 +154,7 @@ function showWrongTurn(on) {
 function mapClips() {
   if (!outer) return clips;
   const kept = recall(explainId);
-  return inDepth.map(c => ({ name: c.title, done: Boolean(kept.done?.[c.n]) || (c.n === clipN && Boolean(clips[0]?.done)), skipped: Boolean(kept.skipped?.[c.n]) }));
+  return inDepth.map(c => ({ name: c.title, done: Boolean(kept.done?.[c.n]) || (c.n === clipN && Boolean(clips[0]?.done)) }));
 }
 function clipsInBox(id) {
   return mapClips().filter(c => { const box = planClip(c.name)?.box; return box === id || plan.boxes.find(b => b.id === box)?.parent === id; });
@@ -170,8 +177,7 @@ function drawMap(k) {
     const cell = div('map-box', b.label);
     cell.dataset.box = b.id;
     cell.classList.toggle('now', b.id === here || b.id === parent?.id);
-    cell.classList.toggle('done', mine.length > 0 && mine.every(c => c.done || c.skipped));
-    cell.classList.toggle('skipped', mine.length > 0 && mine.every(c => c.skipped));
+    cell.classList.toggle('done', mine.length > 0 && mine.every(c => c.done));
     node.append(cell);
   });
 }
@@ -199,8 +205,10 @@ const maskPicks = new Map();
 let activeMask = null;
 const maskKey = (s, id) => `${s}:${id}`;
 function unmasked(state, s) {
-  if (![...state.values()].some(o => o.mask !== undefined && revealed.has(maskKey(s, o.id)))) return state;
-  return new Map([...state].map(([id, o]) => [id, o.mask !== undefined && revealed.has(maskKey(s, id)) ? { ...o, mask: undefined } : o]));
+  // Questions off: every masked line shows its real line, and nothing stops for it.
+  const shows = id => !questionsOn() || revealed.has(maskKey(s, id));
+  if (![...state.values()].some(o => o.mask !== undefined && shows(o.id))) return state;
+  return new Map([...state].map(([id, o]) => [id, o.mask !== undefined && shows(id) ? { ...o, mask: undefined } : o]));
 }
 function showMask(mask) {
   activeMask = { mask, scene: shownScene };
@@ -274,13 +282,19 @@ function endOpener() {
 const sound = new Audio(URL.createObjectURL(blob));
 sound.preload = 'auto';
 sound.preservesPitch = true;
-let playing = false, rate = 1, dragging = false, mode = 'main', pinned = 0, extra = null, sleepTimer = 0, againClip = -1;
+let playing = false, rate = 1, dragging = false, mode = 'main', pinned = 0, extra = null, sleepTimer = 0, againClip = -1, advanceTimer = 0;
 const answers = new Map(); // question id: the option picked, or null for "Not sure"
-const picked = new Map(); // a guess picked, waiting on how sure you were
-const sure = new Map();
+/** A clip's end card counting down to the next clip (questions off), stopped. */
+function cancelAdvance() {
+  if (!advanceTimer) return;
+  clearTimeout(advanceTimer);
+  advanceTimer = 0;
+  $('coverMeta').textContent = $('coverMeta').textContent.replace(/ · starts in 2 s$/, '');
+}
 const clockNow = () => ((mode === 'main' || mode === 'opener') && !dragging ? sound.currentTime : pinned);
 
 function setPlaying(on, quiet = false) {
+  cancelAdvance();
   playing = on;
   $('play').innerHTML = icon(on ? 'pause' : 'play');
   if (on) { $('cover').hidden = true; if (mode !== 'held') sound.play().catch(() => setPlaying(false)); } else sound.pause();
@@ -288,11 +302,17 @@ function setPlaying(on, quiet = false) {
   if (on && mode === 'main' && shownClip >= 0 && clockNow() - clips[shownClip].from < 0.6) showHandoff(shownClip);
   wake();
 }
+/** Where a jump lands: past a question that's hidden (to the next scene's start: scenes have gaps), unless it ends its clip. */
+function landing(t) {
+  for (let s = sceneAt(t); skipped(scenes[s]) && !endsClip(scenes[s]) && s + 1 < scenes.length; s += 1) t = scenes[s + 1].start;
+  return t;
+}
 function seek(t, keepPlaying = true) {
   if (openerScene) { openerScene = null; showWrongTurn(false); }
   if (activeMask) hideMask();
+  cancelAdvance();
   mode = 'main';
-  pinned = clamp(t, 0, total - 0.05);
+  pinned = landing(clamp(t, 0, total - 0.05));
   sound.currentTime = pinned;
   syncTo(pinned, true);
   showFrame(pinned);
@@ -307,17 +327,20 @@ function watch(t) {
   if (mode === 'opener' && !dragging && sound.currentTime >= openerScene.end - 0.03) { endOpener(); return; }
   if (!playing || mode !== 'main' || dragging) return;
   const scene = scenes[shownScene];
-  if (scene.skip) { if (endsClip(scene)) endClip(clipAt(scene.start)); else sound.currentTime = scene.end + 0.02; return; }
+  // Passed over to the next scene's start: just past this one's end is still this one, in the gap.
+  if (skipped(scene)) { if (endsClip(scene)) endClip(clipAt(scene.start)); else sound.currentTime = scenes[shownScene + 1]?.start ?? scene.end; return; }
   if (scene.check && t >= scene.end - 0.05 && !answers.has(scene.check)) { sound.pause(); mode = 'held'; pinned = scene.end - 0.06; return; }
-  const mask = (scene.masks || []).find(item => item.until !== undefined && !maskPicks.has(maskKey(shownScene, item.id)) && t >= item.until - 0.05);
+  const mask = questionsOn() && (scene.masks || []).find(item => item.until !== undefined && !maskPicks.has(maskKey(shownScene, item.id)) && t >= item.until - 0.05);
   if (mask) { sound.pause(); mode = 'held'; pinned = mask.until - 0.06; showMask(mask); return; }
   if (t >= clips[clipAt(t)].to - 0.05) endClip(clipAt(t));
 }
-/** A clip's end: it stops, waiting on the next clip's first picture until you say go. */
+/**
+ * A clip's end: it stops on the next clip's first picture. With questions on it waits until you
+ * say go; with them off the card shows for 2 s and the next clip plays.
+ */
 function endClip(k) {
   clips[k].done = true;
-  clips[k].skipped = false;
-  if (outer && k >= clips.length - 1) return endExplainerClip(false);
+  if (outer && k >= clips.length - 1) return endExplainerClip();
   if (k >= clips.length - 1) { showRail(); return finish(); }
   setPlaying(false, true);
   const next = clips[k + 1];
@@ -329,10 +352,16 @@ function endClip(k) {
   $('coverPlay').title = 'Play the next clip (Enter)';
   $('coverAgain').hidden = false;
   $('cover').hidden = false;
+  if (!questionsOn()) countDown(() => setPlaying(true, true));
 }
-/** An explainer's clip done (or skipped): the card names the next one, which opens on play. */
-function endExplainerClip(skipped) {
-  remember(explainId, now => (skipped ? { skipped: { ...(now.skipped || {}), [clipN]: true } } : { done: { ...(now.done || {}), [clipN]: true }, skipped: { ...(now.skipped || {}), [clipN]: false } }));
+/** The next clip in 2 s, said on the card; Space, a jump or turning questions on stops it. */
+function countDown(go) {
+  $('coverMeta').textContent += ' · starts in 2 s';
+  advanceTimer = setTimeout(() => { advanceTimer = 0; go(); }, 2000);
+}
+/** An explainer's clip done: the card names the next one, which opens on play (or by itself, in 2 s, with questions off). */
+function endExplainerClip() {
+  remember(explainId, now => ({ done: { ...(now.done || {}), [clipN]: true } }));
   setPlaying(false, true);
   showRail();
   if (!nextOuter) {
@@ -341,7 +370,6 @@ function endExplainerClip(skipped) {
     coverAction = () => goToClip(inDepth[0].n);
     $('coverPlay').title = 'From the first clip';
   } else {
-    if (skipped) return goToClip(nextOuter.n);
     $('coverTitle').textContent = `Next: ${nextOuter.title}`;
     $('coverMeta').textContent = `${inDepth.findIndex(c => c.n === nextOuter.n) + 1} of ${inDepth.length}${nextOuter.state === 'ready' ? '' : ' · still being made'}`;
     coverAction = () => goToClip(nextOuter.n);
@@ -350,20 +378,20 @@ function endExplainerClip(skipped) {
   againClip = 0;
   $('coverAgain').hidden = false;
   $('cover').hidden = false;
+  if (nextOuter && !questionsOn()) countDown(() => goToClip(nextOuter.n));
 }
 let coverAction = null;
 function finish() {
   setPlaying(false, true);
   const right = [...answers.entries()].filter(([id, k]) => quizById.get(id).options[k]?.right).length;
+  const asked = questionsOn();
   answers.clear();
-  picked.clear();
-  sure.clear();
   maskPicks.clear();
   revealed.clear();
-  clips.forEach(c => { c.done = false; c.skipped = false; });
+  clips.forEach(c => { c.done = false; });
   seek(0, false);
   $('coverTitle').textContent = 'That is everything on this page.';
-  $('coverMeta').textContent = `${right} of ${quiz.length} questions right`;
+  $('coverMeta').textContent = asked ? `${right} of ${quiz.length} questions right` : `${clips.length} clips`;
   $('coverPlay').title = 'Watch again';
   $('coverAgain').hidden = true;
   $('cover').hidden = false;
@@ -372,7 +400,7 @@ function finish() {
 // --- Questions -------------------------------------------------------------------------
 function showQuiz(scene) {
   const box = $('quiz');
-  box.hidden = !scene.check || scene.skip;
+  box.hidden = !scene.check || skipped(scene);
   if (box.hidden) return;
   const q = quizById.get(scene.check);
   box.replaceChildren();
@@ -380,7 +408,6 @@ function showQuiz(scene) {
   const order = q.order || (q.order = q.options.map((_, k) => k).sort(() => Math.random() - 0.5));
   const answered = answers.get(q.id);
   const done = answers.has(q.id);
-  const waiting = picked.get(q.id);
   const button = (cls, keyText, label, onClick) => {
     const node = document.createElement('button');
     node.className = cls;
@@ -393,61 +420,31 @@ function showQuiz(scene) {
   };
   order.forEach((k, place) => {
     const option = q.options[k];
-    const { node, text } = button('option', String(place + 1), option.text, done || waiting !== undefined ? null : () => (q.guess ? pick(k) : answer(k)));
-    if (waiting === k) node.classList.add('picked');
+    const { node, text } = button('option', String(place + 1), option.text, done ? null : () => answer(k));
     if (!done) return;
     if (option.right) node.classList.add('right');
     if (k === answered && !option.right) node.classList.add('wrong');
     if (option.right || k === answered) { const why = document.createElement('span'); why.className = 'why'; why.textContent = option.why; text.append(why); }
   });
   // Not sure is an answer too: the clip plays from its start, nothing played out.
-  if (q.guess && !done && waiting === undefined) button('option unsure', 'N', 'Not sure', notSure);
+  if (q.guess && !done) button('option unsure', 'N', 'Not sure', notSure);
   const foot = div('quiz-foot');
   const primary = (label, onClick) => { const go = document.createElement('button'); go.className = 'primary'; go.textContent = label; go.id = 'continue'; go.addEventListener('click', onClick); foot.append(go); };
   const quiet = (label, onClick) => { const node = document.createElement('button'); node.className = 'quiet'; node.textContent = label; node.addEventListener('click', onClick); foot.append(node); };
-  if (waiting !== undefined) {
-    foot.append(div('quiz-ask', 'How sure were you?'));
-    quiet('1 · I knew it', () => settle(true));
-    quiet('2 · I guessed', () => settle(false));
-  } else if (!done) quiet('Skip', leaveQuestion);
+  if (!done) quiet('Skip', leaveQuestion);
   else if (answered === null) primary('Continue', leaveQuestion);
   else {
     const right = q.options[answered].right;
-    // Right, and you knew it: the clip is offered to skip. It stays in the list, one click back.
-    if (q.guess && right && sure.get(q.id)) { primary('Skip this clip', skipClip); quiet('Watch it anyway', leaveQuestion); }
-    else primary('Continue', leaveQuestion);
+    primary('Continue', leaveQuestion);
     foot.append(div(`quiz-result ${right ? 'good' : 'bad'}`, right ? 'Right' : 'Not quite'));
   }
   box.append(foot);
-}
-/** A guess: the pick first, then how sure you were, and only then whether it was right. */
-function pick(k) {
-  const q = quizById.get(scenes[shownScene].check);
-  if (!q || answers.has(q.id)) return;
-  picked.set(q.id, k);
-  showQuiz(scenes[shownScene]);
-}
-function settle(knew) {
-  const q = quizById.get(scenes[shownScene].check);
-  if (!q || !picked.has(q.id)) return;
-  sure.set(q.id, knew);
-  const k = picked.get(q.id);
-  picked.delete(q.id);
-  answer(k);
 }
 function notSure() {
   const q = quizById.get(scenes[shownScene].check);
   if (!q || answers.has(q.id)) return;
   answers.set(q.id, null);
   leaveQuestion();
-}
-function skipClip() {
-  const k = clipAt(scenes[shownScene].start);
-  clips[k].skipped = true;
-  mode = 'main';
-  if (outer) return endExplainerClip(true);
-  if (k >= clips.length - 1) { showRail(); return finish(); }
-  jump(clips[k + 1].from);
 }
 function answer(k) {
   const scene = scenes[shownScene];
@@ -575,7 +572,7 @@ function showClipBar(k) {
   seg.append(document.createElement('i'), document.createElement('u'));
   box.append(seg);
   scenes.forEach((scene, index) => {
-    if (!scene.check || scene.skip || scene.start < c.from || scene.start >= c.to) return;
+    if (!scene.check || skipped(scene) || scene.start < c.from || scene.start >= c.to) return;
     const tick = div('tick');
     tick.dataset.scene = index;
     tick.style.left = `${((scene.start - c.from) / (c.to - c.from)) * 100}%`;
@@ -621,7 +618,6 @@ function buildClips() {
       button.className = 'chapter';
       button.classList.toggle('now', c.n === clipN);
       button.classList.toggle('done', Boolean(kept.done?.[c.n]));
-      button.classList.toggle('skipped', Boolean(kept.skipped?.[c.n]));
       const state = document.createElement('small'); state.textContent = c.state === 'ready' ? String(c.n) : `${c.n} ·`;
       const text = document.createElement('span'); text.textContent = c.title + (c.state === 'ready' ? '' : ` (${c.state === 'making' ? 'being made' : 'waiting'})`);
       button.append(state, text);
@@ -647,7 +643,6 @@ function showRail() {
     const k = Number(node.dataset.clip);
     node.classList.toggle('now', k === shownClip);
     node.classList.toggle('done', clips[k].done);
-    node.classList.toggle('skipped', Boolean(clips[k].skipped));
   });
   if (shownClip >= 0) drawMap(shownClip);
 }
@@ -664,6 +659,28 @@ function nudgeRate(step) { const all = [0.75, 1, 1.25, 1.5, 1.75, 2]; setRate(al
 function setVolume(value) { sound.volume = clamp(value, 0, 1); sound.muted = sound.volume === 0; $('volume').value = sound.volume; showSound(); }
 function toggleSound() { sound.muted = !sound.muted; showSound(); }
 function showSound() { $('mute').innerHTML = icon(sound.muted ? 'muted' : 'sound'); }
+/**
+ * Questions on or off, for this video and as Learn's setting (new videos are made by it). Turning
+ * them off mid-question leaves that question, masked line or played-out answer and plays on.
+ */
+function setQuestions(on, save = true) {
+  if (!hasQuestions) return;
+  wantQuestions = on;
+  $('questions').classList.toggle('off', !on);
+  $('questions').title = on ? 'Questions are on (Q)' : 'Questions are off (Q)';
+  if (on) cancelAdvance();
+  else if (mode === 'opener') endOpener();
+  else if (activeMask) { revealed.add(maskKey(activeMask.scene, activeMask.mask.id)); hideMask(); mode = 'main'; if (playing) sound.play().catch(() => {}); }
+  else if (mode === 'held' || mode === 'extra') leaveQuestion();
+  const scene = scenes[shownScene];
+  if (scene) {
+    showQuiz(scene);
+    applyState(unmasked(scene.states[Math.max(0, shownCue)], shownScene), true);
+  }
+  if (shownClip >= 0) showClipBar(shownClip);
+  if (save) rpc('settings.set', { change: { videoQuestions: on } }).catch(() => {});
+  wake();
+}
 function toggleCaptions(save = true) { showCaptions = !showCaptions; $('cc').classList.toggle('off', !showCaptions); $('captions').classList.toggle('off', !showCaptions); if (save) savePrefs(); }
 
 // Speed and subtitles carry over to every video. Kept by the server, since the port, and so the
@@ -696,7 +713,7 @@ if (V.stale) {
 }
 $('full').hidden = !document.fullscreenEnabled;
 $('coverTitle').textContent = V.title;
-$('coverMeta').textContent = outer ? `Clip ${inDepth.findIndex(c => c.n === clipN) + 1} of ${inDepth.length} · ${timeText(total)}` : `${clips.length} clips, ${Math.round(total / 60)} minutes, ${quiz.length} questions`;
+$('coverMeta').textContent = outer ? `Clip ${inDepth.findIndex(c => c.n === clipN) + 1} of ${inDepth.length} · ${timeText(total)}` : `${clips.length} clips, ${Math.round(total / 60)} minutes${questionsOn() ? `, ${quiz.length} questions` : ''}`;
 $('coverPlay').innerHTML = icon('play');
 $('coverPlay').addEventListener('click', () => (coverAction ? coverAction() : setPlaying(true)));
 $('coverAgain').addEventListener('click', () => { if (againClip >= 0) jump(clips[againClip].from); });
@@ -704,6 +721,10 @@ $('play').innerHTML = icon('play');
 $('back').innerHTML = icon('back');
 $('forward').innerHTML = icon('forward');
 $('captions').innerHTML = icon('cc');
+$('questions').innerHTML = icon('questions');
+$('questions').classList.toggle('off', !questionsOn());
+$('questions').disabled = !hasQuestions;
+$('questions').title = !hasQuestions ? 'This video was made without questions' : wantQuestions ? 'Questions are on (Q)' : 'Questions are off (Q)';
 $('chaptersButton').innerHTML = icon('list');
 $('full').innerHTML = icon('full');
 showSound();
@@ -713,6 +734,7 @@ $('forward').addEventListener('click', () => seekInClip(clockNow() + 10));
 $('mute').addEventListener('click', toggleSound);
 $('volume').addEventListener('input', event => setVolume(Number(event.target.value)));
 $('captions').addEventListener('click', toggleCaptions);
+$('questions').addEventListener('click', () => setQuestions(!wantQuestions));
 $('chaptersButton').addEventListener('click', () => toggleDrawer());
 $('full').addEventListener('click', toggleFull);
 $('speed').addEventListener('click', () => { $('speedMenu').hidden = !$('speedMenu').hidden; wake(); });
@@ -736,9 +758,10 @@ document.addEventListener('keydown', event => {
   if (event.target.tagName === 'INPUT' || event.ctrlKey || event.metaKey || event.altKey) return;
   const scene = scenes[shownScene];
   const key = event.key.toLowerCase();
-  const asking = scene.check && !answers.has(scene.check);
+  const asking = scene.check && !skipped(scene) && !answers.has(scene.check);
   wake();
-  if (key === ' ' || key === 'k') { event.preventDefault(); if (document.activeElement) document.activeElement.blur(); if (scene.check && answers.has(scene.check) && mode !== 'main') leaveQuestion(); else setPlaying(!playing); }
+  if ((key === ' ' || key === 'k') && advanceTimer) { event.preventDefault(); cancelAdvance(); }
+  else if (key === ' ' || key === 'k') { event.preventDefault(); if (document.activeElement) document.activeElement.blur(); if (scene.check && answers.has(scene.check) && mode !== 'main') leaveQuestion(); else setPlaying(!playing); }
   else if (key === 'arrowleft') seekInClip(clockNow() - 5);
   else if (key === 'arrowright') seekInClip(clockNow() + 5);
   else if (key === 'j') seekInClip(clockNow() - 10);
@@ -747,6 +770,7 @@ document.addEventListener('keydown', event => {
   else if (key === 'arrowdown') { event.preventDefault(); setVolume(sound.volume - 0.1); }
   else if (key === 'm') toggleSound();
   else if (key === 'c') toggleCaptions();
+  else if (key === 'q') setQuestions(!wantQuestions);
   else if (key === 'f') toggleFull();
   else if (key === 'g') toggleDrawer();
   else if (key === '>' ) nudgeRate(1);
@@ -756,30 +780,35 @@ document.addEventListener('keydown', event => {
   else if (key === 'enter' && !$('cover').hidden) (coverAction ? coverAction() : setPlaying(true));
   else if (key === 'enter') document.getElementById('continue')?.click();
   else if (activeMask && !maskPicks.has(maskKey(activeMask.scene, activeMask.mask.id)) && /^[1-3]$/.test(key)) pickMask(Number(key) - 1);
-  else if (asking && picked.has(scene.check) && (key === '1' || key === '2')) settle(key === '1');
-  else if (asking && !picked.has(scene.check) && key === 'n' && quizById.get(scene.check)?.guess) notSure();
-  else if (asking && !picked.has(scene.check) && /^[1-5]$/.test(key)) { const q = quizById.get(scene.check); const k = q.order?.[Number(key) - 1]; if (k !== undefined) (q.guess ? pick(k) : answer(k)); }
+  else if (asking && key === 'n' && quizById.get(scene.check)?.guess) notSure();
+  else if (asking && /^[1-5]$/.test(key)) { const k = quizById.get(scene.check).order?.[Number(key) - 1]; if (k !== undefined) answer(k); }
 });
 
 new ResizeObserver(fit).observe(frame);
 fit();
 wireScrub();
 buildClips();
-syncTo(0, true);
+seek(0, false); // past a hidden question the video opens on
 loadPrefs();
 // A guess answered while this clip was being made: played out now, from where it leads.
 const keptGuess = outer ? recall(explainId).guesses?.[clipN] : null;
 const firstGuess = quiz.find(q => q.guess);
-if (keptGuess && firstGuess && scenes[shownScene]?.check === firstGuess.id) {
+// An explainer's clip starts by itself: after the guess kept while it was made, or straight away
+// with questions off. The card hides only once the sound plays: a browser that won't play sound
+// on a page nobody has clicked keeps the card and its play button.
+const autoStart = () => sound.play().then(() => setPlaying(true, true), () => {});
+if (questionsOn() && keptGuess && firstGuess && scenes[shownScene]?.check === firstGuess.id) {
   if (keptGuess.unsure) { answers.set(firstGuess.id, null); leaveQuestion(); }
-  else { sure.set(firstGuess.id, Boolean(keptGuess.knew)); answer(keptGuess.k); }
-  setPlaying(true);
-}
+  else answer(keptGuess.k);
+  autoStart();
+} else if (outer && !questionsOn()) autoStart();
 loop();
 
 // For stills of a moment: tools/shoot.mjs --eval "player.hold(120)".
 // player.endClip(k) shows the card at the end of clip k.
 window.player = { hold: t => { $('cover').hidden = true; dragging = true; pinned = t; syncTo(t, true); showFrame(t); }, endClip, scenes, clips, sound, plan, openers: openersOf,
+  // player.questions(on): turns questions on or off without saving it, for stills.
+  questions: on => setQuestions(on, false),
   // player.mask(): the masked line's pick, at the moment it holds (after player.hold), for stills.
   mask: () => { const scene = scenes[shownScene]; if (scene.masks?.[0]) showMask(scene.masks[0]); },
   // player.opener(qid, k, t): a moment of an opener, for stills.

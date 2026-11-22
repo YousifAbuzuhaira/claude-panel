@@ -1,7 +1,8 @@
-// /explain: the code you're working on, explained as short video clips. The session writes the
-// plan (it has the code and what you're debugging in hand) and hands it to Learn through the
-// explain_plan tool; Learn checks it against the files and this chat, then makes and plays the
-// clips. Pure helpers only: the calls on `$` live in register.tsx.
+// /explain: the code you're working on, explained as short video clips. The command is the prompt
+// file commands/explain.md (a turn of its own the moment it's typed, and never run by the model
+// unasked); the session writes the plan (it has the code and what you're debugging in hand) and
+// hands it to Learn through the explain_plan tool; Learn checks it against the files and this chat,
+// then makes and plays the clips. Pure helpers only: the calls on `$` live in register.tsx.
 
 export const EXPLAIN_TOOL = 'explain_plan'
 
@@ -60,7 +61,7 @@ export const EXPLAIN_TOOL_SCHEMA = {
             description: 'The code the clip shows, by file and lines (from 1), read from disk by Learn. At most 60 lines each.',
             items: {
               type: 'object',
-              properties: { file: { type: 'string', description: "Relative to this session's folder." }, from: { type: 'integer' }, to: { type: 'integer' }, expect: { type: 'string', description: 'A few words found in those lines, so a moved line is caught.' } },
+              properties: { file: { type: 'string', description: "Relative to this session's folder, or a full or ~/ path under your home folder. Files that look like secrets are refused." }, from: { type: 'integer' }, to: { type: 'integer' }, expect: { type: 'string', description: 'A few words found in those lines, so a moved line is caught.' } },
               required: ['file', 'from', 'to', 'expect'],
             },
           },
@@ -77,24 +78,6 @@ export const EXPLAIN_TOOL_SCHEMA = {
 
 export const EXPLAIN_TOOL_DESCRIPTION =
   "Hands Learn a plan for short narrated video clips explaining code from this session (the /explain command). Learn checks the plan against the files and this chat, refusing with what to fix, then makes the clips and opens the player. Call it only when /explain asked you to."
-
-/** What /explain asks the session to do: plan the clips and hand them over. */
-export function explainBrief(what: string): string {
-  const topic = what.replace(/\s+/g, ' ').trim().slice(0, 300)
-  return [
-    `Explain ${topic ? `"${topic}"` : 'what we are working on'} to me as short narrated video clips, made by Learn. Don't explain it here in text: plan the clips and hand them to Learn.`,
-    '',
-    `1. Look at the code first (read the files that matter), then write the plan and call the tool mcp__progress__${EXPLAIN_TOOL} with it. If its schema isn't loaded, load it with ToolSearch (select:mcp__progress__${EXPLAIN_TOOL}).`,
-    '2. One clip per mechanism, in the order they build on each other, 1 to 12 clips. Clip 1 (level 1) is the mental model; level 2 clips add the mechanism and its code; level 3 the failure modes and edges. The player lets me pick how deep to go.',
-    "3. Each clip's facts are plain sentences: what it does, why, what happens next. Mark each fact's basis: code (the clip's anchored lines show it) or session (this chat says it, with a quote of 4 words or more copied word for word from one message). Nothing else: no outside facts, no made-up examples.",
-    '4. Anchor the code each clip shows by file and line range (from 1, relative to this folder, at most 60 lines) with a few words from those lines in "expect". Learn reads the lines from disk: never paste code into a fact.',
-    "5. Each clip opens with a guess question: 3 options, one right, each wrong one a believable mistake, each with a one-sentence why, and a quote from the clip's facts or code that states the right answer. Make it about the clip's central mechanism.",
-    '6. If a fact describes something that really went wrong in this work (a bug we fixed, a failing test, an idea that turned out false), list its number in "failure": the clip opens on it.',
-    '7. The map: "flow" when something moves from part to part (a request through services), "parts" for parts of one whole, "none" under 3 clips. At most 4 top boxes, labels of 1 to 3 words; each clip in one box.',
-    '',
-    'If Learn refuses the plan, fix what it lists and call the tool again. When it accepts, tell me in one line that the clips are being made and the player is opening. Keep your reply short.',
-  ].join('\n')
-}
 
 /** The helper that checks a plan and starts making it: the plan goes on its standard input. */
 export function explainArgv({ pluginRoot, sessionId, cwd, isWindows = false }: { pluginRoot: string; sessionId: string; cwd: string; isWindows?: boolean }): string[] {

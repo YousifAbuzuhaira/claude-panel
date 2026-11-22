@@ -3,7 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PhasePlan, TestRun } from '../types'
 import { courseArgv, isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus } from './learn'
-import { EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, readExplainAnswer, refusalText } from './explain'
+import { EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, readExplainAnswer, refusalText } from './explain'
 import type { LearnStatus } from './learn'
 import { GAMES, isGame, openingText, windowScript } from './pages'
 import {
@@ -599,11 +599,6 @@ export const register: Register = on => {
       isDeferred: true,
     })
     await $.command.register({
-      name: 'explain',
-      description: 'Have Claude explain code from this chat as short video clips in Learn: /explain how the gateway mints tokens',
-      argumentHint: '<what to explain>',
-    })
-    await $.command.register({
       name: 'games',
       description: 'Open a game while Claude works: sudoku, 2048, typing or chess',
       argumentHint: '[sudoku|2048|typing|chess]',
@@ -760,14 +755,9 @@ export const register: Register = on => {
     return { text: `Building a Learn course about "${focus}" from this chat. Learn reads the chat's saved record (it asks this chat nothing). Its progress shows on the panel's Learn tab; /learn opens it.` }
   })
 
-  // /explain: this session plans the clips (it has the code and the context), Learn makes them.
-  on('command.run', { command: 'explain' }, async ($, e) => {
-    const what = e.args.trim()
-    void $.prompt.submit({ text: explainBrief(what) })
-    return { text: `Planning short video clips${what ? ` about "${what}"` : ''}. Claude reads the code first, then Learn makes the clips and opens the player.` }
-  })
-
-  // By pattern: the typed list of MCP tools is the one saved with the mod, made before this tool.
+  // /explain is the prompt file commands/explain.md: this session plans the clips (it has the code
+  // and the context) and hands them over here; Learn makes them. Matched by pattern: the typed list
+  // of MCP tools is the one saved with the mod, made before this tool.
   on('tool.call', { tool: new RegExp(`^mcp__progress__${EXPLAIN_TOOL}$`) }, async ($, e) => {
     if (e.agentId !== undefined) return { deny: 'Only the main session hands Learn an explainer.' }
     const { tool, tool_use_id, consent, ...plan } = e as unknown as Record<string, unknown>

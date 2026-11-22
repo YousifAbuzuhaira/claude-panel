@@ -94,9 +94,10 @@ SAY EACH FACT ONCE. No signposting ("now let's look at", "here's the key idea"),
 
 ${PRONUNCIATION}
 
-${DRAWING}
+${DRAWING}`;
 
-QUESTIONS. Add each quiz question below once, as its own scene: {"title":"Quick check","covers":[],"quote":null,"check":"its id","objects":[],"beats":[{"say":"","do":[]}]}. The player reads it out. It must come after the voice has fully taught its answer, except GUESS FIRST ones, which come before.`;
+// Only with questions on (Learn's setting): without them a video has no question scenes at all.
+const QUESTIONS_RULE = 'QUESTIONS. Add each quiz question below once, as its own scene: {"title":"Quick check","covers":[],"quote":null,"check":"its id","objects":[],"beats":[{"say":"","do":[]}]}. The player reads it out. It must come after the voice has fully taught its answer, except GUESS FIRST ones, which come before.';
 
 const MASK_RULE = 'MASKED LINE: once in this clip, after you have shown the mechanism in pictures and while its code is on screen, hide the one line that carries it out and let the learner pick it: add {"on": "word", "mask": {"id": "the code object", "line": its line number from 0, "choices": ["wrong version 1", "wrong version 2"]}} to an action. The beat with the mask asks, in one sentence, what that line has to do ("So what must line 6 set before the call goes out?"); the player stops there until the learner picks, and your next beat says what the line does. The two wrong versions look like lines of this code, in its style and about its length, wrong the way someone who missed the idea would get it wrong, and are no line of the page\'s code. Never in the clip\'s first scene.';
 
@@ -109,8 +110,10 @@ function sectionRequest(page, material, section, repair) {
   const { blocks, quiz, sections } = material;
   const mine = blocks.filter(block => block.section === section);
   const questions = quiz.filter(q => q.section === section);
+  const asking = material.questions !== false;
   return [
     RULES, '',
+    ...(asking ? [QUESTIONS_RULE, ''] : []),
     `PAGE: ${page.title}`,
     `SECTIONS OF THE PAGE: ${sections.join(' / ')}`,
     `THIS SECTION: ${section}`, '',
@@ -119,9 +122,8 @@ function sectionRequest(page, material, section, repair) {
     'BLOCKS OF THIS SECTION:',
     ...mine.flatMap(block => [describe(block), block.text, '']),
     ...(material.masks?.has(section) ? [`${MASK_RULE}${material.patterns?.[section] ? ` This clip repeats the pattern of clip "${material.patterns[section]}": show the shape briefly, and mask the step that repeats.` : ''}`, ''] : []),
-    ...(material.traps?.[section]?.length ? [`REAL FAILURE: blocks ${material.traps[section].join(', ')} describe something that really went wrong. Open this clip by showing that failure as it happened (after any GUESS FIRST question) and give the scenes that show it "trap": true. A trap scene shows only what went wrong, never the fix; the player marks it as a wrong turn. Then teach the rest.`, ''] : []),
-    'QUIZ:',
-    ...(questions.length ? questions.flatMap(q => [`[${q.id}] ${q.guess ? 'GUESS FIRST, before this is taught' : `after block ${q.after} is taught`}: ${q.q}`, `  Answer: ${q.options.find(option => option.right)?.text}`]) : ['(none in this section)']),
+    ...(material.traps?.[section]?.length ? [`REAL FAILURE: blocks ${material.traps[section].join(', ')} describe something that really went wrong. Open this clip by showing that failure as it happened${asking ? ' (after any GUESS FIRST question)' : ''} and give the scenes that show it "trap": true. A trap scene shows only what went wrong, never the fix; the player marks it as a wrong turn. Then teach the rest.`, ''] : []),
+    ...(asking ? ['QUIZ:', ...(questions.length ? questions.flatMap(q => [`[${q.id}] ${q.guess ? 'GUESS FIRST, before this is taught' : `after block ${q.after} is taught`}: ${q.q}`, `  Answer: ${q.options.find(option => option.right)?.text}`]) : ['(none in this section)'])] : []),
     ...(repair ? ['', 'YOUR LAST ANSWER:', JSON.stringify(repair.result), '', 'IT FAILED THESE CHECKS. Return all of it with these fixed and everything else kept:', ...repair.problems.map(problem => `- ${problem}`)] : []),
   ].join('\n');
 }
@@ -193,16 +195,22 @@ function watcherRequest(page, { quiz, allQuiz }, heard) {
  * given, is the plan already made (an explainer's clip, from your session): it is checked and used
  * instead of asking for one.
  */
-export async function writeScript({ page, ask, onStep = () => {}, plan = null }) {
+export async function writeScript({ page, ask, onStep = () => {}, plan = null, questions = true }) {
   const started = Date.now();
   // The page's sections are the video's clips, tiny ones joined to a neighbour. The plan adds the
   // map, a guess question opening each clip and the failures a clip opens on; without one (it
-  // failed), the clips play as they are.
-  let material = mergeTiny(flattenPage(page));
+  // failed), the clips play as they are. With questions off (Learn's setting) nothing stops the
+  // video: no guess, quick check, group question or masked line is asked for, written or recorded.
+  questions = questions !== false;
+  let material = { ...mergeTiny(flattenPage(page)), questions };
+  if (!questions) material.quiz = [];
   onStep('planning the clips', 0.02);
-  const planned = plan ? (({ plan: checked, problems }) => ({ plan: checked, firstProblems: problems, problemsLeft: problems }))(checkPlan(plan, material)) : await makePlan({ page, material, ask }).catch(error => ({ error }));
+  const planned = plan ? (({ plan: checked, problems }) => ({ plan: checked, firstProblems: problems, problemsLeft: problems }))(checkPlan(plan, material, { questions })) : await makePlan({ page, material, ask, questions }).catch(error => ({ error }));
   let map = null;
   if (planned.plan) ({ material, map } = applyPlan(page, material, planned.plan));
+  // applyPlan rebuilds the quiz from the page's own checks: still none without questions. allQuiz
+  // stays, so the watcher still has to answer the page's questions from the video alone.
+  if (!questions) material = { ...material, quiz: [], masks: new Set() };
   material.taught = firstTaught(page.terms, material.blocks);
   const { sections, blocks, assets, quiz, allQuiz } = material;
   const written = new Map();
@@ -365,6 +373,7 @@ export async function writeScript({ page, ask, onStep = () => {}, plan = null })
     scenes,
     assets,
     quiz,
+    withQuestions: questions,
     plan: map,
     openers: madeOpeners,
     pronounce: tidyPronounce([...[...written.values()].flatMap(result => result.pronounce || []), ...[...openers.values()].flatMap(made => made.pronounce)], [...scenes, ...openerScenes()]),
