@@ -271,7 +271,7 @@ export async function checkExplainer({ plan, sessionId, cwd, io, model = 'opus',
 /** Code past this many lines is shown in parts: more never fits the stage at a readable size. */
 export const PART_LINES = 18;
 
-/** An anchor's code in parts of at most PART_LINES lines, as even as can be (40 lines: 14, 13, 13). */
+/** An anchor's code in parts of at most PART_LINES lines, all the same size but the last (40 lines: 14, 14, 12). */
 export function codeParts(code) {
   const lines = String(code).split('\n');
   const count = Math.ceil(lines.length / PART_LINES);

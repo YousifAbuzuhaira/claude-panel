@@ -92,3 +92,15 @@ export function readLearnStatus(raw: string, now: number): LearnStatus | null {
 
 /** A build that is working right now keeps the panel up. */
 export const isLearnBusy = (status: LearnStatus | null) => status?.build?.state === 'running'
+
+/**
+ * The notice this chat gets when more clips of the explainer it asked for are ready: shown in the
+ * chat, never read by the model. `told` is how many it was already told about. Null when there's
+ * nothing new, or the build is another chat's explainer or a course's.
+ */
+export function readyNotice(build: LearnBuild | null | undefined, explainer: string | null, told: number): { done: number; text: string } | null {
+  if (!build || !explainer || build.kind !== 'explain' || build.explain !== explainer || build.done <= told) return null
+  const text =
+    build.total <= 1 ? `The clip of "${build.topic}" is ready · /clips opens it` : `${build.done} of ${build.total} clips of "${build.topic}" are ready · /clips opens them`
+  return { done: build.done, text }
+}

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { acceptedText, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, readExplainAnswer, refusalText } from '../hooks/explain'
-import { courseArgv, isLearnBusy, learnStatusPath, readLearnStatus } from '../hooks/learn'
+import { courseArgv, isLearnBusy, learnStatusPath, readLearnStatus, readyNotice } from '../hooks/learn'
 import { panelState } from '../hooks/widget'
 import { answerHost, PLAN, STATE } from './host'
 
@@ -154,10 +154,21 @@ describe('/explain', () => {
     const picked = acceptedText({ clips: 6, wanted: 4, depth: 2 })
     expect(picked).toContain('making 4 clips (of 6; depth: the mechanism)')
     expect(picked).toContain('Nothing was opened')
-    expect(picked).toContain('"Making 4 clips; the first is ready in about 3 minutes. /clips opens them; /learn library lists every explainer."')
+    expect(picked).toContain('"Making 4 clips, the first in about 3 minutes; a notice here says when each is ready. /clips opens them; /learn library lists every explainer."')
     const unpicked = acceptedText({ clips: 1, wanted: 1, depth: null })
     expect(unpicked).toContain('1 clip; the player will ask how deep to go')
-    expect(unpicked).toContain('"Making 1 clip;')
+    expect(unpicked).toContain('"Making 1 clip,')
+  })
+
+  test("a notice in the chat says when more of the explainer it asked for are ready; never another chat's, never twice", () => {
+    const build = (done: number, total: number, explain = 'x202611181332459e') => ({ id: 'j2', kind: 'explain', explain, topic: 'Tokens', step: 'clips', state: 'running' as const, message: '', done, total })
+    expect(readyNotice(build(1, 4), 'x202611181332459e', 0)).toEqual({ done: 1, text: '1 of 4 clips of "Tokens" are ready · /clips opens them' })
+    expect(readyNotice(build(1, 4), 'x202611181332459e', 1)).toBeNull()
+    expect(readyNotice(build(1, 1), 'x202611181332459e', 0)?.text).toBe('The clip of "Tokens" is ready · /clips opens it')
+    expect(readyNotice(build(2, 4, 'x202611200000bbbb'), 'x202611181332459e', 0)).toBeNull()
+    expect(readyNotice(build(2, 4), null, 0)).toBeNull()
+    expect(readyNotice({ ...build(2, 4), kind: 'video' }, 'x202611181332459e', 0)).toBeNull()
+    expect(readyNotice(null, 'x202611181332459e', 0)).toBeNull()
   })
 
   test("/explain's brief: what you typed, one line first, the depth asked in the chat, then the tool with it", () => {

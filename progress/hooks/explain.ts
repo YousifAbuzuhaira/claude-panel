@@ -113,7 +113,7 @@ const DEPTHS = { 1: 'the idea', 2: 'the mechanism', 3: 'everything' } as const
 export function acceptedText(answer: { clips: number; wanted: number; depth: 1 | 2 | 3 | null }): string {
   const plural = (n: number) => `${n} clip${n === 1 ? '' : 's'}`
   const made = answer.depth ? `${plural(answer.wanted)} (of ${answer.clips}; depth: ${DEPTHS[answer.depth]})` : `${plural(answer.clips)}; the player will ask how deep to go after the first`
-  const line = `Making ${plural(answer.depth ? answer.wanted : answer.clips)}; the first is ready in about 3 minutes. /clips opens them; /learn library lists every explainer.`
+  const line = `Making ${plural(answer.depth ? answer.wanted : answer.clips)}, the first in about 3 minutes; a notice here says when each is ready. /clips opens them; /learn library lists every explainer.`
   return `Learn accepted the plan and is making ${made}. Nothing was opened. Reply with this one line and nothing else: "${line}"`
 }
 

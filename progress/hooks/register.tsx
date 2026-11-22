@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PhasePlan, TestRun } from '../types'
-import { courseArgv, isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus } from './learn'
+import { courseArgv, isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus, readyNotice } from './learn'
 import { acceptedText, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, readExplainAnswer, refusalText } from './explain'
 import type { LearnStatus } from './learn'
 import { GAMES, isGame, openingText, windowScript } from './pages'
@@ -84,8 +84,10 @@ let isOff = false
 let learn: LearnStatus | null = null
 let learnText = ''
 let learnTimer: Timer | null = null
-// The explainer Learn last accepted in this session: what /clips opens.
+// The explainer Learn last accepted in this session: what /clips opens, and how many of its clips
+// this chat has been told are ready.
 let lastExplainer: string | null = null
+let clipsTold = 0
 let syncing: Promise<void> = Promise.resolve()
 // The pane (off WezTerm-on-WSL): the tab in front, the one the person clicked (it stays
 // until a new run or a new plan), and the newest run and plan it has seen.
@@ -427,6 +429,13 @@ async function pollLearn($: EngineInterface) {
   if (text === learnText) return
   learnText = text
   learn = text ? readLearnStatus(text, await $.clock.now()) : null
+  // A clip of the explainer this chat asked for is ready: a notice in the chat (the model never
+  // reads it, so no turn starts).
+  const notice = readyNotice(learn?.build, lastExplainer, clipsTold)
+  if (notice) {
+    clipsTold = notice.done
+    void $.session.append({ message: { type: 'system', content: [{ type: 'text', text: notice.text }] } }).catch(() => undefined)
+  }
   await syncPanel($)
   if (isPaneOpen) $.ui.invalidate('ui.render')
 }
@@ -788,6 +797,7 @@ export const register: Register = on => {
     if (!answer.ok) return { deny: refusalText(answer.problems) }
     // Nothing opens by itself: /clips, the Library and the panel's Learn tab open it.
     lastExplainer = answer.id
+    clipsTold = 0
     return { result: acceptedText(answer) }
   }).catch(() => ({ deny: 'Learn failed to take the plan; tell the person, and explain in text instead if they want.' }))
 
