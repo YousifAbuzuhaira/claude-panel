@@ -802,6 +802,9 @@ if (questionsOn() && keptGuess && firstGuess && scenes[shownScene]?.check === fi
   else answer(keptGuess.k);
   autoStart();
 } else if (outer && !questionsOn()) autoStart();
+// An explainer's clips are made while you watch, and stop being made after 20 minutes nobody did:
+// an open clip says you're here every minute, so a long pause on it doesn't stop the next ones.
+if (outer) setInterval(() => rpc('explain.at', { id: explainId, n: clipN }).catch(() => {}), 60_000);
 loop();
 
 // For stills of a moment: tools/shoot.mjs --eval "player.hold(120)".

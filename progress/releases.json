@@ -2,6 +2,15 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.17.1",
+      "date": "2026-11-22",
+      "by": "Yousif",
+      "notes": [
+        "An explainer clip left waiting is made when you open it",
+        "An open clip keeps the next clips coming, however long you pause"
+      ]
+    },
+    {
       "version": "0.17.0",
       "date": "2026-11-22",
       "by": "Yousif",

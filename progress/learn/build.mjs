@@ -96,16 +96,27 @@ export async function startExplainer(lib, { plan, sessionId, cwd, io = defaultIo
   const checked = await checkExplainer({ plan, sessionId, cwd, io, model: lib.settings.models.video });
   if (checked.problems) return { problems: checked.problems };
   const explainer = saveExplainer(lib, checked.explainer);
+  const job = explainJob(lib, explainer);
+  return { id: explainer.id, clips: explainer.clips.length, job: job.id };
+}
+
+/**
+ * The job making an explainer's clips: the one running, or a new one. A job stops after 20 minutes
+ * nobody watched, so opening a clip it hasn't made starts it again (`explain.at`). A course's video
+ * job pauses for it, its script kept, and goes on after.
+ */
+export function explainJob(lib, explainer) {
+  const running = listJobs(lib).find(job => job.kind === 'explain' && job.explain === explainer.id && job.state === 'running');
+  if (running) return running;
   const videos = videoJob(lib);
-  const paused = videos?.state === 'running';
-  if (paused) cancelJob(lib, videos.id);
+  if (videos?.state === 'running') cancelJob(lib, videos.id);
   const stamp = now().replace(/[-:T]/g, '').slice(0, 12);
   const job = saveJob(lib, {
     v: 1, id: `j${stamp}${randomBytes(2).toString('hex')}`, kind: 'explain', explain: explainer.id, topic: explainer.title, courseTitle: 'Explainer', link: null, category: null, mode: 'page', courseId: null, summary: null,
     step: 'voice', state: 'running', message: 'Getting ready', done: 0, total: explainer.clips.length, working: [], leftMinutes: null, candidates: null, picks: null, pid: null, error: null, startedAt: now(),
   });
   startDaemon(lib, job.id);
-  return { id: explainer.id, clips: explainer.clips.length, job: job.id };
+  return job;
 }
 
 /** Rewrite one page (`n`, with an optional note), or add one on `topic` after page `after`. */

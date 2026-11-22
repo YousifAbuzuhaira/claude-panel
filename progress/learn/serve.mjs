@@ -15,10 +15,10 @@ import { markTerms, pageGlossary } from './terms.mjs';
 import { shuffled } from './teach.mjs';
 import { askStructured, describeTool } from './claude.mjs';
 import { chatKey, clearChat, listAdvisorChats, readChat, removeAdvisorChat, sendChat } from './chat.mjs';
-import { cancelJob, createJob, createPageJob, createRefreshJob, dropJobFiles, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon, startVideos, videoJob } from './build.mjs';
+import { cancelJob, createJob, createPageJob, createRefreshJob, dropJobFiles, explainJob, listJobs, pickSources, readJob, resumeJob, resumeStale, saveJob, startDaemon, startVideos, videoJob } from './build.mjs';
 import { videoStamp } from './video-check.mjs';
 import { clearQueue, courseVideos, queueVideos, swapVideo, videoInfo } from './video.mjs';
-import { explainInfo, explainPaths, readExplainer, updateExplainer } from './explain.mjs';
+import { explainInfo, explainPaths, inDepth, readExplainer, updateExplainer } from './explain.mjs';
 import { voiceStatus } from './voice.mjs';
 import { ensureYtDlp, installedYtDlp } from './deps.mjs';
 import {
@@ -225,6 +225,11 @@ export function createServer({ write = text => process.stdout.write(text) } = {}
         depth: [1, 2, 3].includes(Number(depth)) ? Number(depth) : now.depth,
         seenAt: new Date().toISOString(),
       }));
+      // A clip asked for that isn't made, with nothing making it (the job stopped after 20 minutes
+      // nobody watched): it starts again. The player also says it's here every minute it's open.
+      const clip = explainer.clips[explainer.at - 1];
+      const wanted = explainer.at === 1 || (explainer.depth && clip && inDepth(clip, explainer.depth));
+      if (wanted && !existsSync(`${explainPaths(lib, explainer.id).clip(explainer.at)}.json`)) explainJob(lib, explainer);
       return explainInfo(lib, explainer);
     },
     'video.audio': ({ courseId, n }) => {
