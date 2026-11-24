@@ -97,6 +97,17 @@ export function readLearnStatus(raw: string, now: number): LearnStatus | null {
 export const isLearnBusy = (status: LearnStatus | null) => status?.build?.state === 'running'
 
 /**
+ * The notice for an explainer whose making stopped (failed or paused) before its last clip: the
+ * explain plugin has no panel to show it. `key` is this stop, so it's told once; null when nothing
+ * stopped, or the build is another chat's explainer or a course's.
+ */
+export function stoppedNotice(build: LearnBuild | null | undefined, explainer: string | null): { key: string; text: string } | null {
+  if (!build || !explainer || build.kind !== 'explain' || build.explain !== explainer) return null
+  if ((build.state !== 'failed' && build.state !== 'paused') || (build.total > 0 && build.done >= build.total)) return null
+  return { key: `${build.id}:${build.state}:${build.message}`, text: `"${build.topic}": ${build.message || 'stopped'} · ${build.done} of ${build.total} clips ready · /clips carries on` }
+}
+
+/**
  * The notice this chat gets when more clips of the explainer it asked for are ready: shown in the
  * chat, never read by the model. `told` is how many it was already told about. Null when there's
  * nothing new, or the build is another chat's explainer or a course's. The last one names the file
@@ -106,7 +117,22 @@ export function readyNotice(build: LearnBuild | null | undefined, explainer: str
   if (!build || !explainer || build.kind !== 'explain' || build.explain !== explainer || build.done <= told) return null
   const ready =
     build.total <= 1 ? `The clip of "${build.topic}" is ready · /clips opens it` : `${build.done} of ${build.total} clips of "${build.topic}" are ready · /clips opens them`
-  const file = build.file && home && build.file.startsWith(`${home}/`) ? `~${build.file.slice(home.length)}` : build.file
+  const file = shownPath(build.file, home)
   const text = file && build.done >= build.total ? `${ready} · as one file: ${file}` : ready
   return { done: build.done, text }
+}
+
+/** A path under home as the person would write it. */
+const shownPath = (file: string | null | undefined, home: string) => (file && home && file.startsWith(`${home}/`) ? `~${file.slice(home.length)}` : file || null)
+
+/**
+ * What Claude is told when the last clip is ready, as a row only the model reads (it starts no turn
+ * and isn't drawn): the person's own notice is a line the model never sees, so without this "are
+ * they done?" sends it looking on disk. Null before the last clip.
+ */
+export function readyNote(build: LearnBuild | null | undefined, home = ''): string | null {
+  if (!build || build.total < 1 || build.done < build.total) return null
+  const file = shownPath(build.file, home)
+  const clips = build.total === 1 ? `The clip of "${build.topic}" is ready` : `All ${build.total} clips of "${build.topic}" are ready`
+  return `[/explain, not typed by the person] ${clips}${file ? `, as one file: ${file}` : ''}. They were told in the chat, and /clips opens it. There is nothing to do or say now; use this only if they ask.`
 }

@@ -24,4 +24,7 @@ if [ -z "$node_bin" ]; then
 fi
 # claude installed with npm sits next to that node.
 export PATH="$(dirname "$node_bin"):$PATH"
-exec "$node_bin" "$here/learn.mjs" "$@"
+# The explain plugin carries only explain-cli.mjs: the same calls, nothing of courses.
+target="$here/learn.mjs"
+[ -f "$target" ] || target="$here/explain-cli.mjs"
+exec "$node_bin" "$target" "$@"

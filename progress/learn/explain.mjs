@@ -15,8 +15,7 @@ import { markdownToBlocks } from './markdown.mjs';
 import { readSettings } from './settings.mjs';
 import { readJson, renameRetry, withLock, writeJson } from './store.mjs';
 import { norm } from './video-check.mjs';
-import { writeScript } from './video-script.mjs';
-import { videoEffort } from './video.mjs';
+import { videoEffort, writeScript } from './video-script.mjs';
 
 export const MAX_CLIPS = 12;
 const MAX_ANCHOR_LINES = 60;

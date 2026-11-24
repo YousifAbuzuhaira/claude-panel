@@ -5,6 +5,10 @@ import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureYtDlp } from './deps.mjs';
+import { parseTime, watchUrl } from './markdown.mjs';
+
+// Moved to markdown.mjs, which needs them and nothing else of here.
+export { parseTime, watchUrl };
 
 // --- Time --------------------------------------------------------------------------
 
@@ -16,12 +20,6 @@ export function formatTime(seconds) {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
 
-/** `1:02:03`, `62:03` or `75` to seconds; NaN when it isn't a time. */
-export function parseTime(text) {
-  const parts = String(text).trim().split(':');
-  if (parts.length > 3 || parts.some(part => !/^\d{1,3}$/.test(part))) return NaN;
-  return parts.reduce((total, part) => total * 60 + Number(part), 0);
-}
 
 // --- YouTube urls ---------------------------------------------------------------------
 
@@ -39,7 +37,6 @@ export function isPlaylist(url) {
 
 export const isYouTube = url => /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\//.test(String(url));
 
-export const watchUrl = (id, seconds) => `https://www.youtube.com/watch?v=${id}${seconds > 0 ? `&t=${Math.floor(seconds)}s` : ''}`;
 
 // --- Captions --------------------------------------------------------------------------
 

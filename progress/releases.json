@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.20.0",
+      "date": "2026-11-24",
+      "by": "Yousif",
+      "notes": [
+        "Colleagues can have /explain alone, as its own small plugin",
+        "A clip is never recorded twice when a job restarts",
+        "Clip-ready notices really show, and Claude knows when they finish"
+      ]
+    },
+    {
       "version": "0.19.0",
       "date": "2026-11-22",
       "by": "Yousif",

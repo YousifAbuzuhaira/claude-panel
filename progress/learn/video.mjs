@@ -4,15 +4,15 @@
 import { existsSync, rmSync } from 'node:fs';
 import { readCourse, readPage, recordUsage } from './library.mjs';
 import { estimate, isOldPage, videoStamp } from './video-check.mjs';
-import { writeScript } from './video-script.mjs';
+import { videoEffort, writeScript } from './video-script.mjs';
 import { voiceStatus } from './voice.mjs';
 import { readSettings } from './settings.mjs';
 import { readJson, renameRetry, withLock, writeJson } from './store.mjs';
 
 export const readQueue = lib => readJson(lib.paths.videoQueue) || [];
 
-/** How hard the model thinks about a script. Opus at low effort kept its detail at half the usage. */
-export const videoEffort = model => (/opus/.test(model) ? 'low' : 'high');
+// How hard the model thinks about a script: in video-script.mjs, which explainers use without this queue.
+export { videoEffort };
 
 const inQueue = (queue, courseId, n) => queue.some(item => item.courseId === courseId && item.n === n);
 

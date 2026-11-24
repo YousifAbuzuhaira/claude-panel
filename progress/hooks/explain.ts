@@ -81,11 +81,18 @@ export const EXPLAIN_TOOL_SCHEMA = {
 export const EXPLAIN_TOOL_DESCRIPTION =
   "Hands Learn a plan for short narrated video clips explaining code from this session (the /explain command), with the depth the person picked. Learn checks the plan against the files and this chat, refusing with what to fix, then makes the clips. Nothing opens by itself. Call it only when /explain asked you to."
 
-/** The helper that checks a plan and starts making it: the plan goes on its standard input. */
-export function explainArgv({ pluginRoot, sessionId, cwd, isWindows = false }: { pluginRoot: string; sessionId: string; cwd: string; isWindows?: boolean }): string[] {
-  const helper = isWindows ? ['node', `${pluginRoot}/learn/learn.mjs`] : ['bash', `${pluginRoot}/learn/learn.sh`]
+/**
+ * The helper that checks a plan and starts making it: the plan goes on its standard input. `entry`
+ * is what Node runs on Windows (where `bash` is WSL's): learn.mjs here, explain-cli.mjs in the
+ * explain plugin, which carries no learn.mjs (learn.sh finds which by itself).
+ */
+export function explainArgv({ pluginRoot, sessionId, cwd, isWindows = false, entry = 'learn.mjs' }: { pluginRoot: string; sessionId: string; cwd: string; isWindows?: boolean; entry?: string }): string[] {
+  const helper = isWindows ? ['node', `${pluginRoot}/learn/${entry}`] : ['bash', `${pluginRoot}/learn/learn.sh`]
   return [...helper, 'explain', 'start', '--session', sessionId, '--cwd', cwd]
 }
+
+/** The tool's full name in a session: `mcp__<plugin>__explain_plan` (progress, or the explain plugin). */
+export const explainToolName = (plugin = 'progress') => `mcp__${plugin}__${EXPLAIN_TOOL}`
 
 export type ExplainAnswer = { ok: true; id: string; clips: number; wanted: number; depth: 1 | 2 | 3 | null } | { ok: false; problems: string[] }
 
@@ -109,22 +116,47 @@ export const refusalText = (problems: string[]) => `Learn refused the plan. Fix 
 
 const DEPTHS = { 1: 'the idea', 2: 'the mechanism', 3: 'everything' } as const
 
-/** The tool's answer when Learn takes the plan: what was started, and the one line to reply with. */
-export function acceptedText(answer: { clips: number; wanted: number; depth: 1 | 2 | 3 | null }): string {
+/** First use of the voice in the explain plugin: said once, in the reply. */
+export const FIRST_RUN = 'First run: getting the voice (about 350 MB, once), so the first clip takes a few minutes longer.'
+
+/**
+ * The tool's answer when Learn takes the plan: what was started, and the one line to reply with.
+ * In the explain plugin (`library: false`) there is no Learn to list explainers, and `/clips`
+ * opens the file; `firstRun` adds that the voice is being set up.
+ */
+export function acceptedText(answer: { clips: number; wanted: number; depth: 1 | 2 | 3 | null }, { library = true, firstRun = false }: { library?: boolean; firstRun?: boolean } = {}): string {
   const plural = (n: number) => `${n} clip${n === 1 ? '' : 's'}`
   const made = answer.depth ? `${plural(answer.wanted)} (of ${answer.clips}; depth: ${DEPTHS[answer.depth]})` : `${plural(answer.clips)}; the player will ask how deep to go after the first`
-  const line = `Making ${plural(answer.depth ? answer.wanted : answer.clips)}, the first in about 3 minutes; a notice here says when each is ready. /clips opens them; /learn library lists every explainer.`
+  const count = plural(answer.depth ? answer.wanted : answer.clips)
+  const line = library
+    ? `Making ${count}, the first in about 3 minutes; a notice here says when each is ready. /clips opens them; /learn library lists every explainer.`
+    : `${firstRun ? `${FIRST_RUN} ` : ''}Making ${count}, the first in about 3 minutes; a notice here says when each is ready, and /clips opens them as one file.`
   return `Learn accepted the plan and is making ${made}. Nothing was opened. Reply with this one line and nothing else: "${line}"`
 }
 
 /**
- * What /explain hands the session, as your own message: plan the clips from the code, ask how deep
- * to go, then hand the plan to Learn. `what` is what you typed after /explain.
+ * How to open a file (an exported explainer) with its default app: on WSL and Windows, explorer.exe
+ * (it opens a file as a double-click does; on WSL the file's \\wsl.localhost path), on a Mac
+ * `open`, elsewhere `xdg-open`.
  */
-export function explainBrief(what: string): string {
+export function openFileArgv({ path, platform, distro = null }: { path: string; platform: string; distro?: string | null }): string[] {
+  if (platform === 'win32') return ['explorer.exe', path.replaceAll('/', '\\')]
+  if (distro) return ['explorer.exe', `\\\\wsl.localhost\\${distro}${path.replaceAll('/', '\\')}`]
+  if (platform === 'darwin') return ['open', path]
+  return ['xdg-open', path]
+}
+
+/**
+ * What /explain hands the session, as your own message: plan the clips from the code, ask how deep
+ * to go, then hand the plan to Learn. `what` is what you typed after /explain; `plugin` names the
+ * tool (progress, or the explain plugin, which has no player to ask the depth later).
+ */
+export function explainBrief(what: string, { plugin = 'progress' }: { plugin?: string } = {}): string {
   const topic = what.replace(/\s+/g, ' ').trim().slice(0, 500)
+  const tool = explainToolName(plugin)
+  const noDepth = plugin === 'progress' ? 'If you can\'t ask, leave "depth" out.' : 'If you can\'t ask, use depth 2.'
   return [
-    `Explain this to me as short narrated video clips, made by Learn: ${topic || 'what we are working on'}`,
+    `Explain this to me as short narrated video clips, made ${plugin === 'progress' ? 'by Learn' : 'on this computer'}: ${topic || 'what we are working on'}`,
     '',
     "Don't explain it here in text: plan the clips and hand them to Learn.",
     '',
@@ -136,8 +168,8 @@ export function explainBrief(what: string): string {
     "5. Each clip opens with a guess question: 3 options, one right, each wrong one a believable mistake, each with a one-sentence why, and a quote from the clip's facts or code that states the right answer. Make it about the clip's central mechanism. (Learn uses it only when my Questions setting is on.)",
     '6. If a fact describes something that really went wrong in this work (a bug we fixed, a failing test, an idea that turned out false), list its number in "failure": the clip opens on it.',
     '7. The map: "flow" when something moves from part to part (a request through services), "parts" for parts of one whole, "none" under 3 clips. At most 4 top boxes, labels of 1 to 3 words; each clip in one box.',
-    '8. Ask me once how deep to go, with AskUserQuestion (header "Depth", question "How deep should it go?"). One option per depth that adds clips, N counting your plan\'s clips up to that level: "The idea · N clips" (depth 1: level 1), "The mechanism, and the code that does it · N clips" (depth 2: levels 1 and 2), "Everything, with failure modes and edges · N clips" (depth 3: all). Leave out a depth that adds no clip; with one option left, don\'t ask and use it. If you can\'t ask, leave "depth" out.',
-    `9. Call the tool mcp__progress__${EXPLAIN_TOOL} with the plan and "depth" (1, 2 or 3). If its schema isn't loaded, load it with ToolSearch (select:mcp__progress__${EXPLAIN_TOOL}). If Learn refuses the plan, fix what it lists and call it again with the same depth, without asking again.`,
+    '8. Ask me once how deep to go, with AskUserQuestion (header "Depth", question "How deep should it go?"). One option per depth that adds clips, N counting your plan\'s clips up to that level: "The idea · N clips" (depth 1: level 1), "The mechanism, and the code that does it · N clips" (depth 2: levels 1 and 2), "Everything, with failure modes and edges · N clips" (depth 3: all). Leave out a depth that adds no clip; with one option left, don\'t ask and use it. ' + noDepth,
+    `9. Call the tool ${tool} with the plan and "depth" (1, 2 or 3). If its schema isn't loaded, load it with ToolSearch (select:${tool}). If Learn refuses the plan, fix what it lists and call it again with the same depth, without asking again.`,
     '10. When it accepts, reply with the one line the tool gives you, and nothing else. Nothing opens by itself.',
   ].join('\n')
 }

@@ -9,7 +9,16 @@
 // page's video at that second (`[s4 12:34]` into source s4's, when a page has two videos);
 // `[sec: Heading]` a link to that part of the source page.
 import { diagramBlock } from './diagram.mjs';
-import { parseTime, watchUrl } from './sources.mjs';
+
+/** `1:02:03`, `62:03` or `75` to seconds; NaN when it isn't a time. */
+export function parseTime(text) {
+  const parts = String(text).trim().split(':');
+  if (parts.length > 3 || parts.some(part => !/^\d{1,3}$/.test(part))) return NaN;
+  return parts.reduce((total, part) => total * 60 + Number(part), 0);
+}
+
+/** A YouTube video's page, at a second when one is given. */
+export const watchUrl = (id, seconds) => `https://www.youtube.com/watch?v=${id}${seconds > 0 ? `&t=${Math.floor(seconds)}s` : ''}`;
 
 /** The mark after something Claude added from its own knowledge: "(added)", or "(added; why)". */
 export const ADDED_MARK = /\((added)(?:[;,:][^)\n]*)?\)/;

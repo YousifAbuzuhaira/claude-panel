@@ -3,14 +3,14 @@
 // steps: plan-page (for an added page), then pages. Each step is safe to run again, so a build stopped by a closed window, a
 // sleep or a reboot carries on from where it got to. Builds run as their own detached
 // process (`learn.mjs build run <id>`), so closing the window doesn't stop them.
-import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { applyProposals, compactCatalogue, ensureCategory, findCategory, stateOf } from './catalogue.mjs';
 import { askStructured, describeTool, stopAll } from './claude.mjs';
-import { activeJobFor, buildStatus, newCourseId, readCatalogue, readCourse, readStatus, recordUsage, updateCatalogue, updateCourse, writeStatus } from './library.mjs';
+import { activeJobFor, newCourseId, readCatalogue, readCourse, readStatus, recordUsage, updateCatalogue, updateCourse, writeStatus } from './library.mjs';
 import { inlineText, markdownToBlocks, patchSections } from './markdown.mjs';
 import { askNumbers, cleanAsks, picksCovering, uncovered } from './coverage.mjs';
 import { overlapReport } from './overlap.mjs';
@@ -20,8 +20,9 @@ import {
 } from './prompts.mjs';
 import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, placeChecks, quoteState, pageMap, tidyAids } from './teach.mjs';
 import { makeVideos, readQueue } from './video.mjs';
-import { checkExplainer, clipCounts, makeExplainer, readExplainer, saveExplainer, wantedClips } from './explain.mjs';
+import { explainJob as explainJobShared, runExplainJob, startExplainer as startExplainerShared } from './explain-job.mjs';
 import { exportExplainer } from './export.mjs';
+import { isAlive, isJobLive, listJobs, now, readJob, saveJob, spawnJob } from './jobs.mjs';
 import { MAX_DISPUTES, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from './verify.mjs';
 import { ensureVoice, record } from './voice.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
@@ -43,30 +44,10 @@ const OUTLINE_BUDGET = 240_000; // characters of source material for the outline
 const PAGE_BUDGET = 150_000; // characters of the main source for one page
 const SUPPORT_BUDGET = 50_000;
 
-const START_GRACE_MS = 60_000; // a job just started, before its process writes its pid
-
-const now = () => new Date().toISOString();
-
 // --- Jobs ------------------------------------------------------------------------------
 
-export const readJob = (lib, id) => readJson(lib.paths.job(id));
-
-export function saveJob(lib, job) {
-  const next = { ...job, updatedAt: now() };
-  withLock(lib.root, () => writeJson(lib.paths.job(job.id), next));
-  writeStatus({ build: buildStatus(next) });
-  return next;
-}
-
-export function listJobs(lib) {
-  let names = [];
-  try {
-    names = readdirSync(lib.paths.jobs).filter(name => name.endsWith('.json'));
-  } catch {
-    return [];
-  }
-  return names.map(name => readJson(`${lib.paths.jobs}/${name}`)).filter(Boolean).sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
-}
+// A job's file and process: in jobs.mjs, shared with explainers.
+export { listJobs, readJob, saveJob };
 
 /** The job making videos, if there is one: one for the whole library, and it has no course. */
 export const videoJob = lib => listJobs(lib).find(job => job.kind === 'video' && job.state !== 'done' && !job.dismissed) || null;
@@ -88,44 +69,21 @@ export function startVideos(lib) {
 }
 
 /**
- * An explainer from your session's plan (/explain): checked first, all of it (`{ problems }` go back
- * to the session), then made by a job of its own, so the clips you wait on never queue behind a
- * course's videos. Only one voice records at a time: a course's video job pauses, its script kept,
- * and goes on when the explainer is done.
+ * An explainer from your session's plan (/explain), checked and made as explain-job.mjs does it,
+ * its job run as `learn.mjs build run` (runJob), so a course's videos go on when it's done. Only
+ * one voice records at a time: a course's video job pauses, its script kept.
  */
-export async function startExplainer(lib, { plan, sessionId, cwd, io = defaultIo }) {
-  if (!SESSION_ID.test(String(sessionId || ''))) throw new Error('that is not a chat id');
-  if (!cwd || !existsSync(cwd)) throw new Error("the session's folder is not on this computer");
-  const checked = await checkExplainer({ plan, sessionId, cwd, io, model: lib.settings.models.video });
-  if (checked.problems) return { problems: checked.problems };
-  const explainer = saveExplainer(lib, checked.explainer);
-  const job = explainJob(lib, explainer);
-  return { id: explainer.id, clips: explainer.clips.length, wanted: wantedClips(explainer), depth: explainer.depth, job: job.id };
-}
+export const startExplainer = (lib, options) => startExplainerShared(lib, { io: defaultIo, ...options, job: explainJob });
 
-/**
- * The job making an explainer's clips: the one running, or a new one. A job counts as running only
- * while its process lives, so one killed by a reboot or a WSL shutdown carries on when the player
- * opens (`explain.at`). A course's video job pauses for it, its script kept, and goes on after.
- */
+/** The job making an explainer's clips (explain-job.mjs), a course's video job paused first. */
 export function explainJob(lib, explainer) {
-  const running = listJobs(lib).find(job => job.kind === 'explain' && job.explain === explainer.id && job.state === 'running');
-  // Just started: its process hasn't written its pid yet.
-  const starting = job => !job.pid && Date.now() - Date.parse(job.updatedAt || job.startedAt) < START_GRACE_MS;
-  if (running && (starting(running) || (running.pid && isAlive(running.pid)))) return running;
-  const videos = videoJob(lib);
-  if (videos?.state === 'running') cancelJob(lib, videos.id);
-  if (running) {
-    resumeJob(lib, running.id);
-    return readJob(lib, running.id);
-  }
-  const stamp = now().replace(/[-:T]/g, '').slice(0, 12);
-  const job = saveJob(lib, {
-    v: 1, id: `j${stamp}${randomBytes(2).toString('hex')}`, kind: 'explain', explain: explainer.id, topic: explainer.title, courseTitle: 'Explainer', link: null, category: null, mode: 'page', courseId: null, summary: null,
-    step: 'voice', state: 'running', message: 'Getting ready', done: 0, total: wantedClips(explainer), working: [], leftMinutes: null, candidates: null, picks: null, pid: null, error: null, startedAt: now(),
+  return explainJobShared(lib, explainer, {
+    daemon: id => [LEARN_MJS, 'build', 'run', id],
+    before: () => {
+      const videos = videoJob(lib);
+      if (videos?.state === 'running') cancelJob(lib, videos.id);
+    },
   });
-  startDaemon(lib, job.id);
-  return job;
 }
 
 /** Rewrite one page (`n`, with an optional note), or add one on `topic` after page `after`. */
@@ -271,30 +229,8 @@ export function dropJobFiles(lib, job) {
   }
 }
 
-const isAlive = pid => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === 'EPERM';
-  }
-};
-
 /** Starts `learn.mjs build run <id>` on its own, outliving whoever started it. */
-export function startDaemon(lib, id) {
-  mkdirSync(lib.paths.jobs, { recursive: true });
-  const log = openSync(lib.paths.jobLog(id), 'a');
-  const child = spawn(process.execPath, [LEARN_MJS, 'build', 'run', id], {
-    detached: true,
-    stdio: ['ignore', log, log],
-    cwd: lib.root,
-    env: { ...process.env, CLAUDE_PROGRESS_OFF: '1' },
-    // Hidden on Windows: else the build, and every claude it starts, opens a console window.
-    windowsHide: true,
-  });
-  child.unref();
-  return child.pid;
-}
+export const startDaemon = (lib, id) => spawnJob(lib, id, [LEARN_MJS, 'build', 'run', id]);
 
 /**
  * Stops a build. Elsewhere SIGTERM lets it stop its own claude runs; Windows has no signals
@@ -312,8 +248,8 @@ function stopBuild(pid) {
 export function resumeStale(lib) {
   const resumed = [];
   for (const job of listJobs(lib)) {
-    if (job.state === 'running' && (!job.pid || !isAlive(job.pid))) {
-      saveJob(lib, { ...job, message: `Carrying on: ${job.message || job.step}` });
+    if (job.state === 'running' && !isJobLive(job)) {
+      saveJob(lib, { ...job, pid: null, message: `Carrying on: ${job.message || job.step}` });
       startDaemon(lib, job.id);
       resumed.push(job.id);
     }
@@ -334,9 +270,9 @@ export function pickSources(lib, id, picks) {
 export function resumeJob(lib, id) {
   const job = readJob(lib, id);
   if (!job) throw new Error('no such build');
-  if (job.state === 'running' && job.pid && isAlive(job.pid)) return;
+  if (isJobLive(job)) return;
   if (job.state === 'done') return;
-  saveJob(lib, { ...job, state: 'running', error: null, message: `Carrying on: ${job.step}` });
+  saveJob(lib, { ...job, pid: null, state: 'running', error: null, message: `Carrying on: ${job.step}` });
   startDaemon(lib, id);
 }
 
@@ -354,6 +290,12 @@ export function cancelJob(lib, id) {
 export const defaultIo = { askStructured, ytSearch, ytInfo, ytCaptions, ytPlaylist, fetchPage, ensureYtDlp, readDocument, readClaudeChat, ensureVoice, record, exportExplainer };
 
 export async function runJob(lib, id, io = defaultIo) {
+  if (readJob(lib, id)?.kind === 'explain') {
+    const job = await runExplainJob(lib, id, io);
+    // A course's videos, paused for this, go on.
+    if (job.state === 'done' && readQueue(lib).length) startVideos(lib);
+    return job;
+  }
   let job = readJob(lib, id);
   if (!job) throw new Error(`no build ${id}`);
   const save = patch => {
@@ -368,26 +310,6 @@ export async function runJob(lib, id, io = defaultIo) {
   process.once('SIGTERM', onStop);
   save({ pid: process.pid, state: 'running', error: null });
   try {
-    if (job.kind === 'explain') {
-      writeJson(lib.paths.explaining, { pid: process.pid, id: job.explain });
-      try {
-        if (job.step === 'voice') {
-          await io.ensureVoice({ onProgress: message => save({ message }) });
-          save({ step: 'clips' });
-        }
-        const made = await makeExplainer({ lib, io, id: job.explain, save, isStopping: () => stopping });
-        // Every clip ready, not only this run's: a job carried on after a reboot made just the rest.
-        const explainer = readExplainer(lib, job.explain);
-        const { done, total } = explainer ? clipCounts(lib, explainer) : { done: made, total: made };
-        const message = done < total ? `${done} of ${total} clips ready` : total === 1 ? 'Your clip is ready' : `${total} clips ready`;
-        save({ step: 'done', state: 'done', making: null, message, done, total });
-      } finally {
-        rmSync(lib.paths.explaining, { force: true });
-      }
-      // A course's videos, paused for this, go on.
-      if (readQueue(lib).length) startVideos(lib);
-      return job;
-    }
     if (job.kind === 'video') {
       if (job.step === 'voice') {
         await io.ensureVoice({ onProgress: message => save({ message }) });

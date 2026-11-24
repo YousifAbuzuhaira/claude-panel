@@ -946,6 +946,16 @@ describe("an explainer's job", () => {
     saveJob(lib, { ...starting, state: 'done' });
   });
 
+  test("a job really running: its process lives, or it was just (re)started and hasn't written its pid; never by its state alone", async () => {
+    const { isJobLive } = await import('../jobs.mjs');
+    const job = patch => ({ state: 'running', pid: null, updatedAt: new Date().toISOString(), ...patch });
+    assert.equal(isJobLive(job({ pid: process.pid })), true);
+    assert.equal(isJobLive(job({ pid: 2 ** 30 })), false, 'its process is gone (a reboot)');
+    assert.equal(isJobLive(job({})), true, 'restarted: no pid yet, so asked again at once it is not started twice');
+    assert.equal(isJobLive(job({ updatedAt: new Date(Date.now() - 5 * 60_000).toISOString() })), false, 'it never came up');
+    for (const state of ['done', 'failed', 'paused']) assert.equal(isJobLive(job({ state, pid: process.pid })), false, state);
+  });
+
   test('when it ends, it counts every clip ready, not only the ones this run made', async () => {
     const lib = openLibrary();
     const explainer = saveExplainer(lib, { title: 'Carried on', depth: 2, at: 1, clips: [clip(1), clip(2), clip(2), clip(3)], createdAt: new Date().toISOString() });

@@ -1,11 +1,15 @@
 // A page to a video's script: Claude writes each section as scenes (data, never code), and each
 // is tested as the player would draw it, repaired, or rebuilt from the page. Then someone who only
 // watches answers the questions, and a check compares the script with the page, both ways.
-import { READER_SCHEMA, readerPrompt } from './prompts.mjs';
+import { READER_SCHEMA, readerPrompt } from './reader.mjs';
 import { codeNeeds, faultsBySection, firstTaught, flattenPage, hearing, keptOnScreen, layoutNotes, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, withBlockRead } from './video-check.mjs';
 import { OPENER_SCHEMA, OPENER_WORDS, applyPlan, checkPlan, makePlan } from './video-plan.mjs';
 
 const REPAIRS = 2;
+
+/** How hard the model thinks about a script. Opus at low effort kept its detail at half the usage. */
+export const videoEffort = model => (/opus/.test(model) ? 'low' : 'high');
+
 
 export const SCENE_SCHEMA = {
   type: 'object',

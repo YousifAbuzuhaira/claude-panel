@@ -1,15 +1,14 @@
-// The library on disk: the catalogue, courses and their pages, and the small status file
-// the panel's Learn tab reads. Every change goes through withLock.
+// The library on disk: the catalogue, courses and their pages (the library's handle and the
+// panel's status file are in status.mjs). Every change goes through withLock.
 import { readdirSync, rmSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname } from 'node:path';
 import { emptyCatalogue, removeConcept, stateOf } from './catalogue.mjs';
-import { CONFIG_DIR, STATUS_FILE, readSettings } from './settings.mjs';
-import { libraryPaths, readJson, withLock, writeJson } from './store.mjs';
+import { readJson, withLock, writeJson } from './store.mjs';
+import { buildStatus, openLibrary, readStatus, writeStatus } from './status.mjs';
 
-export function openLibrary(settings = readSettings()) {
-  return { root: settings.library, paths: libraryPaths(settings.library), settings };
-}
+// The library's handle and the panel's status file: in status.mjs, which explainers use without courses.
+export { buildStatus, openLibrary, readStatus, writeStatus };
 
 export const readCatalogue = lib => readJson(lib.paths.catalogue) || emptyCatalogue();
 
@@ -206,19 +205,6 @@ export function rewriteConceptIds(lib, fromId, toId) {
   });
 }
 
-// --- The status the panel reads ---------------------------------------------------------
-
-export const readStatus = () => readJson(STATUS_FILE) || { v: 1, build: null, course: null, usage: null };
-
-/** Merges `patch` into status.json (the build, the course in front, the latest usage). */
-export function writeStatus(patch) {
-  return withLock(CONFIG_DIR, () => {
-    const next = { ...readStatus(), ...patch, v: 1, at: new Date().toISOString() };
-    writeJson(STATUS_FILE, next);
-    return next;
-  });
-}
-
 let usageWrittenAt = 0;
 
 /** Keeps the latest usage-limit reading Claude reported (at most every 20 s). */
@@ -241,18 +227,3 @@ export function recordUsage(info) {
   }
 }
 
-/** A job as the panel's one build line. */
-export const buildStatus = job => job && {
-  id: job.id,
-  kind: job.kind || null,
-  topic: job.topic,
-  step: job.step,
-  state: job.state,
-  message: job.message || '',
-  done: job.done || 0,
-  total: job.total || 0,
-  courseId: job.courseId || null,
-  explain: job.kind === 'explain' ? job.explain || null : null,
-  file: job.kind === 'explain' ? job.file || null : null,
-  ...(job.kind === 'video' ? { working: job.working || [], leftMinutes: job.leftMinutes ?? null } : {}),
-};

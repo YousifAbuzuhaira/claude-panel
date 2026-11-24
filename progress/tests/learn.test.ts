@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { acceptedText, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, readExplainAnswer, refusalText } from '../hooks/explain'
-import { courseArgv, isLearnBusy, learnStatusPath, readLearnStatus, readyNotice } from '../hooks/learn'
+import { courseArgv, isLearnBusy, learnStatusPath, readLearnStatus, readyNote, readyNotice } from '../hooks/learn'
 import { panelState } from '../hooks/widget'
 import { answerHost, PLAN, STATE } from './host'
 
@@ -169,6 +169,17 @@ describe('/explain', () => {
     expect(readyNotice(build(2, 4), null, 0)).toBeNull()
     expect(readyNotice({ ...build(2, 4), kind: 'video' }, 'x202611181332459e', 0)).toBeNull()
     expect(readyNotice(null, 'x202611181332459e', 0)).toBeNull()
+  })
+
+  test('Claude is told when the last clip is ready, and only then: what, where, and that there is nothing to do', () => {
+    const build = (done: number, total: number, file: string | null = '/home/me/explainers/tokens-459e.html') => ({ id: 'j2', kind: 'explain', explain: 'x202611181332459e', file, topic: 'Tokens', step: 'clips', state: 'running' as const, message: '', done, total })
+    expect(readyNote(build(3, 4), '/home/me')).toBeNull()
+    expect(readyNote(build(0, 0), '/home/me')).toBeNull()
+    expect(readyNote(null)).toBeNull()
+    expect(readyNote(build(4, 4), '/home/me')).toContain('All 4 clips of "Tokens" are ready, as one file: ~/explainers/tokens-459e.html')
+    expect(readyNote(build(1, 1), '/home/me')).toContain('The clip of "Tokens" is ready')
+    expect(readyNote(build(4, 4, null))).not.toContain('as one file')
+    expect(readyNote(build(4, 4))).toMatch(/not typed by the person.*nothing to do/)
   })
 
   test('the last notice names the file you can pass on, under home as ~; earlier ones and other builds have none', () => {

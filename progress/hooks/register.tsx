@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PhasePlan, TestRun } from '../types'
-import { courseArgv, isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus, readyNotice } from './learn'
-import { acceptedText, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, readExplainAnswer, refusalText } from './explain'
+import { courseArgv, isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus, readyNote, readyNotice } from './learn'
+import { acceptedText, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, explainToolName, readExplainAnswer, refusalText } from './explain'
 import type { LearnStatus } from './learn'
 import { GAMES, isGame, openingText, windowScript } from './pages'
 import {
@@ -430,12 +430,16 @@ async function pollLearn($: EngineInterface) {
   if (text === learnText) return
   learnText = text
   learn = text ? readLearnStatus(text, await $.clock.now()) : null
-  // A clip of the explainer this chat asked for is ready: a notice in the chat (the model never
-  // reads it, so no turn starts).
+  // A clip of the explainer this chat asked for is ready: a line in the chat (the model never reads
+  // it, so no turn starts). `$.ui.log`, not `$.session.append`: the engine files an appended system
+  // row at level `info`, which only the detailed view (Ctrl+O) draws, so 0.18.1's notices were never seen.
   const notice = readyNotice(learn?.build, lastExplainer, clipsTold, home || '')
   if (notice) {
     clipsTold = notice.done
-    void $.session.append({ message: { type: 'system', content: [{ type: 'text', text: notice.text }] } }).catch(() => undefined)
+    $.ui.log(notice.text)
+    // At the finish Claude is told too, in a row only it reads, so "are they done?" needs no looking.
+    const note = readyNote(learn?.build, home || '')
+    if (note) void $.session.append({ message: { type: 'user', content: [{ type: 'text', text: note }] } }).catch(() => undefined)
   }
   await syncPanel($)
   if (isPaneOpen) $.ui.invalidate('ui.render')
@@ -783,7 +787,7 @@ export const register: Register = on => {
   // /explain's brief has this session plan the clips (it has the code and the context) and hand
   // them over here; Learn makes them. Matched by pattern: the typed list
   // of MCP tools is the one saved with the mod, made before this tool.
-  on('tool.call', { tool: new RegExp(`^mcp__progress__${EXPLAIN_TOOL}$`) }, async ($, e) => {
+  on('tool.call', { tool: new RegExp(`^${explainToolName('progress')}$`) }, async ($, e) => {
     if (e.agentId !== undefined) return { deny: 'Only the main session hands Learn an explainer.' }
     const { tool, tool_use_id, consent, ...plan } = e as unknown as Record<string, unknown>
     void tool
