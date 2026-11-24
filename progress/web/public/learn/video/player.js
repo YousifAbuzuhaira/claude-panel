@@ -366,14 +366,18 @@ function endExplainerClip() {
   if (!nextOuter) {
     $('coverTitle').textContent = 'That is the whole explainer.';
     $('coverMeta').textContent = `${inDepth.length} clip${inDepth.length === 1 ? '' : 's'}`;
-    coverAction = () => goToClip(inDepth[0].n);
-    $('coverPlay').title = 'From the first clip';
+    // In a later part of an explainer sent as several pages, the first clip is another part's.
+    const first = inDepth.find(c => c.state !== 'later') || inDepth[0];
+    coverAction = () => goToClip(first.n);
+    $('coverPlay').title = first === inDepth[0] ? 'From the first clip' : "From this part's first clip";
   } else if (nextOuter.state === 'later') {
-    // An exported file made before the rest: a file on disk is written again as each clip is made.
+    // An exported file made before the rest (a file on disk is written again as each clip is made),
+    // or one part of several: then it says which part the next clip is in.
+    const part = nextOuter.part;
     $('coverTitle').textContent = `Next: ${nextOuter.title}`;
-    $('coverMeta').textContent = `${inDepth.findIndex(c => c.n === nextOuter.n) + 1} of ${inDepth.length} · not in this file yet`;
-    coverAction = refresh;
-    $('coverPlay').title = refresh ? 'Look again for it' : 'Not in this file yet';
+    $('coverMeta').textContent = `${inDepth.findIndex(c => c.n === nextOuter.n) + 1} of ${inDepth.length} · ${part ? `in part ${part}` : 'not in this file yet'}`;
+    coverAction = part ? () => jump(clips[0].from) : refresh;
+    $('coverPlay').title = part ? 'Watch this clip again' : refresh ? 'Look again for it' : 'Not in this file yet';
   } else {
     $('coverTitle').textContent = `Next: ${nextOuter.title}`;
     $('coverMeta').textContent = `${inDepth.findIndex(c => c.n === nextOuter.n) + 1} of ${inDepth.length}${nextOuter.state === 'ready' ? '' : ' · still being made'}`;
@@ -625,7 +629,7 @@ function buildClips() {
       button.classList.toggle('now', c.n === clipN);
       button.classList.toggle('done', Boolean(kept.done?.[c.n]));
       const state = document.createElement('small'); state.textContent = c.state === 'ready' ? String(c.n) : `${c.n} ·`;
-      const text = document.createElement('span'); text.textContent = c.title + (c.state === 'ready' ? '' : ` (${{ making: 'being made', later: 'not in this file yet' }[c.state] || 'waiting'})`);
+      const text = document.createElement('span'); text.textContent = c.title + (c.state === 'ready' ? '' : ` (${{ making: 'being made', later: c.part ? `in part ${c.part}` : 'not in this file yet' }[c.state] || 'waiting'})`);
       button.append(state, text);
       button.disabled = c.state === 'later';
       button.addEventListener('click', () => goToClip(c.n));
@@ -781,7 +785,7 @@ document.addEventListener('keydown', event => {
   else if (key === 'enter' && !$('cover').hidden) (coverAction ? coverAction() : setPlaying(true));
   else if (key === 'enter') document.getElementById('continue')?.click();
   else if (activeMask && !maskPicks.has(maskKey(activeMask.scene, activeMask.mask.id)) && /^[1-3]$/.test(key)) pickMask(Number(key) - 1);
-  else if (asking && key === 'n' && quizById.get(scene.check)?.guess) notSure();
+  else if (asking && key === 'n' && quizById.get(scene.check)?.guess) { event.preventDefault(); notSure(); } // the wiki's own N opens its notepad
   else if (asking && /^[1-5]$/.test(key)) { const k = quizById.get(scene.check).order?.[Number(key) - 1]; if (k !== undefined) answer(k); }
 }, { signal });
 

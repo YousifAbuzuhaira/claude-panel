@@ -2,13 +2,14 @@
 // learn.sh (which finds Node 22), which runs this when there's no learn.mjs beside it. A leading
 // `explain` is taken off, so the explain plugin calls it as the progress plugin calls learn.mjs.
 //
-//   learn.sh explain start --session <id> --cwd <dir>   a plan on stdin: one line of JSON, the explainer started or what to fix
+//   learn.sh explain start --session <id> --cwd <dir> [--wiki personal|shared]   a plan on stdin: one line of JSON, the explainer started or what to fix
 //   learn.sh explain run <job>                          an explainer's job, run here (start runs it on its own)
 //   learn.sh explain export <id> | --all                an explainer as one file in ~/explainers (LEARN_EXPORT_DIR)
 //   learn.sh explain voice                              one line of JSON: the voice ready, to set up (its size), or why it can't run here
 //   learn.sh explain latest [id]                        one line of JSON: that explainer (or the newest with a clip), its file written if it's gone
 //   learn.sh explain resume [id]                        one line of JSON: whether a job is making what's missing of it (started if none is); with no id, the newest with clips missing
 //   learn.sh explain stop [id]                          one line of JSON: the job making it (or the newest going on) stopped, its clips kept
+//   learn.sh explain wiki [id | on | off]               one line of JSON: one that asked for the wiki, sent again if it isn't there; or whether /explain asks
 //   learn.sh explain model [name]                       one line of JSON: the model that writes the clips, set when a name is given
 import { existsSync } from 'node:fs';
 import { exportExplainer } from './export.mjs';
@@ -18,6 +19,7 @@ import { isJobLive, listJobs, stopJob } from './jobs.mjs';
 import { MODELS, isModel, readSettings, writeSettings } from './settings.mjs';
 import { openLibrary } from './status.mjs';
 import { voiceStatus } from './voice.mjs';
+import { wikiCommand } from './wiki.mjs';
 
 const argv = process.argv.slice(2);
 const [command, ...rest] = argv[0] === 'explain' ? argv.slice(1) : argv;
@@ -43,8 +45,8 @@ try {
     } catch {
       fail('the plan on stdin is not JSON');
     }
-    const started = await startExplainer(openLibrary(), { plan, sessionId: flags.session, cwd: flags.cwd });
-    line(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips, wanted: started.wanted, depth: started.depth });
+    const started = await startExplainer(openLibrary(), { plan, sessionId: flags.session, cwd: flags.cwd, wiki: flags.wiki });
+    line(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips, wanted: started.wanted, depth: started.depth, wiki: started.wiki });
   } else if (command === 'run') {
     if (!words[0]) fail('run <job>');
     await runExplainJob(openLibrary(), words[0]);
@@ -87,13 +89,15 @@ try {
       const { done, total } = explainer ? clipCounts(lib, explainer) : { done: job.done, total: job.total };
       line({ stopped: true, ended, job: job.id, id: job.explain, title: job.topic, ready: done, clips: total });
     }
+  } else if (command === 'wiki') {
+    line(await wikiCommand(openLibrary(), words[0]));
   } else if (command === 'model') {
     const name = words[0] ?? null;
     const known = name === null || isModel(name);
     if (name && known) writeSettings({ models: { video: name } });
     line({ model: readSettings().models.video, models: MODELS, known });
   } else {
-    fail('start | run <job> | export <id> | voice | latest [id] | resume [id] | stop [id] | model [name]');
+    fail('start | run <job> | export <id> | voice | latest [id] | resume [id] | stop [id] | wiki [id | on | off] | model [name]');
   }
   process.exit(0);
 } catch (error) {

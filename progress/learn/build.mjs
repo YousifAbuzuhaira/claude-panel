@@ -21,6 +21,7 @@ import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, 
 import { makeVideos, readQueue } from './video.mjs';
 import { explainJob as explainJobShared, runExplainJob, startExplainer as startExplainerShared } from './explain-job.mjs';
 import { exportExplainer } from './export.mjs';
+import { sendToWiki } from './wiki.mjs';
 import { cancelJob, isJobLive, listJobs, now, readJob, saveJob, spawnJob } from './jobs.mjs';
 import { MAX_DISPUTES, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from './verify.mjs';
 import { ensureVoice, record } from './voice.mjs';
@@ -266,7 +267,7 @@ export function resumeJob(lib, id) {
 // --- Running a job ------------------------------------------------------------------------
 
 /** `io` is what the steps reach out to; the tests swap it. */
-export const defaultIo = { askStructured, ytSearch, ytInfo, ytCaptions, ytPlaylist, fetchPage, ensureYtDlp, readDocument, readClaudeChat, ensureVoice, record, exportExplainer };
+export const defaultIo = { askStructured, ytSearch, ytInfo, ytCaptions, ytPlaylist, fetchPage, ensureYtDlp, readDocument, readClaudeChat, ensureVoice, record, exportExplainer, sendToWiki };
 
 export async function runJob(lib, id, io = defaultIo) {
   if (readJob(lib, id)?.kind === 'explain') {

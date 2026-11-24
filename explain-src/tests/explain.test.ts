@@ -3,7 +3,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, type Engine, mock, test } from 'claude-code/testing'
 
-import { acceptedText, explainBrief, explainToolName, FIRST_RUN, openFileArgv } from '../hooks/explain'
+import { acceptedText, explainBrief, explainToolName, FIRST_RUN, learnSettingsPath, openFileArgv } from '../hooks/explain'
 import { stoppedNotice } from '../hooks/learn'
 
 const ID = 'x202611240900abcd'
@@ -16,13 +16,14 @@ type Command = { name: string; description: string; source: 'builtin' | 'plugin'
 /** The session, and a helper that answers each subcommand with a line of JSON. */
 function world(
   on: On,
-  options: { voice?: unknown; start?: unknown; latest?: unknown; resume?: unknown; stop?: unknown; model?: unknown; fail?: string; commands?: Command[]; mac?: boolean; windows?: boolean; status?: () => string } = {},
+  options: { voice?: unknown; start?: unknown; latest?: unknown; resume?: unknown; stop?: unknown; model?: unknown; wiki?: unknown; fail?: string; commands?: Command[]; mac?: boolean; windows?: boolean; status?: () => string; key?: string; settings?: string; answers?: Record<string, unknown> } = {},
 ) {
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, {
     ...(options.windows ? { OS: 'Windows_NT', USERPROFILE: 'C:\\Users\\me' } : { HOME: '/home/me', ...(options.mac ? {} : { WSL_DISTRO_NAME: 'Ubuntu' }) }),
+    ...(options.key ? { WIKI_API_KEY: options.key } : {}),
   })
-  const seen = { runs: [] as string[][], stdin: [] as string[], submitted: [] as string[], rows: [] as string[], hidden: [] as string[], status: [] as (string | undefined)[], registered: [] as string[] }
+  const seen = { runs: [] as string[][], envs: [] as unknown[], stdin: [] as string[], submitted: [] as string[], rows: [] as string[], hidden: [] as string[], status: [] as (string | undefined)[], registered: [] as string[] }
   const answers: Record<string, unknown> = {
     voice: options.voice ?? { ready: true, needsSetup: false, setupMb: 350 },
     start: options.start ?? { ok: true, id: ID, clips: 6, wanted: 4, depth: 2 },
@@ -30,11 +31,13 @@ function world(
     resume: options.resume ?? { making: false },
     stop: options.stop ?? { stopped: false },
     model: options.model ?? { model: 'opus', models: ['sonnet', 'opus', 'haiku'], known: true },
+    wiki: options.wiki ?? { found: false },
   }
   on('process.run', (_$, e) => {
     seen.runs.push([...e.argv])
+    seen.envs.push(e.init?.env)
     if (e.init?.stdin !== undefined) seen.stdin.push(String(e.init.stdin))
-    const sub = ['voice', 'start', 'latest', 'resume', 'stop', 'model'].find(word => e.argv.includes(word))
+    const sub = ['voice', 'start', 'latest', 'resume', 'stop', 'model', 'wiki'].find(word => e.argv.includes(word))
     if (sub === 'start' && options.fail) return { value: { exitCode: 1, stdout: '', stderr: options.fail, isStdoutTruncated: false, isStderrTruncated: false } }
     const stdout = e.argv[0] === 'uname' ? 'Darwin\n' : sub ? `${JSON.stringify(answers[sub])}\n` : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -61,7 +64,9 @@ function world(
   })
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.cwd', () => ({ value: '/home/me/repo' }))
-  on('fs.read', (_$, e) => ({ value: e.path === STATUS ? (options.status?.() ?? '') : '' }))
+  on('fs.read', (_$, e) => ({ value: e.path === STATUS ? (options.status?.() ?? '') : e.path === learnSettingsPath('/home/me') ? (options.settings ?? '') : '' }))
+  // The question's own dialog: what the person clicked, question by question.
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => ({ result: { questions: e.questions, answers: options.answers ?? {} } }) as never)
   on('ui.status', (_$, e) => {
     seen.status.push(e.text)
     return { value: undefined }
@@ -316,14 +321,128 @@ describe('/clips stop, resume and model', () => {
 
   test('another word says what there is, and runs nothing', async ($, on) => {
     const { seen } = world(on)
-    expect((await $.command.run({ command: 'clips', args: 'pause', ...RUN })).text).toContain('/clips stop, /clips resume and /clips model')
+    expect((await $.command.run({ command: 'clips', args: 'pause', ...RUN })).text).toContain('/clips stop, /clips resume, /clips model <name> and /clips wiki')
     expect(seen.runs).toEqual([])
   })
 
   test('with the progress plugin here, all of them are its own /clips', async ($, on) => {
     const { seen } = world(on, { commands: [{ name: 'learn', description: 'Open Learn', source: 'plugin', plugin: 'progress@claude-panel' }] })
-    for (const args of ['stop', 'resume', 'model sonnet']) await $.command.run({ command: 'clips', args, ...RUN }).catch(() => undefined)
+    for (const args of ['stop', 'resume', 'model sonnet', 'wiki', 'wiki off']) await $.command.run({ command: 'clips', args, ...RUN }).catch(() => undefined)
     expect(seen.runs).toEqual([])
+  })
+})
+
+describe('the wiki', () => {
+  const QUESTION = 'Put the finished clips on the Keops wiki too?'
+  const ask = { tool: 'AskUserQuestion', questions: [{ question: QUESTION, header: 'Wiki', multiSelect: false, options: [] }] } as never
+  const explain = { command: 'explain', args: 'x', ...RUN }
+  const plan = { tool: explainToolName('explain'), ...PLAN } as never
+  const wikiArg = (argv?: string[]) => (argv?.includes('--wiki') ? argv[argv.indexOf('--wiki') + 1] : null)
+
+  test('with a key the brief asks; what was clicked goes to the helper with the key; the reply says where', async ($, on) => {
+    const { clock, seen } = world(on, { key: 'kwk_x', answers: { [QUESTION]: 'My personal workspace' }, start: { ok: true, id: ID, clips: 6, wanted: 4, depth: 2, wiki: 'personal' } })
+    await $.command.run(explain)
+    await clock.advance(400)
+    expect(seen.submitted[0]).toContain('"My personal workspace"')
+    await $.tool.call(ask)
+    const answer = await $.tool.call(plan)
+    expect(wikiArg(seen.runs.at(-1))).toBe('personal')
+    expect(seen.envs.at(-1)).toEqual({ WIKI_API_KEY: 'kwk_x' })
+    expect(answer).toMatchObject({ result: expect.stringContaining('they go on the wiki (your personal workspace)') })
+    expect(seen.stdin.join('')).not.toContain('kwk_x')
+  })
+
+  test('with no key, or with the setting off, nothing asks, and a wiki answer from anywhere is not taken', async ($, on) => {
+    const { clock, seen } = world(on, { answers: { [QUESTION]: 'Shared workspace' } })
+    await $.command.run(explain)
+    await clock.advance(400)
+    expect(seen.submitted[0]).not.toMatch(/wiki/i)
+    await $.tool.call(ask)
+    expect(JSON.stringify(await $.tool.call(plan))).not.toMatch(/wiki/i)
+    expect(wikiArg(seen.runs.at(-1))).toBeNull()
+  })
+
+  test('the setting off stops the question, key or not', async ($, on) => {
+    const { clock, seen } = world(on, { key: 'kwk_x', settings: '{"wiki":"off"}', answers: { [QUESTION]: 'Shared workspace' } })
+    await $.command.run(explain)
+    await clock.advance(400)
+    expect(seen.submitted[0]).not.toMatch(/wiki/i)
+    await $.tool.call(ask)
+    await $.tool.call(plan)
+    expect(wikiArg(seen.runs.at(-1))).toBeNull()
+  })
+
+  test('No is said back, and Claude saying otherwise changes nothing', async ($, on) => {
+    const { seen } = world(on, { key: 'kwk_x', answers: { [QUESTION]: 'No, this machine only' } })
+    await $.command.run(explain)
+    await $.tool.call(ask)
+    const answer = await $.tool.call({ ...(plan as object), wiki: 'shared' } as never)
+    expect(wikiArg(seen.runs.at(-1))).toBeNull()
+    expect(seen.stdin[0]).not.toContain('shared')
+    expect(answer).toMatchObject({ result: expect.stringContaining('Nothing goes on the wiki.') })
+  })
+
+  test('a Yes is for the explainer it was asked for: kept through a refusal, gone once one is taken', async ($, on) => {
+    const { seen } = world(on, { key: 'kwk_x', answers: { [QUESTION]: 'Shared workspace' } })
+    await $.command.run(explain)
+    await $.tool.call(ask)
+    await $.tool.call(plan)
+    expect(wikiArg(seen.runs.at(-1))).toBe('shared')
+    await $.tool.call(plan)
+    expect(wikiArg(seen.runs.at(-1))).toBeNull()
+    await $.command.run(explain)
+    await $.tool.call(plan)
+    expect(wikiArg(seen.runs.at(-1))).toBeNull()
+  })
+
+  test('a Yes given to an /explain that came to nothing is not the next one’s', async ($, on) => {
+    const { seen } = world(on, { key: 'kwk_x', answers: { [QUESTION]: 'Shared workspace' } })
+    await $.command.run(explain)
+    await $.tool.call(ask)
+    await $.command.run(explain)
+    await $.tool.call(plan)
+    expect(wikiArg(seen.runs.at(-1))).toBeNull()
+  })
+
+  test('a refused plan sent again still has the answer', async ($, on) => {
+    const { seen } = world(on, { key: 'kwk_x', answers: { [QUESTION]: 'Shared workspace' }, start: { ok: false, problems: ['Clip 1: fix it'] } })
+    await $.command.run(explain)
+    await $.tool.call(ask)
+    await $.tool.call(plan)
+    await $.tool.call(plan)
+    expect(wikiArg(seen.runs.at(-1))).toBe('shared')
+  })
+
+  test('with the progress plugin here it neither asks nor listens', async ($, on) => {
+    const { seen } = world(on, { key: 'kwk_x', answers: { [QUESTION]: 'Shared workspace' }, commands: [{ name: 'learn', description: 'Open Learn', source: 'plugin', plugin: 'progress@claude-panel' }] })
+    await $.command.run(explain).catch(() => undefined)
+    await $.tool.call(ask)
+    await $.tool.call(plan)
+    expect(wikiArg(seen.runs.at(-1))).toBeNull()
+  })
+
+  test('/clips wiki sends this chat’s again, with the key; off and on are handed to the helper as they are', async ($, on) => {
+    const { seen } = world(on, { key: 'kwk_x', wiki: { found: true, id: ID, title: 'Tokens', to: 'personal', ready: 4, clips: 4, urls: ['https://wiki.keops.ai/d/a'], error: null } })
+    expect((await $.command.run({ command: 'clips', args: 'wiki', ...RUN })).text).toBe('"Tokens" is on the wiki (your personal workspace): https://wiki.keops.ai/d/a')
+    expect(seen.runs.at(-1)?.slice(-2)).toEqual(['explain', 'wiki'])
+    expect(seen.envs.at(-1)).toEqual({ WIKI_API_KEY: 'kwk_x' })
+    await $.tool.call(plan)
+    await $.command.run({ command: 'clips', args: 'wiki', ...RUN })
+    expect(seen.runs.at(-1)?.slice(-2)).toEqual(['wiki', ID])
+    await $.command.run({ command: 'clips', args: 'wiki off', ...RUN })
+    expect(seen.runs.at(-1)?.slice(-2)).toEqual(['wiki', 'off'])
+  })
+
+  test('the last notice says where it is on the wiki, once', async ($, on) => {
+    let status = build()
+    const { clock, seen } = world(on, { status: () => status })
+    await begin($)
+    await $.tool.call(plan)
+    await clock.advance(3_500)
+    status = build({ state: 'done', message: '4 clips ready, and on the wiki', done: 4, file: '/home/me/explainers/tokens-abcd.html', wiki: { to: 'personal', urls: ['https://wiki.keops.ai/d/a'], error: null } })
+    await clock.advance(6_500)
+    expect(seen.rows.filter(row => row.includes('on the wiki (personal): https://wiki.keops.ai/d/a'))).toHaveLength(1)
+    expect(seen.hidden[0]).toContain('https://wiki.keops.ai/d/a')
   })
 })
 

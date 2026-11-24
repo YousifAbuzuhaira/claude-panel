@@ -12,27 +12,29 @@ import { exportExplainer } from './export.mjs';
 import { isJobLive, listJobs, now, readJob, saveJob, spawnJob } from './jobs.mjs';
 import { writeJson } from './store.mjs';
 import { ensureVoice, record } from './voice.mjs';
+import { WORKSPACES, isOnWiki, sendToWiki } from './wiki.mjs';
 
 const EXPLAIN_CLI = fileURLToPath(new URL('./explain-cli.mjs', import.meta.url));
 
 /** What an explainer's job reaches out to; the tests swap it. */
-export const explainIo = { askStructured, ensureVoice, record, exportExplainer };
+export const explainIo = { askStructured, ensureVoice, record, exportExplainer, sendToWiki };
 
 /** How an explainer's job runs on its own, unless its caller says otherwise: `explain-cli.mjs run <job>`. */
 export const explainDaemon = id => [EXPLAIN_CLI, 'run', id];
 
 /**
  * An explainer from your session's plan: checked first, all of it (`{ problems }` go back to the
- * session), then made by a job of its own (`job`, explainJob unless the caller wraps it).
+ * session), then made by a job of its own (`job`, explainJob unless the caller wraps it). `wiki` is
+ * the workspace the person picked for this one (personal or shared), or nothing: kept on it alone.
  */
-export async function startExplainer(lib, { plan, sessionId, cwd, io = explainIo, job = explainJob }) {
+export async function startExplainer(lib, { plan, sessionId, cwd, wiki = null, io = explainIo, job = explainJob }) {
   if (!SESSION_ID.test(String(sessionId || ''))) throw new Error('that is not a chat id');
   if (!cwd || !existsSync(cwd)) throw new Error("the session's folder is not on this computer");
   const checked = await checkExplainer({ plan, sessionId, cwd, io, model: lib.settings.models.video });
   if (checked.problems) return { problems: checked.problems };
-  const explainer = saveExplainer(lib, checked.explainer);
+  const explainer = saveExplainer(lib, { ...checked.explainer, wiki: WORKSPACES.includes(wiki) ? { to: wiki } : null });
   const started = job(lib, explainer);
-  return { id: explainer.id, clips: explainer.clips.length, wanted: wantedClips(explainer), depth: explainer.depth, job: started.id };
+  return { id: explainer.id, clips: explainer.clips.length, wanted: wantedClips(explainer), depth: explainer.depth, wiki: explainer.wiki?.to ?? null, job: started.id };
 }
 
 /**
@@ -60,7 +62,8 @@ export function explainJob(lib, explainer, { daemon = explainDaemon, before = ()
 
 /**
  * Runs an explainer's job in this process: the voice set up when it's the first time, then its
- * clips (makeExplainer). SIGTERM pauses it; a failure is saved on the job with the step it was at.
+ * clips (makeExplainer), then the wiki when it was picked for it: once, with every clip made. SIGTERM
+ * pauses it; a failure is saved on the job with the step it was at.
  */
 export async function runExplainJob(lib, id, io = explainIo) {
   let job = readJob(lib, id);
@@ -75,9 +78,11 @@ export async function runExplainJob(lib, id, io = explainIo) {
   let giveUp;
   const stopped = new Promise((_, reject) => { giveUp = reject; });
   stopped.catch(() => {});
+  const uploading = new AbortController();
   const onStop = () => {
     stopping = true;
     stopAll();
+    uploading.abort();
     giveUp(new Error('stopped'));
   };
   process.once('SIGTERM', onStop);
@@ -94,8 +99,15 @@ export async function runExplainJob(lib, id, io = explainIo) {
       // Every clip ready, not only this run's: a job carried on after a reboot made just the rest.
       const explainer = readExplainer(lib, job.explain);
       const { done, total } = explainer ? clipCounts(lib, explainer) : { done: made, total: made };
-      const message = done < total ? `${done} of ${total} clips ready` : total === 1 ? 'Your clip is ready' : `${total} clips ready`;
-      save({ step: 'done', state: 'done', making: null, message, done, total });
+      // The last clip is told with the wiki's answer: `done` isn't saved as all of them before it.
+      let wiki = explainer?.wiki?.to ? explainer.wiki : null;
+      if (wiki && done >= total && !isOnWiki(explainer) && io.sendToWiki) {
+        save({ message: 'Putting it on the wiki', making: null });
+        wiki = await io.sendToWiki(lib, explainer.id, { signal: uploading.signal });
+      }
+      const onWiki = wiki?.urls?.length && !wiki.error ? ', and on the wiki' : wiki?.error ? '; not on the wiki' : '';
+      const message = done < total ? `${done} of ${total} clips ready` : `${total === 1 ? 'Your clip is ready' : `${total} clips ready`}${onWiki}`;
+      save({ step: 'done', state: 'done', making: null, message, done, total, wiki: wiki ? { to: wiki.to, urls: wiki.urls || [], error: wiki.error || null } : null });
     } finally {
       rmSync(lib.paths.explaining, { force: true });
     }

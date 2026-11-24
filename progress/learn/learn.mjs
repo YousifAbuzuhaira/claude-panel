@@ -3,8 +3,9 @@
 //   learn.sh serve                                   the window's JSON-lines channel
 //   learn.sh build start --topic "DevOps" --category DevOps [--mode pick|auto] | --link <url> | --file <path>
 //                        | --chat <session id> --focus "what the course covers" [--audience self|team]   (a course from a Claude chat)
-//   learn.sh explain start --session <id> --cwd <dir>  clips explaining code, from a plan on stdin (/explain)
+//   learn.sh explain start --session <id> --cwd <dir> [--wiki personal|shared]  clips explaining code, from a plan on stdin (/explain)
 //   learn.sh explain export <id> | --all             an explainer as one file in ~/explainers (LEARN_EXPORT_DIR)
+//   learn.sh explain wiki [id | on | off]            one that asked for the wiki, sent again if it isn't there; or whether /explain asks
 //   learn.sh chats                                   your recent Claude chats
 //   learn.sh extract <file>                          what Learn reads from a document (no build)
 //   learn.sh build run|pick|resume|cancel <job> [s1,s3]
@@ -23,6 +24,7 @@ import { listClaudeChats } from './chats.mjs';
 import { readDocument } from './documents.mjs';
 import { readSettings, toLocalPath, writeSettings } from './settings.mjs';
 import { transcriptText, youTubeId, ytCaptions } from './sources.mjs';
+import { wikiCommand } from './wiki.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -67,8 +69,10 @@ try {
       const done = exportExplainer(lib, id);
       print(done ? `${id}  ${done.clips} clip${done.clips === 1 ? '' : 's'}  ${(done.bytes / 1e6).toFixed(1)} MB  ${done.file}` : `${id}  no clip made yet`);
     }
+  } else if (command === 'explain' && sub === 'wiki') {
+    console.log(JSON.stringify(await wikiCommand(openLibrary(), rest[0])));
   } else if (command === 'explain') {
-    if (sub !== 'start') fail('explain start --session <id> --cwd <dir>, the plan on stdin | explain export <id> | --all');
+    if (sub !== 'start') fail('explain start --session <id> --cwd <dir>, the plan on stdin | explain export <id> | --all | explain wiki [id | on | off]');
     let input = '';
     for await (const chunk of process.stdin) input += chunk;
     let plan;
@@ -78,8 +82,8 @@ try {
       fail('the plan on stdin is not JSON');
     }
     // One line of JSON, read by the /explain tool: the explainer started, or what the session must fix.
-    const started = await startExplainer(openLibrary(), { plan, sessionId: flags.session, cwd: flags.cwd });
-    console.log(JSON.stringify(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips, wanted: started.wanted, depth: started.depth }));
+    const started = await startExplainer(openLibrary(), { plan, sessionId: flags.session, cwd: flags.cwd, wiki: flags.wiki });
+    console.log(JSON.stringify(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips, wanted: started.wanted, depth: started.depth, wiki: started.wiki }));
     process.exit(0);
   } else if (command === 'chats') {
     const lib = openLibrary();

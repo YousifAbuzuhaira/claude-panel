@@ -25,6 +25,8 @@ export const defaults = () => ({
   // Questions in videos: guesses, quick checks and masked lines that stop a video. Off, videos
   // play straight through and are made without them (cheaper and quicker).
   videoQuestions: false,
+  // Whether /explain asks about the wiki (only ever with WIKI_API_KEY set): 'ask', or 'off'.
+  wiki: 'ask',
 });
 
 /** `C:\Users\me\OneDrive\Learn` becomes `/mnt/c/Users/me/OneDrive/Learn`; WSL paths stay. */
@@ -74,6 +76,7 @@ export function normalizeSettings(raw, platform = process.platform) {
     workFolders: [...new Set(folders.filter(folder => typeof folder === 'string' && folder.trim()).map(folder => toLocalPath(folder, platform)))].filter(folder => isAbsoluteLocal(folder, platform)),
     claudePath: typeof value.claudePath === 'string' && isAbsoluteLocal(value.claudePath, platform) ? value.claudePath : null,
     videoQuestions: value.videoQuestions === true,
+    wiki: value.wiki === 'off' ? 'off' : 'ask',
   };
 }
 

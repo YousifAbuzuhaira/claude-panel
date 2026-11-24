@@ -6,7 +6,7 @@
 // /explain (the same making, plus its player and Library), and this one stands aside.
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import { acceptedText, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, explainToolName, openFileArgv, readExplainAnswer, refusalText } from './explain'
+import { acceptedText, asksWiki, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, explainToolName, helperArgv, lastJson, learnSettingsPath, openFileArgv, readExplainAnswer, refusalText, wikiPicked, wikiReply, type WikiTo } from './explain'
 import { learnStatusPath, readLearnStatus, readyNote, readyNotice, stoppedNotice } from './learn'
 
 const PLUGIN = 'explain'
@@ -20,6 +20,9 @@ let clipsTold = 0
 let stopTold = ''
 let statusText = ''
 let settingUpVoice = false
+// The wiki, for the /explain going on: whether its question was to be asked, and what was clicked.
+let wikiAsked = false
+let wikiTo: WikiTo | null = null
 let pollTimer: Timer | null = null
 
 /** Windows itself: Windows sets OS in every process, and WSL has it only when passed through WSLENV. */
@@ -44,20 +47,29 @@ async function progressIsHere($: EngineInterface): Promise<boolean> {
   return commands.some(command => command.source === 'plugin' && command.name === 'learn' && /^progress(?:@|$)/.test(command.plugin ?? ''))
 }
 
-/** The helper with these arguments: learn.sh (which finds Node 22) runs explain-cli.mjs; on Windows, Node straight. */
-async function helper($: EngineInterface, args: string[], options: { stdin?: string; timeoutMs?: number } = {}) {
-  const base = (await isWindowsHost($)) ? ['node', `${$.plugin.root}/learn/explain-cli.mjs`] : ['bash', `${$.plugin.root}/learn/learn.sh`, 'explain']
-  return $.process.run([...base, ...args], { timeoutMs: options.timeoutMs ?? 60_000, ...(options.stdin === undefined ? {} : { stdin: options.stdin }) })
+/** The wiki's key, handed to what may upload: a helper's job outlives this session, so it isn't left to chance. */
+async function wikiEnv($: EngineInterface): Promise<Record<string, string>> {
+  const key = await $.env.get('WIKI_API_KEY').catch(() => undefined)
+  return key ? { WIKI_API_KEY: key } : {}
 }
 
-/** The last line of a helper's output as JSON, or null. */
-function lastJson(stdout: string): Record<string, unknown> | null {
-  try {
-    const value = JSON.parse(stdout.trim().split('\n').at(-1) || 'null') as unknown
-    return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
-  } catch {
-    return null
-  }
+/** Whether /explain asks about the wiki here: a key is set, and the settings don't say off. */
+async function offersWiki($: EngineInterface): Promise<boolean> {
+  const { WIKI_API_KEY } = await wikiEnv($)
+  const home = WIKI_API_KEY ? await homeOf($) : undefined
+  return asksWiki(WIKI_API_KEY, home ? await $.fs.read(learnSettingsPath(home)).catch(() => '') : '')
+}
+
+/** The helper with these arguments: learn.sh (which finds Node 22) runs explain-cli.mjs; on Windows, Node straight. */
+async function helper($: EngineInterface, args: string[], timeoutMs = 60_000) {
+  const argv = helperArgv({ pluginRoot: $.plugin.root, isWindows: await isWindowsHost($), entry: 'explain-cli.mjs' }, args)
+  return $.process.run(argv, { timeoutMs, env: await wikiEnv($) })
+}
+
+/** `/clips wiki [on | off]`: one that asked for the wiki and isn't there, sent again; or whether /explain asks. */
+async function wiki($: EngineInterface, what: string): Promise<string> {
+  const args = ['wiki', ...(what === 'on' || what === 'off' ? [what] : lastExplainer ? [lastExplainer] : [])]
+  return wikiReply(lastJson((await helper($, args, 8 * 60_000)).stdout))
 }
 
 /** `/clips stop`: the clips being made (this chat's, else the newest going on), those ready kept. */
@@ -147,7 +159,7 @@ export const register: Register = on => {
     if (!(await progressIsHere($))) {
       // Not immediate: typed during a turn, it waits for that turn to end, then starts its own.
       await $.command.register({ name: 'explain', description: 'Have Claude explain code from this chat as short narrated video clips, e.g. /explain how the gateway mints tokens', argumentHint: '<what to explain>' })
-      await $.command.register({ name: 'clips', description: 'Open the clips /explain made, as one file in your browser; or stop, resume, or choose the model', argumentHint: '[stop | resume | model <name>]', immediate: true })
+      await $.command.register({ name: 'clips', description: 'Open the clips /explain made, as one file in your browser; or stop, resume, choose the model, or send them to the wiki again', argumentHint: '[stop | resume | model <name> | wiki]', immediate: true })
     }
     const started = await next(e)
     pollTimer?.cancel()
@@ -163,10 +175,21 @@ export const register: Register = on => {
     const problem = voice?.reason ?? voice?.error ?? (voice ? null : 'its helper gave no answer (it needs Node 22 or newer)')
     if (problem) return { text: `/explain can't make clips here: ${String(problem)}` }
     settingUpVoice = voice?.needsSetup === true
-    const brief = explainBrief(e.args, { plugin: PLUGIN })
+    wikiAsked = await offersWiki($)
+    wikiTo = null
+    const brief = explainBrief(e.args, { plugin: PLUGIN, wiki: wikiAsked })
     $.clock.after(SUBMIT_MS, () => void $.prompt.submit({ text: brief, asUser: true }).catch(() => undefined))
     return { text: settingUpVoice ? 'Asking Claude to plan the clips. First run: the voice gets set up too (about 350 MB, once).' : 'Asking Claude to plan the clips.' }
   }).catch(() => ({ text: '/explain could not start: try it again.' }))
+
+  // The wiki question /explain's brief asks, as you clicked it: what goes up follows this, never
+  // what Claude says you picked.
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    const answered = await next(e)
+    const picked = wikiAsked && e.agentId === undefined ? wikiPicked(answered.result) : undefined
+    if (picked !== undefined) wikiTo = picked
+    return answered
+  })
 
   // The file of the explainer this chat made last, else the newest one made here.
   on('command.run', { command: 'clips' }, async ($, e, next) => {
@@ -175,7 +198,8 @@ export const register: Register = on => {
     if (word === 'stop') return { text: await stopMaking($) }
     if (word === 'resume') return { text: await carryOn($) }
     if (word === 'model') return { text: await chooseModel($, name) }
-    if (word) return { text: '/clips opens the clips. There is also /clips stop, /clips resume and /clips model <name>.' }
+    if (word === 'wiki') return { text: await wiki($, name) }
+    if (word) return { text: '/clips opens the clips. There is also /clips stop, /clips resume, /clips model <name> and /clips wiki.' }
     const found = lastJson((await helper($, ['latest', ...(lastExplainer ? [lastExplainer] : [])]).catch(() => ({ stdout: '' }))).stdout)
     if (!found) return { text: 'No clips yet: /explain <what> makes some.' }
     // Making that stopped (a restart, a failure) carries on when you open it; one going on is left
@@ -205,8 +229,9 @@ export const register: Register = on => {
     plan.depth ??= 2
     const [sessionId, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
     // The plan is checked against the files and this chat, with one Claude call: up to a few minutes.
-    const argv = explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($), entry: 'explain-cli.mjs' })
-    const ran = await $.process.run(argv, { stdin: JSON.stringify(plan), timeoutMs: 6 * 60_000 })
+    const asked = wikiAsked
+    const argv = explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($), entry: 'explain-cli.mjs', wiki: asked ? wikiTo : null })
+    const ran = await $.process.run(argv, { stdin: JSON.stringify(plan), timeoutMs: 6 * 60_000, env: await wikiEnv($) })
     const answer = readExplainAnswer(ran.stdout)
     if (!answer) {
       const why = (ran.stderr.trim() || ran.stdout.trim()).split('\n').at(-1) || 'no answer'
@@ -219,6 +244,9 @@ export const register: Register = on => {
     clipsTold = 0
     stopTold = ''
     statusText = ''
-    return { result: acceptedText(answer, { library: false, firstRun: settingUpVoice }) }
+    // A Yes to the wiki is for the explainer just taken, never the next.
+    wikiAsked = false
+    wikiTo = null
+    return { result: acceptedText(answer, { library: false, firstRun: settingUpVoice, wikiAsked: asked }) }
   }).catch(() => ({ deny: 'The plan failed to go through; tell the person, and explain in text instead if they want.' }))
 }

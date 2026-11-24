@@ -3,7 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PhasePlan, TestRun } from '../types'
 import { courseArgv, isLearnBusy, isLearnView, LEARN_VIEWS, learnStatusPath, readLearnStatus, readyNote, readyNotice } from './learn'
-import { acceptedText, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, explainToolName, readExplainAnswer, refusalText } from './explain'
+import { acceptedText, asksWiki, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, explainToolName, helperArgv, lastJson, learnSettingsPath, readExplainAnswer, refusalText, wikiPicked, wikiReply, type WikiTo } from './explain'
 import type { LearnStatus } from './learn'
 import { GAMES, isGame, openingText, windowScript } from './pages'
 import {
@@ -88,6 +88,9 @@ let learnTimer: Timer | null = null
 // this chat has been told are ready.
 let lastExplainer: string | null = null
 let clipsTold = 0
+// The wiki, for the /explain going on: whether its question was to be asked, and what was clicked.
+let wikiAsked = false
+let wikiTo: WikiTo | null = null
 let syncing: Promise<void> = Promise.resolve()
 // The pane (off WezTerm-on-WSL): the tab in front, the one the person clicked (it stays
 // until a new run or a new plan), and the newest run and plan it has seen.
@@ -138,6 +141,19 @@ function stateRootOf($: EngineInterface): Promise<string> {
 async function learnHome($: EngineInterface): Promise<string | undefined> {
   if (await isWindowsHost($)) return (await $.env.get('USERPROFILE').catch(() => undefined)) || (await $.env.get('HOME').catch(() => undefined))
   return $.env.get('HOME')
+}
+
+/** The wiki's key, handed to what may upload: a helper's job outlives this session, so it isn't left to chance. */
+async function wikiEnv($: EngineInterface): Promise<Record<string, string>> {
+  const key = await $.env.get('WIKI_API_KEY').catch(() => undefined)
+  return key ? { WIKI_API_KEY: key } : {}
+}
+
+/** Whether /explain asks about the wiki here: a key is set, and Learn's settings don't say off. */
+async function offersWiki($: EngineInterface): Promise<boolean> {
+  const { WIKI_API_KEY } = await wikiEnv($)
+  const home = WIKI_API_KEY ? await learnHome($) : undefined
+  return asksWiki(WIKI_API_KEY, home ? await $.fs.read(learnSettingsPath(home)).catch(() => '') : '')
 }
 
 /** The WezTerm-on-WSL distro the panel runs from; null anywhere else. */
@@ -630,7 +646,8 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'clips',
-      description: "Open the clips /explain made; with none in this session, Learn's Library, which lists every explainer",
+      description: "Open the clips /explain made (with none in this session, Learn's Library, which lists every explainer); or send them to the wiki again",
+      argumentHint: '[wiki]',
       immediate: true,
     })
     await $.command.register({
@@ -795,28 +812,52 @@ export const register: Register = on => {
     void consent
     for (const key of Object.keys(plan)) if (!['title', 'shape', 'boxes', 'clips', 'depth'].includes(key)) delete plan[key]
     const [sessionId, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
+    const asked = wikiAsked
+    const wiki = asked ? wikiTo : null
     // Learn checks the plan against the files and this chat, with one Claude call: up to a few minutes.
-    const ran = await $.process.run(explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($) }), { stdin: JSON.stringify(plan), timeoutMs: 6 * 60_000 })
+    const argv = explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($), wiki })
+    const ran = await $.process.run(argv, { stdin: JSON.stringify(plan), timeoutMs: 6 * 60_000, env: await wikiEnv($) })
     const answer = readExplainAnswer(ran.stdout)
     if (!answer) return { deny: `Learn couldn't take the plan: ${(ran.stderr.trim() || ran.stdout.trim()).split('\n').at(-1) || 'no answer'}` }
     if (!answer.ok) return { deny: refusalText(answer.problems) }
     // Nothing opens by itself: /clips, the Library and the panel's Learn tab open it.
     lastExplainer = answer.id
     clipsTold = 0
-    return { result: acceptedText(answer) }
+    // A Yes to the wiki is for the explainer just taken, never the next.
+    wikiAsked = false
+    wikiTo = null
+    return { result: acceptedText(answer, { wikiAsked: asked }) }
   }).catch(() => ({ deny: 'Learn failed to take the plan; tell the person, and explain in text instead if they want.' }))
 
   // /explain hands the session the brief as your message. Submitted from inside this hook it would
   // wait for your next message; submitted once the command has returned (the session idle), it
   // starts a turn at once (tried: a hidden `context` note and `$.command.run` start none).
   on('command.run', { command: 'explain' }, async ($, e) => {
-    const brief = explainBrief(e.args)
+    wikiAsked = await offersWiki($)
+    wikiTo = null
+    const brief = explainBrief(e.args, { wiki: wikiAsked })
     $.clock.after(EXPLAIN_SUBMIT_MS, () => void $.prompt.submit({ text: brief, asUser: true }).catch(() => undefined))
     return { text: 'Asking Claude to plan the clips.' }
   })
 
+  // The wiki question /explain's brief asks, as you clicked it: what goes up follows this, never
+  // what Claude says you picked.
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    const answered = await next(e)
+    const picked = wikiAsked && e.agentId === undefined ? wikiPicked(answered.result) : undefined
+    if (picked !== undefined) wikiTo = picked
+    return answered
+  })
+
   // The clips /explain made last in this session; else the Library, which lists every explainer.
-  on('command.run', { command: 'clips' }, async $ => {
+  // `/clips wiki` sends one that asked for the wiki and isn't there; off and on are for the question.
+  on('command.run', { command: 'clips' }, async ($, e) => {
+    const [word = '', what = ''] = e.args.trim().toLowerCase().split(/\s+/)
+    if (word === 'wiki') {
+      const args = ['wiki', ...(['on', 'off'].includes(what) ? [what] : lastExplainer ? [lastExplainer] : [])]
+      const ran = await $.process.run(helperArgv({ pluginRoot: $.plugin.root, isWindows: await isWindowsHost($) }, args), { timeoutMs: 8 * 60_000, env: await wikiEnv($) })
+      return { text: wikiReply(lastJson(ran.stdout)) }
+    }
     if (lastExplainer) return { text: await openPage($, 'learn/video', { explain: lastExplainer }) }
     return { text: await openPage($, 'learn', { view: 'library' }) }
   })

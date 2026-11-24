@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.21.0",
+      "date": "2026-11-24",
+      "by": "Yousif",
+      "notes": [
+        "/explain can put finished clips on the Keops wiki: asked each time",
+        "Too big for the wiki, an explainer goes up in parts",
+        "/clips wiki sends one again when its upload failed"
+      ]
+    },
+    {
       "version": "0.20.2",
       "date": "2026-11-24",
       "by": "Yousif",

@@ -87,14 +87,27 @@ export function clipForFile(video, title) {
   return { title: video.title, courseTitle: title, stale: false, sections: video.sections, scenes, assets: video.assets, quiz, openers: video.openers || {}, words: video.words || [], audio: video.audio };
 }
 
+/** A clip's part of the page: its script and its sound, each in a tag of its own. */
+export const clipTags = (clip, title) => [
+  `<script type="application/json" id="clip-${clip.n}">${json(clipForFile(clip.video, title))}</script>`,
+  `<script type="text/plain" id="sound-${clip.n}">${Buffer.from(clip.sound).toString('base64')}</script>`,
+].join('\n');
+
+/** How deep the page goes: the depth picked, else the deepest level made. */
+export const pageDepth = (explainer, clips) => explainer.depth || Math.max(1, ...clips.map(clip => explainer.clips[clip.n - 1]?.level || 1));
+
 /**
  * The page for an explainer. `clips` are the ones in it, `{ n, video, sound }` (sound the mp3's
  * bytes); a clip of the depth not among them is `later`, named in the list but not playable. With
- * no depth saved, the depth is the deepest level made, so the player never asks.
+ * no depth saved, the depth is the deepest level made, so the player never asks. An explainer too
+ * big for one page (the wiki's, wiki.mjs) goes out as several: `parts` is the clips each holds, and
+ * a `later` clip says which part it's in.
  */
-export function explainerHtml({ explainer, clips, questions = false }) {
+export function explainerHtml({ explainer, clips, questions = false, parts = null }) {
   const inFile = new Set(clips.map(clip => clip.n));
-  const depth = explainer.depth || Math.max(1, ...clips.map(clip => explainer.clips[clip.n - 1]?.level || 1));
+  const depth = pageDepth(explainer, clips);
+  const partOf = n => (parts ? parts.findIndex(part => part.includes(n)) + 1 : 0);
+  const name = parts ? `${explainer.title} (part ${partOf(clips[0]?.n)} of ${parts.length})` : explainer.title;
   const info = {
     id: explainer.id,
     title: explainer.title,
@@ -102,19 +115,22 @@ export function explainerHtml({ explainer, clips, questions = false }) {
     depth,
     at: 1,
     counts: [1, 2, 3].map(level => explainer.clips.filter(clip => clip.level <= level).length),
-    clips: explainer.clips.map((clip, k) => ({ n: k + 1, title: clip.title, level: clip.level, state: inFile.has(k + 1) ? 'ready' : inDepth(clip, depth) ? 'later' : 'left out' })),
+    clips: explainer.clips.map((clip, k) => ({
+      n: k + 1,
+      title: clip.title,
+      level: clip.level,
+      state: inFile.has(k + 1) ? 'ready' : inDepth(clip, depth) ? 'later' : 'left out',
+      ...(!inFile.has(k + 1) && partOf(k + 1) ? { part: partOf(k + 1) } : {}),
+    })),
   };
   const data = [
     `<script type="application/json" id="explainer-data">${json({ info, questions })}</script>`,
-    ...clips.flatMap(clip => [
-      `<script type="application/json" id="clip-${clip.n}">${json(clipForFile(clip.video, explainer.title))}</script>`,
-      `<script type="text/plain" id="sound-${clip.n}">${Buffer.from(clip.sound).toString('base64')}</script>`,
-    ]),
+    ...clips.map(clip => clipTags(clip, explainer.title)),
   ];
   const style = `<style>\n${read(SHARED, 'theme.css')}\n${read(VIDEO, 'video.css')}\n</style>`;
   // Functions, not strings, as replacements: the script is full of `$`, which a string would expand.
   return read(VIDEO, 'index.html')
-    .replace(/<title>[^<]*<\/title>/, () => `<title>${html(explainer.title)}</title>`)
+    .replace(/<title>[^<]*<\/title>/, () => `<title>${html(name)}</title>`)
     .replace(/^.*<link rel="stylesheet"[^>]*>\n/gm, '')
     .replace(/^.*<script\b[^>]*><\/script>\n/gm, '')
     .replace('</head>', () => `${style}\n</head>`)
@@ -127,6 +143,16 @@ export function exportName(explainer) {
   return `${slug || 'explainer'}-${String(explainer.id).slice(-4)}.html`;
 }
 
+/** Every clip made so far, as a page takes it: `{ n, video, sound }`. */
+export function readyClips(lib, explainer) {
+  const paths = explainPaths(lib, explainer.id);
+  return explainer.clips
+    .map((clip, k) => k + 1)
+    .filter(n => existsSync(`${paths.clip(n)}.json`) && existsSync(`${paths.clip(n)}.mp3`))
+    .map(n => ({ n, video: readJson(`${paths.clip(n)}.json`), sound: readFileSync(`${paths.clip(n)}.mp3`) }))
+    .filter(clip => clip.video);
+}
+
 /**
  * Writes the explainer's file with every clip made so far, over the last one (the same name, kept
  * in explainer.json as `file`). Nothing is written before a clip is ready. `{ file, clips, bytes }`.
@@ -134,12 +160,7 @@ export function exportName(explainer) {
 export function exportExplainer(lib, id, { dir = exportDir() } = {}) {
   const explainer = readExplainer(lib, id);
   if (!explainer) throw new Error('no such explainer');
-  const paths = explainPaths(lib, id);
-  const clips = explainer.clips
-    .map((clip, k) => k + 1)
-    .filter(n => existsSync(`${paths.clip(n)}.json`) && existsSync(`${paths.clip(n)}.mp3`))
-    .map(n => ({ n, video: readJson(`${paths.clip(n)}.json`), sound: readFileSync(`${paths.clip(n)}.mp3`) }))
-    .filter(clip => clip.video);
+  const clips = readyClips(lib, explainer);
   if (!clips.length) return null;
   const page = explainerHtml({ explainer, clips, questions: readSettings().videoQuestions === true });
   const file = explainer.file && dirname(explainer.file) === dir ? explainer.file : join(dir, exportName(explainer));

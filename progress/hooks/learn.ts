@@ -10,6 +10,8 @@ export type LearnBuild = {
   explain?: string | null
   /** That explainer as one file you can pass on (~/explainers/...html), once a clip is in it. */
   file?: string | null
+  /** How its upload to the wiki went, when the person asked for one: its address (one a part), or why not. */
+  wiki?: { to: 'personal' | 'shared'; urls: string[]; error: string } | null
   topic: string
   step: string
   state: 'running' | 'waiting-picks' | 'paused' | 'failed' | 'done'
@@ -53,6 +55,15 @@ export function courseArgv({ pluginRoot, sessionId, focus, isWindows = false, au
 const text = (value: unknown, max = 120) => (typeof value === 'string' ? value.slice(0, max) : '')
 const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0)
 
+/** An explainer's wiki upload as the status file has it, made safe to show. */
+function readWiki(value: unknown): LearnBuild['wiki'] {
+  const wiki = value && typeof value === 'object' ? (value as Record<string, unknown>) : null
+  if (wiki?.to !== 'personal' && wiki?.to !== 'shared') return null
+  const urls = (Array.isArray(wiki.urls) ? wiki.urls : []).filter((url): url is string => typeof url === 'string' && url.length <= 300 && /^https?:\/\/\S+$/.test(url)).slice(0, 12)
+  const error = text(wiki.error, 200)
+  return urls.length || error ? { to: wiki.to, urls, error } : null
+}
+
 /** The status file's text, or null when it says nothing worth a tab line. */
 export function readLearnStatus(raw: string, now: number): LearnStatus | null {
   let value: Record<string, unknown>
@@ -74,6 +85,7 @@ export function readLearnStatus(raw: string, now: number): LearnStatus | null {
         kind: text(b.kind, 20),
         explain: b.kind === 'explain' && typeof b.explain === 'string' && EXPLAIN_ID.test(b.explain) ? b.explain : null,
         file: b.kind === 'explain' && typeof b.file === 'string' && /\.html$/.test(b.file) && b.file.length <= 400 ? b.file : null,
+        wiki: b.kind === 'explain' ? readWiki(b.wiki) : null,
         topic: text(b.topic),
         step: text(b.step, 20),
         state: b.state as LearnBuild['state'],
@@ -113,15 +125,24 @@ export function stoppedNotice(build: LearnBuild | null | undefined, explainer: s
  * The notice this chat gets when more clips of the explainer it asked for are ready: shown in the
  * chat, never read by the model. `told` is how many it was already told about. Null when there's
  * nothing new, or the build is another chat's explainer or a course's. The last one names the file
- * you can pass on, under `home` shown as ~.
+ * you can pass on, under `home` shown as ~, and where it is on the wiki when that was asked for (or
+ * why it isn't).
  */
 export function readyNotice(build: LearnBuild | null | undefined, explainer: string | null, told: number, home = ''): { done: number; text: string } | null {
   if (!build || !explainer || build.kind !== 'explain' || build.explain !== explainer || build.done <= told) return null
   const ready =
     build.total <= 1 ? `The clip of "${build.topic}" is ready · /clips opens it` : `${build.done} of ${build.total} clips of "${build.topic}" are ready · /clips opens them`
   const file = shownPath(build.file, home)
-  const text = file && build.done >= build.total ? `${ready} · as one file: ${file}` : ready
-  return { done: build.done, text }
+  if (build.done < build.total) return { done: build.done, text: ready }
+  const wiki = wikiText(build.wiki)
+  return { done: build.done, text: [ready, ...(file ? [`as one file: ${file}`] : []), ...(wiki ? [wiki] : [])].join(' · ') }
+}
+
+/** Where an explainer is on the wiki, or why it isn't; nothing when it wasn't asked for. */
+function wikiText(wiki: LearnBuild['wiki']): string {
+  if (!wiki) return ''
+  if (wiki.error) return `not on the wiki: ${wiki.error}; /clips wiki tries again`
+  return `on the wiki (${wiki.to}${wiki.urls.length > 1 ? `, in ${wiki.urls.length} parts` : ''}): ${wiki.urls.join(' ')}`
 }
 
 /** A path under home as the person would write it. */
@@ -136,5 +157,6 @@ export function readyNote(build: LearnBuild | null | undefined, home = ''): stri
   if (!build || build.total < 1 || build.done < build.total) return null
   const file = shownPath(build.file, home)
   const clips = build.total === 1 ? `The clip of "${build.topic}" is ready` : `All ${build.total} clips of "${build.topic}" are ready`
-  return `[/explain, not typed by the person] ${clips}${file ? `, as one file: ${file}` : ''}. They were told in the chat, and /clips opens it. There is nothing to do or say now; use this only if they ask.`
+  const wiki = wikiText(build.wiki)
+  return `[/explain, not typed by the person] ${clips}${file ? `, as one file: ${file}` : ''}${wiki ? `; ${wiki}` : ''}. They were told in the chat, and /clips opens it. There is nothing to do or say now; use this only if they ask.`
 }

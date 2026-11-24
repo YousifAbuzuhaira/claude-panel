@@ -26,6 +26,7 @@ Then start Claude Code again, or run `/reload-plugins` in a session.
 - `/explain how the gateway mints tokens` explains that, from the code and this chat.
 - `/explain` alone explains what you are working on.
 - Claude plans the clips and asks how deep to go: the idea, the mechanism with its code, or everything with its failure modes and edges.
+- With a Keops wiki key set, it also asks whether the finished clips go on the wiki (see below).
 - A notice in the chat says when each clip is ready. The last one gives the file's path.
 - `/clips` opens the clips in your browser.
 - `/clips stop` stops making them; the ones ready are kept. `/clips resume` makes the rest.
@@ -38,6 +39,15 @@ The first `/explain` also downloads the voice: about 350 MB, once, each piece ch
 Each explainer is one HTML file in `~/explainers`. It plays with no server and no internet, so you can send it to someone. It is written again after each clip, so open it again (or reload it) to see the new ones.
 
 The file holds the clips: their narration, pictures, and the code they show. It does not hold your chat, its session id, your folder's path or your settings. Read what it shows before you send it: it can show private code.
+
+## On the Keops wiki
+
+Only when `WIKI_API_KEY` is set where you start Claude Code. It is your own key, made in the wiki under Settings → API keys.
+
+- Each `/explain` then asks: "No, this machine only", "My personal workspace" (only you can open it) or "Shared workspace" (everyone in Keops can, with the code the clips show). The answer holds for that explainer alone.
+- It goes up once, when every clip is ready, as `Explainers/<title>.html`. One too big for the wiki (5 MB, about 12 clips) goes up in parts. The last notice gives the link. No share link is made.
+- If the upload fails, the notice says why, and `/clips wiki` tries again. The clips and their file are made either way.
+- `/clips wiki off` stops the question; `/clips wiki on` brings it back.
 
 ## What it explains, and what it can't
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { acceptedText, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, readExplainAnswer, refusalText } from '../hooks/explain'
-import { courseArgv, isLearnBusy, learnStatusPath, readLearnStatus, readyNote, readyNotice } from '../hooks/learn'
+import { acceptedText, asksWiki, EXPLAIN_TOOL, EXPLAIN_TOOL_DESCRIPTION, EXPLAIN_TOOL_SCHEMA, explainArgv, explainBrief, helperArgv, learnSettingsPath, readExplainAnswer, refusalText, wikiPicked, wikiReply } from '../hooks/explain'
+import { courseArgv, isLearnBusy, type LearnBuild, learnStatusPath, readLearnStatus, readyNote, readyNotice } from '../hooks/learn'
 import { panelState } from '../hooks/widget'
 import { answerHost, PLAN, STATE } from './host'
 
@@ -133,8 +133,9 @@ describe('/explain', () => {
 
   test("the helper's last line says the explainer started, or what to fix; anything else is no answer", () => {
     // A 0.17 helper's line: no depth, every clip wanted.
-    expect(readExplainAnswer('checking\n{"ok":true,"id":"x202611181332459e","clips":3}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 3, wanted: 3, depth: null })
-    expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":6,"wanted":4,"depth":2}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 6, wanted: 4, depth: 2 })
+    expect(readExplainAnswer('checking\n{"ok":true,"id":"x202611181332459e","clips":3}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 3, wanted: 3, depth: null, wiki: null })
+    expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":6,"wanted":4,"depth":2,"wiki":"shared"}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 6, wanted: 4, depth: 2, wiki: 'shared' })
+    expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":3,"wiki":"everyone"}')).toMatchObject({ wiki: null })
     expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":6,"depth":7}')).toMatchObject({ depth: null })
     expect(readExplainAnswer('{"ok":false,"problems":["Clip 2: moved",3]}')).toEqual({ ok: false, problems: ['Clip 2: moved'] })
     expect(readExplainAnswer('{"ok":true,"id":"../x"}')).toBeNull()
@@ -206,5 +207,92 @@ describe('/explain', () => {
     expect(brief).toContain('at most 18 lines')
     expect(brief).toContain('Nothing opens by itself')
     expect(brief).not.toContain('$ARGUMENTS')
+    expect(brief).toContain("with one option left, don't ask and use it.")
+    expect(brief).not.toMatch(/wiki/i)
+  })
+})
+
+describe('the wiki, for /explain', () => {
+  const question = 'Put the finished clips on the Keops wiki too?'
+  const asked = (answer: unknown, more: Record<string, unknown> = {}) => ({
+    questions: [{ question: 'How deep should it go?', header: 'Depth' }, { question, header: 'Wiki' }],
+    answers: { 'How deep should it go?': 'Everything · 3 clips', ...(answer === undefined ? {} : { [question]: answer }) },
+    ...more,
+  })
+
+  test('the question is in the brief beside the depth only when it is offered: No first, nothing recommended', () => {
+    const brief = explainBrief('tokens', { wiki: true })
+    const step = brief.split('\n').find(line => line.startsWith('8. ')) ?? ''
+    expect(step).toContain('In the same AskUserQuestion call ask a second question')
+    expect(step).toContain('even when there is no depth to ask about')
+    expect(step.indexOf('"No, this machine only"')).toBeLessThan(step.indexOf('"My personal workspace"'))
+    expect(step.indexOf('"My personal workspace"')).toBeLessThan(step.indexOf('"Shared workspace"'))
+    expect(step).toContain('Recommend none of them')
+    expect(step).toContain('say nothing about the wiki in the tool call')
+    expect(Object.keys(EXPLAIN_TOOL_SCHEMA.properties)).not.toContain('wiki')
+  })
+
+  test('it is offered only with a key, and not when the setting says off', () => {
+    expect(asksWiki(undefined, '{}')).toBe(false)
+    expect(asksWiki('', '')).toBe(false)
+    expect(asksWiki('kwk_x', '')).toBe(true)
+    expect(asksWiki('kwk_x', '{"wiki":"ask"}')).toBe(true)
+    expect(asksWiki('kwk_x', '{"wiki":"off"}')).toBe(false)
+    expect(asksWiki('kwk_x', 'null')).toBe(true)
+    expect(learnSettingsPath('/home/me')).toBe('/home/me/.config/claude-learn/settings.json')
+  })
+
+  test('only a workspace you clicked is a yes: No, other words, no answer and a question that timed out are not', () => {
+    expect(wikiPicked(asked('My personal workspace'))).toBe('personal')
+    expect(wikiPicked(asked(' shared workspace '))).toBe('shared')
+    for (const answer of ['No, this machine only', 'not the shared workspace', 'yes', '', undefined, 3]) expect(wikiPicked(asked(answer))).toBeNull()
+    expect(wikiPicked(asked('Shared workspace', { afkTimeoutMs: 60_000 }))).toBeNull()
+  })
+
+  test('a question about anything else says nothing about the wiki, whatever it is answered', () => {
+    expect(wikiPicked({ questions: [{ question: 'Where?', header: 'Place' }], answers: { 'Where?': 'Shared workspace' } })).toBeUndefined()
+    for (const result of [undefined, null, 'text', {}, { questions: 'x' }]) expect(wikiPicked(result)).toBeUndefined()
+  })
+
+  test('the workspace goes to the helper, and the reply says either way when it was asked', () => {
+    expect(explainArgv({ pluginRoot: '/p', sessionId: 's', cwd: '/work', wiki: 'personal' }).slice(-2)).toEqual(['--wiki', 'personal'])
+    expect(explainArgv({ pluginRoot: '/p', sessionId: 's', cwd: '/work', wiki: null })).not.toContain('--wiki')
+    expect(helperArgv({ pluginRoot: 'C:\\p', isWindows: true, entry: 'explain-cli.mjs' }, ['wiki'])).toEqual(['node', 'C:\\p/learn/explain-cli.mjs', 'explain', 'wiki'])
+    const answer = { clips: 6, wanted: 4, depth: 2 as const }
+    expect(acceptedText({ ...answer, wiki: 'shared' }, { wikiAsked: true })).toContain('Once all are ready they go on the wiki (the shared workspace).')
+    expect(acceptedText({ ...answer, wanted: 1, wiki: 'personal' }, { wikiAsked: true })).toContain('Once ready it goes on the wiki (your personal workspace).')
+    expect(acceptedText(answer, { wikiAsked: true })).toContain('Nothing goes on the wiki.')
+    expect(acceptedText(answer)).not.toMatch(/wiki/i)
+  })
+
+  test('the last notice says where it is on the wiki, in how many parts, or why it is not; earlier ones say nothing', () => {
+    const build = (done: number, wiki: LearnBuild['wiki']) => ({ id: 'j2', kind: 'explain', explain: 'x202611181332459e', file: '/home/me/explainers/tokens-459e.html', wiki, topic: 'Tokens', step: 'done', state: 'done' as const, message: '', done, total: 4 })
+    const up = { to: 'personal' as const, urls: ['https://wiki.keops.ai/d/tokens-Ab3'], error: '' }
+    expect(readyNotice(build(4, up), 'x202611181332459e', 3, '/home/me')?.text).toBe('4 of 4 clips of "Tokens" are ready · /clips opens them · as one file: ~/explainers/tokens-459e.html · on the wiki (personal): https://wiki.keops.ai/d/tokens-Ab3')
+    expect(readyNotice(build(3, up), 'x202611181332459e', 2, '/home/me')?.text).not.toContain('wiki')
+    expect(readyNotice(build(4, { to: 'shared', urls: ['https://w/d/1', 'https://w/d/2'], error: '' }), 'x202611181332459e', 3)?.text).toContain('on the wiki (shared, in 2 parts): https://w/d/1 https://w/d/2')
+    expect(readyNotice(build(4, { to: 'shared', urls: [], error: "couldn't reach the wiki (ENOTFOUND)" }), 'x202611181332459e', 3)?.text).toContain("not on the wiki: couldn't reach the wiki (ENOTFOUND); /clips wiki tries again")
+    expect(readyNote(build(4, up), '/home/me')).toContain('; on the wiki (personal): https://wiki.keops.ai/d/tokens-Ab3. They were told')
+    expect(readyNote(build(4, null), '/home/me')).not.toContain('wiki')
+  })
+
+  test('the status file’s wiki is read safely: a workspace, web addresses, a short reason; an explainer’s only', () => {
+    const wiki = (value: unknown, kind = 'explain') => readLearnStatus(JSON.stringify({ at: AT, build: { id: 'j2', kind, explain: 'x202611181332459e', topic: 'Tokens', step: 'done', state: 'done', done: 1, total: 1, wiki: value } }), NOW)?.build?.wiki
+    expect(wiki({ to: 'personal', urls: ['https://wiki.keops.ai/d/a', 'javascript:alert(1)', 5, 'https://a b'], error: null })).toEqual({ to: 'personal', urls: ['https://wiki.keops.ai/d/a'], error: '' })
+    expect(wiki({ to: 'shared', urls: [], error: 'no' })).toEqual({ to: 'shared', urls: [], error: 'no' })
+    for (const value of [null, undefined, 'x', { to: 'everyone', urls: ['https://a'] }, { to: 'personal', urls: [] }]) expect(wiki(value)).toBeNull()
+    expect(wiki({ to: 'personal', urls: ['https://a'] }, 'video')).toBeNull()
+  })
+
+  test('/clips wiki says what happened, and how to try again', () => {
+    const answer = { found: true, id: 'x1', title: 'Tokens', to: 'shared', ready: 4, clips: 4, urls: ['https://w/d/1'], error: null }
+    expect(wikiReply(answer)).toBe('"Tokens" is on the wiki (the shared workspace): https://w/d/1')
+    expect(wikiReply({ ...answer, urls: [], error: 'the wiki refused it (400)' })).toBe('"Tokens" is not on the wiki: the wiki refused it (400). /clips wiki tries again.')
+    expect(wikiReply({ ...answer, ready: 2, waiting: true })).toBe('"Tokens" goes on the wiki (the shared workspace) once all its clips are ready: 2 of 4 are.')
+    expect(wikiReply({ ...answer, to: null })).toContain('was not asked onto the wiki')
+    expect(wikiReply({ found: false })).toContain('No clips were asked onto the wiki')
+    expect(wikiReply({ asking: false })).toContain('no longer asks')
+    expect(wikiReply({ asking: true })).toContain('asks about the wiki')
+    expect(wikiReply(null)).toContain('could not run')
   })
 })
