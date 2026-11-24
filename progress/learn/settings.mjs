@@ -54,7 +54,7 @@ export function toLocalPath(path, platform = process.platform) {
 export const isAbsoluteLocal = (path, platform = process.platform) =>
   platform === 'win32' ? /^([A-Za-z]:[\\/]|\\\\[^\\]+\\)/.test(String(path)) : String(path).startsWith('/');
 
-const isModel = value => typeof value === 'string' && (MODELS.includes(value) || /^claude-[a-z0-9.-]+$/.test(value));
+export const isModel = value => typeof value === 'string' && (MODELS.includes(value) || /^claude-[a-z0-9.-]+$/.test(value));
 
 /** Anything read from disk or sent by the window, made safe to use. */
 export function normalizeSettings(raw, platform = process.platform) {

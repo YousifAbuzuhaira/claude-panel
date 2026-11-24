@@ -3,7 +3,6 @@
 // steps: plan-page (for an added page), then pages. Each step is safe to run again, so a build stopped by a closed window, a
 // sleep or a reboot carries on from where it got to. Builds run as their own detached
 // process (`learn.mjs build run <id>`), so closing the window doesn't stop them.
-import { spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -22,7 +21,7 @@ import { MAX_QUICK, applyReader, checkBlock, closingFor, mergeAids, mergeTerms, 
 import { makeVideos, readQueue } from './video.mjs';
 import { explainJob as explainJobShared, runExplainJob, startExplainer as startExplainerShared } from './explain-job.mjs';
 import { exportExplainer } from './export.mjs';
-import { isAlive, isJobLive, listJobs, now, readJob, saveJob, spawnJob } from './jobs.mjs';
+import { cancelJob, isJobLive, listJobs, now, readJob, saveJob, spawnJob } from './jobs.mjs';
 import { MAX_DISPUTES, holdBack, placeDisputes, sourceDisputes, tidyDisputes, tidySourceCheck } from './verify.mjs';
 import { ensureVoice, record } from './voice.mjs';
 import { SESSION_ID, readClaudeChat } from './chats.mjs';
@@ -47,7 +46,7 @@ const SUPPORT_BUDGET = 50_000;
 // --- Jobs ------------------------------------------------------------------------------
 
 // A job's file and process: in jobs.mjs, shared with explainers.
-export { listJobs, readJob, saveJob };
+export { cancelJob, listJobs, readJob, saveJob };
 
 /** The job making videos, if there is one: one for the whole library, and it has no course. */
 export const videoJob = lib => listJobs(lib).find(job => job.kind === 'video' && job.state !== 'done' && !job.dismissed) || null;
@@ -232,18 +231,6 @@ export function dropJobFiles(lib, job) {
 /** Starts `learn.mjs build run <id>` on its own, outliving whoever started it. */
 export const startDaemon = (lib, id) => spawnJob(lib, id, [LEARN_MJS, 'build', 'run', id]);
 
-/**
- * Stops a build. Elsewhere SIGTERM lets it stop its own claude runs; Windows has no signals
- * (kill ends the process at once and its children run on), so taskkill ends the whole tree.
- */
-function stopBuild(pid) {
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 15_000 });
-    return;
-  }
-  try { process.kill(pid, 'SIGTERM'); } catch {}
-}
-
 /** Jobs that were running when their process died (reboot, WSL shut down): start them again. */
 export function resumeStale(lib) {
   const resumed = [];
@@ -274,14 +261,6 @@ export function resumeJob(lib, id) {
   if (job.state === 'done') return;
   saveJob(lib, { ...job, pid: null, state: 'running', error: null, message: `Carrying on: ${job.step}` });
   startDaemon(lib, id);
-}
-
-export function cancelJob(lib, id) {
-  const job = readJob(lib, id);
-  if (!job) throw new Error('no such build');
-  if (job.state === 'done' || job.state === 'failed') return;
-  if (job.pid && isAlive(job.pid)) stopBuild(job.pid);
-  saveJob(lib, { ...readJob(lib, id), state: 'paused', message: 'Paused' });
 }
 
 // --- Running a job ------------------------------------------------------------------------

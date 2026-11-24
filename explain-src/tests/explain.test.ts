@@ -1,7 +1,7 @@
 // The explain plugin on its own: /explain, /clips, the tool, and the notices, with the engine and
 // the helper (learn.sh) played by the test. `claude plugin test` runs these on the built plugin.
 import type { On } from 'claude-code'
-import { describe, expect, mock, test } from 'claude-code/testing'
+import { describe, expect, type Engine, mock, test } from 'claude-code/testing'
 
 import { acceptedText, explainBrief, explainToolName, FIRST_RUN, openFileArgv } from '../hooks/explain'
 import { stoppedNotice } from '../hooks/learn'
@@ -16,7 +16,7 @@ type Command = { name: string; description: string; source: 'builtin' | 'plugin'
 /** The session, and a helper that answers each subcommand with a line of JSON. */
 function world(
   on: On,
-  options: { voice?: unknown; start?: unknown; latest?: unknown; resume?: unknown; commands?: Command[]; mac?: boolean; windows?: boolean; status?: () => string } = {},
+  options: { voice?: unknown; start?: unknown; latest?: unknown; resume?: unknown; stop?: unknown; model?: unknown; fail?: string; commands?: Command[]; mac?: boolean; windows?: boolean; status?: () => string } = {},
 ) {
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, {
@@ -28,14 +28,19 @@ function world(
     start: options.start ?? { ok: true, id: ID, clips: 6, wanted: 4, depth: 2 },
     latest: options.latest ?? null,
     resume: options.resume ?? { making: false },
+    stop: options.stop ?? { stopped: false },
+    model: options.model ?? { model: 'opus', models: ['sonnet', 'opus', 'haiku'], known: true },
   }
   on('process.run', (_$, e) => {
     seen.runs.push([...e.argv])
     if (e.init?.stdin !== undefined) seen.stdin.push(String(e.init.stdin))
-    const sub = ['voice', 'start', 'latest', 'resume'].find(word => e.argv.includes(word))
+    const sub = ['voice', 'start', 'latest', 'resume', 'stop', 'model'].find(word => e.argv.includes(word))
+    if (sub === 'start' && options.fail) return { value: { exitCode: 1, stdout: '', stderr: options.fail, isStdoutTruncated: false, isStderrTruncated: false } }
     const stdout = e.argv[0] === 'uname' ? 'Darwin\n' : sub ? `${JSON.stringify(answers[sub])}\n` : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('tool.register', (_$, e) => ({ value: { tool: `mcp__explain__${e.name}` } }) as never)
   on('command.list', () => ({ value: options.commands ?? [] }))
   on('command.register', (_$, e) => {
     seen.registered.push(e.name)
@@ -50,9 +55,9 @@ function world(
     if (e.to === 'transcript') seen.rows.push(e.text)
     return { value: undefined }
   })
-  on('session.append', (_$, e) => {
+  on('session.append', (_$, e, next) => {
     seen.hidden.push(JSON.stringify(e.message.content))
-    return { message: e.message, uuid: 'row' } as never
+    return next(e)
   })
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.cwd', () => ({ value: '/home/me/repo' }))
@@ -63,6 +68,9 @@ function world(
   })
   return { clock, seen }
 }
+
+/** The session begins, as a real one does first: only then does the plugin's poll have a clock. */
+const begin = ($: Engine) => $.session.start({ cwd: '/home/me/repo', surface: 'terminal', isInteractive: true })
 
 const build = (patch: Record<string, unknown> = {}) => JSON.stringify({ at: new Date(1_000).toISOString(), build: { id: 'j1', kind: 'explain', explain: ID, topic: 'Tokens', step: 'clips', state: 'running', message: 'Tokens: clip 2 of 4, writing', done: 1, total: 4, ...patch } })
 
@@ -136,16 +144,31 @@ describe('the tool', () => {
     const answer = await $.tool.call({ tool: explainToolName('explain'), ...PLAN } as never)
     expect(JSON.stringify(answer)).toContain('Clip 2: a quote that is not in this chat')
   })
+
+  test("an account that can't use the model is told how to change it; any other failure is only said", async ($, on) => {
+    world(on, { fail: "explain: There's an issue with the selected model (opus). It may not exist or you may not have access to it. Run --model to pick a different model.\n" })
+    const answer = JSON.stringify(await $.tool.call({ tool: explainToolName('explain'), ...PLAN } as never))
+    expect(answer).toContain('/clips model sonnet')
+    expect(answer).toContain('the same plan')
+  })
+
+  test('a failure that is not about the model says only what went wrong', async ($, on) => {
+    world(on, { fail: "explain: the session's folder is not on this computer\n" })
+    const answer = JSON.stringify(await $.tool.call({ tool: explainToolName('explain'), ...PLAN } as never))
+    expect(answer).toContain('not on this computer')
+    expect(answer).not.toContain('/clips model')
+  })
 })
 
 describe('notices', () => {
   test('a clip ready is said once in the chat, and the job is on the status line while it runs', async ($, on) => {
     let status = build()
     const { clock, seen } = world(on, { status: () => status })
+    await begin($)
     await $.tool.call({ tool: explainToolName('explain'), ...PLAN } as never)
     await clock.advance(3_500)
     expect(seen.rows.filter(row => row.includes('1 of 4 clips of "Tokens" are ready'))).toHaveLength(1)
-    expect(seen.status.at(-1)).toBe('explain · Tokens: clip 2 of 4, writing')
+    expect(seen.status.at(-1)).toBe('Tokens: clip 2 of 4, writing')
     await clock.advance(6_000)
     expect(seen.rows).toHaveLength(1)
     expect(seen.hidden).toEqual([])
@@ -164,6 +187,7 @@ describe('notices', () => {
   test("a job that stopped says so once, since there's no panel to show it; another chat's is none of this chat's business", async ($, on) => {
     let status = build()
     const { clock, seen } = world(on, { status: () => status })
+    await begin($)
     await $.tool.call({ tool: explainToolName('explain'), ...PLAN } as never)
     await clock.advance(3_500)
     status = build({ state: 'failed', message: 'Stopped at voice: voice setup failed', done: 1 })
@@ -179,7 +203,8 @@ describe('notices', () => {
 
   test('only a stop before the last clip is a stop: done, running and other builds are none', () => {
     const base = { id: 'j1', kind: 'explain', explain: ID, topic: 'Tokens', step: 'clips', message: 'Paused', done: 1, total: 4 }
-    expect(stoppedNotice({ ...base, state: 'paused' }, ID)?.text).toBe('"Tokens": Paused · 1 of 4 clips ready · /clips carries on')
+    expect(stoppedNotice({ ...base, state: 'paused' }, ID)?.text).toBe('"Tokens": Paused · 1 of 4 clips ready · /clips resume makes the rest')
+    expect(stoppedNotice({ ...base, state: 'failed', message: 'Stopped at clips: no answer' }, ID)?.text).toContain('/clips carries on')
     expect(stoppedNotice({ ...base, state: 'running' }, ID)).toBeNull()
     expect(stoppedNotice({ ...base, state: 'failed', done: 4 }, ID)).toBeNull()
     expect(stoppedNotice({ ...base, state: 'failed', explain: 'x202611249999ffff' }, ID)).toBeNull()
@@ -211,9 +236,94 @@ describe('/clips', () => {
     expect(seen.runs.some(argv => argv[0] === 'explorer.exe')).toBe(false)
   })
 
+  test('one you stopped is opened and left stopped, saying how to go on', async ($, on) => {
+    const { seen } = world(on, { latest: { id: ID, title: 'Tokens', file: FILE, ready: 2, clips: 4, paused: true } })
+    expect((await $.command.run({ command: 'clips', args: '', ...RUN })).text).toBe(`Opened ${FILE} (2 of 4 clips; /clips resume makes the rest)`)
+    expect(seen.runs.some(argv => argv.includes('resume'))).toBe(false)
+  })
+
+  test('one stopped before its first clip opens nothing, and says so', async ($, on) => {
+    const { seen } = world(on, { latest: { id: ID, title: 'Tokens', file: null, ready: 0, clips: 4, paused: true } })
+    expect((await $.command.run({ command: 'clips', args: '', ...RUN })).text).toContain('stopped before its first clip')
+    expect(seen.runs.some(argv => argv.includes('resume') || argv[0] === 'explorer.exe')).toBe(false)
+  })
+
   test('with no explainer anywhere, says how to make one', async ($, on) => {
     world(on)
     expect((await $.command.run({ command: 'clips', args: '', ...RUN })).text).toBe('No clips yet: /explain <what> makes some.')
+  })
+})
+
+describe('/clips stop, resume and model', () => {
+  const STOPPED = { stopped: true, ended: true, job: 'j1', id: ID, title: 'Tokens', ready: 2, clips: 4 }
+
+  test('stop says what is kept and how to go on, and the same stop is not said again as a notice', async ($, on) => {
+    let status = build()
+    const { clock, seen } = world(on, { stop: STOPPED, status: () => status })
+    await begin($)
+    await $.tool.call({ tool: explainToolName('explain'), ...PLAN } as never)
+    await clock.advance(3_500)
+    expect(seen.status.at(-1)).toBe('Tokens: clip 2 of 4, writing')
+    expect((await $.command.run({ command: 'clips', args: ' Stop ', ...RUN })).text).toBe('Stopped "Tokens": 2 of 4 clips are ready. /clips resume makes the rest.')
+    expect(seen.runs.some(argv => argv.includes('stop') && argv.includes(ID))).toBe(true)
+    status = build({ state: 'paused', message: 'Paused', done: 2 })
+    await clock.advance(6_500)
+    expect(seen.rows.some(row => row.includes('Paused'))).toBe(false)
+    expect(seen.status.at(-1)).toBeUndefined()
+  })
+
+  test("a stop that waits on the voice's installer says so; with nothing going on, says that", async ($, on) => {
+    world(on, { stop: { ...STOPPED, ended: false, ready: 0 } })
+    expect((await $.command.run({ command: 'clips', args: 'stop', ...RUN })).text).toContain('once the voice')
+  })
+
+  test('with nothing being made, stop says so', async ($, on) => {
+    world(on)
+    expect((await $.command.run({ command: 'clips', args: 'stop', ...RUN })).text).toBe('Nothing is being made.')
+  })
+
+  test('resume makes the rest, and its clips are told in this chat', async ($, on) => {
+    let status = ''
+    const { clock, seen } = world(on, { resume: { making: true, id: ID, title: 'Tokens', ready: 2, clips: 4 }, status: () => status })
+    await begin($)
+    expect((await $.command.run({ command: 'clips', args: 'resume', ...RUN })).text).toBe('Making the rest of "Tokens": 2 of 4 clips are ready.')
+    status = build({ id: 'j2', done: 3 })
+    await clock.advance(3_500)
+    expect(seen.rows.filter(row => row.includes('3 of 4 clips'))).toHaveLength(1)
+  })
+
+  test('resume with nothing left says so', async ($, on) => {
+    world(on)
+    expect((await $.command.run({ command: 'clips', args: 'resume', ...RUN })).text).toBe('Nothing is left to make.')
+  })
+
+  test('model says which one writes the clips and how to change it; a name changes it; an unknown one is refused', async ($, on) => {
+    const { seen } = world(on)
+    expect((await $.command.run({ command: 'clips', args: 'model', ...RUN })).text).toBe("Clips are written by opus. To change it: /clips model <name> (sonnet, opus, haiku, or a model's full id).")
+    expect(seen.runs.at(-1)?.slice(-2)).toEqual(['explain', 'model'])
+  })
+
+  test('model with a name hands it to the helper', async ($, on) => {
+    const { seen } = world(on, { model: { model: 'sonnet', models: ['sonnet', 'opus', 'haiku'], known: true } })
+    expect((await $.command.run({ command: 'clips', args: 'model sonnet', ...RUN })).text).toBe('Clips are written by sonnet, from the next /explain or /clips resume.')
+    expect(seen.runs.at(-1)?.slice(-2)).toEqual(['model', 'sonnet'])
+  })
+
+  test('a model nobody knows is refused, with the ones there are', async ($, on) => {
+    world(on, { model: { model: 'opus', models: ['sonnet', 'opus', 'haiku'], known: false } })
+    expect((await $.command.run({ command: 'clips', args: 'model gpt', ...RUN })).text).toContain('No model called "gpt". It can be sonnet, opus, haiku')
+  })
+
+  test('another word says what there is, and runs nothing', async ($, on) => {
+    const { seen } = world(on)
+    expect((await $.command.run({ command: 'clips', args: 'pause', ...RUN })).text).toContain('/clips stop, /clips resume and /clips model')
+    expect(seen.runs).toEqual([])
+  })
+
+  test('with the progress plugin here, all of them are its own /clips', async ($, on) => {
+    const { seen } = world(on, { commands: [{ name: 'learn', description: 'Open Learn', source: 'plugin', plugin: 'progress@claude-panel' }] })
+    for (const args of ['stop', 'resume', 'model sonnet']) await $.command.run({ command: 'clips', args, ...RUN }).catch(() => undefined)
+    expect(seen.runs).toEqual([])
   })
 })
 

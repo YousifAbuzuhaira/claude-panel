@@ -60,6 +60,40 @@ function lastJson(stdout: string): Record<string, unknown> | null {
   }
 }
 
+/** `/clips stop`: the clips being made (this chat's, else the newest going on), those ready kept. */
+async function stopMaking($: EngineInterface): Promise<string> {
+  const answer = lastJson((await helper($, ['stop', ...(lastExplainer ? [lastExplainer] : [])])).stdout)
+  if (!answer) return '/clips stop could not run: try it again.'
+  if (answer.stopped !== true) return 'Nothing is being made.'
+  // Said here, so the notice isn't said too; and what was stopped is what /clips is about now.
+  stopTold = `${String(answer.job)}:paused:Paused`
+  lastExplainer = String(answer.id)
+  clipsTold = Number(answer.ready)
+  const ready = `${String(answer.ready)} of ${String(answer.clips)} clips are ready. /clips resume makes the rest.`
+  return answer.ended === true ? `Stopped "${String(answer.title)}": ${ready}` : `Stopping "${String(answer.title)}" once the voice's installer is done with this piece: ${ready}`
+}
+
+/** `/clips resume`: what is missing, made (this chat's explainer, else the newest with clips missing). */
+async function carryOn($: EngineInterface): Promise<string> {
+  const answer = lastJson((await helper($, ['resume', ...(lastExplainer ? [lastExplainer] : [])])).stdout)
+  if (!answer) return '/clips resume could not run: try it again.'
+  if (answer.making !== true) return 'Nothing is left to make.'
+  lastExplainer = String(answer.id)
+  clipsTold = Number(answer.ready)
+  statusText = ''
+  return `Making the rest of "${String(answer.title)}": ${String(answer.ready)} of ${String(answer.clips)} clips are ready.`
+}
+
+/** `/clips model [name]`: which Claude writes the clips (the checks of a plan too). */
+async function chooseModel($: EngineInterface, name: string): Promise<string> {
+  const answer = lastJson((await helper($, ['model', ...(name ? [name] : [])])).stdout)
+  if (!answer) return '/clips model could not run: try it again.'
+  const names = Array.isArray(answer.models) ? answer.models.join(', ') : ''
+  if (answer.known !== true) return `No model called "${name}". It can be ${names}, or a model's full id (claude-…).`
+  if (name) return `Clips are written by ${String(answer.model)}, from the next /explain or /clips resume.`
+  return `Clips are written by ${String(answer.model)}. To change it: /clips model <name> (${names}, or a model's full id).`
+}
+
 /** Opens a file with its default app: the browser, for an explainer. */
 async function openFile($: EngineInterface, path: string): Promise<void> {
   const distro = await $.env.get('WSL_DISTRO_NAME').catch(() => undefined)
@@ -84,7 +118,8 @@ async function poll($: EngineInterface) {
   statusText = text
   const status = readLearnStatus(text, await $.clock.now())
   const build = status?.build?.kind === 'explain' && status.build.explain === lastExplainer ? status.build : null
-  $.ui.status(build?.state === 'running' ? `explain · ${build.message || 'making clips'}` : undefined)
+  // Claude Code draws the plugin's name before it.
+  $.ui.status(build?.state === 'running' ? build.message || 'making clips' : undefined)
   // A line in the chat, which the model never reads, so no turn starts. Not `$.session.append`: the
   // engine files its system rows at level `info`, which only the detailed view (Ctrl+O) draws.
   const say = (line: string) => $.ui.log(line)
@@ -112,7 +147,7 @@ export const register: Register = on => {
     if (!(await progressIsHere($))) {
       // Not immediate: typed during a turn, it waits for that turn to end, then starts its own.
       await $.command.register({ name: 'explain', description: 'Have Claude explain code from this chat as short narrated video clips, e.g. /explain how the gateway mints tokens', argumentHint: '<what to explain>' })
-      await $.command.register({ name: 'clips', description: 'Open the clips /explain made, as one file in your browser', immediate: true })
+      await $.command.register({ name: 'clips', description: 'Open the clips /explain made, as one file in your browser; or stop, resume, or choose the model', argumentHint: '[stop | resume | model <name>]', immediate: true })
     }
     const started = await next(e)
     pollTimer?.cancel()
@@ -136,12 +171,20 @@ export const register: Register = on => {
   // The file of the explainer this chat made last, else the newest one made here.
   on('command.run', { command: 'clips' }, async ($, e, next) => {
     if (isOff || (await progressIsHere($))) return next(e)
+    const [word = '', name = ''] = e.args.trim().toLowerCase().split(/\s+/)
+    if (word === 'stop') return { text: await stopMaking($) }
+    if (word === 'resume') return { text: await carryOn($) }
+    if (word === 'model') return { text: await chooseModel($, name) }
+    if (word) return { text: '/clips opens the clips. There is also /clips stop, /clips resume and /clips model <name>.' }
     const found = lastJson((await helper($, ['latest', ...(lastExplainer ? [lastExplainer] : [])]).catch(() => ({ stdout: '' }))).stdout)
     if (!found) return { text: 'No clips yet: /explain <what> makes some.' }
-    // Making that stopped (a restart, a failure) carries on when you open it; one going on is left alone.
+    // Making that stopped (a restart, a failure) carries on when you open it; one going on is left
+    // alone, and so is one you stopped.
     const missing = Number(found.ready) < Number(found.clips)
-    const making = missing && lastJson((await helper($, ['resume', String(found.id)]).catch(() => ({ stdout: '' }))).stdout)?.making === true
-    const rest = missing ? ` (${String(found.ready)} of ${String(found.clips)} clips${making ? ', the rest being made' : ''})` : ''
+    const paused = missing && found.paused === true
+    const making = missing && !paused && lastJson((await helper($, ['resume', String(found.id)]).catch(() => ({ stdout: '' }))).stdout)?.making === true
+    const rest = missing ? ` (${String(found.ready)} of ${String(found.clips)} clips${making ? ', the rest being made' : paused ? '; /clips resume makes the rest' : ''})` : ''
+    if (typeof found.file !== 'string' && paused) return { text: `"${String(found.title)}" was stopped before its first clip: /clips resume makes it.` }
     if (typeof found.file !== 'string') return { text: `The first clip of "${String(found.title)}" is still being made: a notice here says when it is ready.` }
     if (making && !lastExplainer) {
       lastExplainer = String(found.id)
@@ -149,7 +192,7 @@ export const register: Register = on => {
     }
     await openFile($, found.file)
     return { text: `Opened ${found.file}${rest}` }
-  }).catch(() => ({ text: '/clips could not open the file: it is in ~/explainers.' }))
+  }).catch(() => ({ text: '/clips did not work: try it again. The files are in ~/explainers.' }))
 
   on('tool.call', { tool: new RegExp(`^${explainToolName(PLUGIN)}$`) }, async ($, e) => {
     if (e.agentId !== undefined) return { deny: 'Only the main session hands over an explainer.' }
@@ -165,7 +208,12 @@ export const register: Register = on => {
     const argv = explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($), entry: 'explain-cli.mjs' })
     const ran = await $.process.run(argv, { stdin: JSON.stringify(plan), timeoutMs: 6 * 60_000 })
     const answer = readExplainAnswer(ran.stdout)
-    if (!answer) return { deny: `The plan couldn't be taken: ${(ran.stderr.trim() || ran.stdout.trim()).split('\n').at(-1) || 'no answer'}` }
+    if (!answer) {
+      const why = (ran.stderr.trim() || ran.stdout.trim()).split('\n').at(-1) || 'no answer'
+      // Claude Code's own words when an account can't use a model.
+      const change = /selected model/i.test(why) ? ' Ask the person to type "/clips model sonnet", then call this tool again with the same plan.' : ''
+      return { deny: `The plan couldn't be taken: ${why}${change}` }
+    }
     if (!answer.ok) return { deny: refusalText(answer.problems) }
     lastExplainer = answer.id
     clipsTold = 0

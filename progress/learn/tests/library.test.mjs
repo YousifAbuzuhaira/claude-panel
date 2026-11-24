@@ -2,6 +2,7 @@
 // with stand-ins for yt-dlp, the web and Claude; resuming; the serve protocol; the lock.
 // node --test learn/tests/
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -954,6 +955,57 @@ describe("an explainer's job", () => {
     assert.equal(isJobLive(job({})), true, 'restarted: no pid yet, so asked again at once it is not started twice');
     assert.equal(isJobLive(job({ updatedAt: new Date(Date.now() - 5 * 60_000).toISOString() })), false, 'it never came up');
     for (const state of ['done', 'failed', 'paused']) assert.equal(isJobLive(job({ state, pid: process.pid })), false, state);
+  });
+
+  test('a pid is its job only if its command names it: a number used again since is never stopped', async () => {
+    const { cancelJob, runsJob, stopJob } = await import('../jobs.mjs');
+    const lib = openLibrary();
+    const id = 'j202611240000ab12';
+    const stranger = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    const own = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'run', id], { stdio: 'ignore' });
+    try {
+      assert.equal(runsJob(stranger.pid, id), false);
+      assert.equal(runsJob(own.pid, id), true);
+      assert.equal(runsJob(null, id), false);
+      assert.equal(runsJob(2 ** 30, id), false);
+      const job = saveJob(lib, { v: 1, id, kind: 'explain', explain: 'x202611240000ab12', state: 'running', step: 'clips', pid: stranger.pid, startedAt: new Date().toISOString() });
+      cancelJob(lib, id);
+      await new Promise(done => setTimeout(done, 200));
+      assert.equal(stranger.exitCode === null && stranger.signalCode === null, true, 'another process keeps running');
+      assert.equal(readJob(lib, id).state, 'paused');
+      saveJob(lib, { ...job, state: 'running', pid: own.pid });
+      assert.equal(await stopJob(lib, id), true, 'stopped, and waited for');
+      assert.equal(readJob(lib, id).state, 'paused');
+    } finally {
+      stranger.kill('SIGKILL');
+      own.kill('SIGKILL');
+    }
+  });
+
+  test('stopped before its process came up, it makes nothing', async () => {
+    const lib = openLibrary();
+    const explainer = saveExplainer(lib, { title: 'Stopped early', depth: 1, at: 1, clips: [clip(1)], createdAt: new Date().toISOString() });
+    saveJob(lib, { v: 1, id: 'j202611240000ab34', kind: 'explain', explain: explainer.id, state: 'paused', step: 'voice', pid: null, startedAt: new Date().toISOString() });
+    const io = { askStructured: async () => { throw new Error('asked'); }, ensureVoice: async () => { throw new Error('set up'); }, record: async () => { throw new Error('recorded'); } };
+    await buildModule.runJob(lib, 'j202611240000ab34', io);
+    const job = readJob(lib, 'j202611240000ab34');
+    assert.deepEqual([job.state, job.pid, job.error], ['paused', null, undefined]);
+  });
+
+  test("a stop while the voice is being got pauses it at once, and what the setup says after that isn't saved", async () => {
+    const lib = openLibrary();
+    const explainer = saveExplainer(lib, { title: 'Stopped in setup', depth: 1, at: 1, clips: [clip(1)], createdAt: new Date().toISOString() });
+    saveJob(lib, { v: 1, id: 'j202611240000ab56', kind: 'explain', explain: explainer.id, state: 'running', step: 'voice', pid: null, startedAt: new Date().toISOString() });
+    let say;
+    const io = { askStructured: async () => { throw new Error('asked'); }, ensureVoice: ({ onProgress }) => new Promise(() => { say = onProgress; onProgress('Getting the voice model'); }), record: async () => {} };
+    const running = buildModule.runJob(lib, 'j202611240000ab56', io);
+    await new Promise(done => setTimeout(done, 50));
+    process.emit('SIGTERM');
+    const job = await running;
+    say('Getting the rest');
+    assert.equal(job.state, 'paused');
+    assert.equal(readJob(lib, 'j202611240000ab56').state, 'paused');
+    assert.equal(readJob(lib, 'j202611240000ab56').message, 'Paused');
   });
 
   test('when it ends, it counts every clip ready, not only the ones this run made', async () => {

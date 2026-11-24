@@ -65,14 +65,20 @@ export function explainJob(lib, explainer, { daemon = explainDaemon, before = ()
 export async function runExplainJob(lib, id, io = explainIo) {
   let job = readJob(lib, id);
   if (!job) throw new Error(`no job ${id}`);
+  // Stopped before this process came up (whoever starts one saves it as running first).
+  if (job.state === 'paused') return job;
   const save = patch => {
     job = saveJob(lib, { ...job, ...patch });
     return job;
   };
   let stopping = false;
+  let giveUp;
+  const stopped = new Promise((_, reject) => { giveUp = reject; });
+  stopped.catch(() => {});
   const onStop = () => {
     stopping = true;
     stopAll();
+    giveUp(new Error('stopped'));
   };
   process.once('SIGTERM', onStop);
   save({ pid: process.pid, state: 'running', error: null });
@@ -80,7 +86,8 @@ export async function runExplainJob(lib, id, io = explainIo) {
     writeJson(lib.paths.explaining, { pid: process.pid, id: job.explain });
     try {
       if (job.step === 'voice') {
-        await io.ensureVoice({ onProgress: message => save({ message }) });
+        // A download can't be stopped part way: the job ends without it, and its process ends the download.
+        await Promise.race([io.ensureVoice({ onProgress: message => stopping || save({ message }) }), stopped]);
         save({ step: 'clips' });
       }
       const made = await makeExplainer({ lib, io, id: job.explain, save, isStopping: () => stopping });

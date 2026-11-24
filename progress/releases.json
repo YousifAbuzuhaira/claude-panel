@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.20.1",
+      "date": "2026-11-24",
+      "by": "Yousif",
+      "notes": [
+        "Pausing a build never ends another process that has its old number",
+        "Pausing works while the voice is being downloaded",
+        "The explain plugin can stop, resume and choose the model"
+      ]
+    },
+    {
       "version": "0.20.0",
       "date": "2026-11-24",
       "by": "Yousif",

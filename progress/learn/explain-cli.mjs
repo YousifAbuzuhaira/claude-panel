@@ -7,12 +7,15 @@
 //   learn.sh explain export <id> | --all                an explainer as one file in ~/explainers (LEARN_EXPORT_DIR)
 //   learn.sh explain voice                              one line of JSON: the voice ready, to set up (its size), or why it can't run here
 //   learn.sh explain latest [id]                        one line of JSON: that explainer (or the newest with a clip), its file written if it's gone
-//   learn.sh explain resume <id>                        one line of JSON: whether a job is making what's missing of it (started if none is)
+//   learn.sh explain resume [id]                        one line of JSON: whether a job is making what's missing of it (started if none is); with no id, the newest with clips missing
+//   learn.sh explain stop [id]                          one line of JSON: the job making it (or the newest going on) stopped, its clips kept
+//   learn.sh explain model [name]                       one line of JSON: the model that writes the clips, set when a name is given
 import { existsSync } from 'node:fs';
 import { exportExplainer } from './export.mjs';
 import { clipCounts, listExplainers, readExplainer } from './explain.mjs';
 import { explainJob, runExplainJob, startExplainer } from './explain-job.mjs';
-import { listJobs } from './jobs.mjs';
+import { isJobLive, listJobs, stopJob } from './jobs.mjs';
+import { MODELS, isModel, readSettings, writeSettings } from './settings.mjs';
 import { openLibrary } from './status.mjs';
 import { voiceStatus } from './voice.mjs';
 
@@ -57,19 +60,40 @@ try {
     line(voiceStatus());
   } else if (command === 'latest') {
     const lib = openLibrary();
-    const found = listExplainers(lib, listJobs(lib)).find(item => (words[0] ? item.id === words[0] : item.ready > 0)) || null;
+    const jobs = listJobs(lib);
+    const found = listExplainers(lib, jobs).find(item => (words[0] ? item.id === words[0] : item.ready > 0)) || null;
     // A file deleted, or an explainer made before files were: written now.
     const file = found?.ready ? (found.file && existsSync(found.file) ? found.file : exportExplainer(lib, found.id)?.file || null) : null;
-    line(found ? { id: found.id, title: found.title, file, ready: found.ready, clips: found.clips } : null);
+    // Paused: stopped by hand (or by a shutdown), so opening it doesn't carry on by itself.
+    const paused = jobs.find(job => job.kind === 'explain' && job.explain === found?.id)?.state === 'paused';
+    line(found ? { id: found.id, title: found.title, file, ready: found.ready, clips: found.clips, paused } : null);
   } else if (command === 'resume') {
     const lib = openLibrary();
-    const explainer = words[0] ? readExplainer(lib, words[0]) : null;
-    if (!explainer) fail('resume <id>: no such explainer');
-    const { done, total } = clipCounts(lib, explainer);
     // One with no depth waits for a pick only the progress plugin's player can ask for.
-    line({ making: Boolean(explainer.depth) && done < total && Boolean(explainJob(lib, explainer)) });
+    const id = words[0] || listExplainers(lib).find(item => item.depth && item.ready < item.clips)?.id;
+    const explainer = id ? readExplainer(lib, id) : null;
+    if (words[0] && !explainer) fail('resume [id]: no such explainer');
+    const { done, total } = explainer ? clipCounts(lib, explainer) : { done: 0, total: 0 };
+    const making = Boolean(explainer?.depth) && done < total && Boolean(explainJob(lib, explainer));
+    line({ making, ...(explainer ? { id, title: explainer.title, ready: done, clips: total } : {}) });
+  } else if (command === 'stop') {
+    const lib = openLibrary();
+    const going = listJobs(lib).filter(job => job.kind === 'explain' && isJobLive(job));
+    const job = going.find(item => item.explain === words[0]) || going[0];
+    if (!job) line({ stopped: false });
+    else {
+      const ended = await stopJob(lib, job.id);
+      const explainer = readExplainer(lib, job.explain);
+      const { done, total } = explainer ? clipCounts(lib, explainer) : { done: job.done, total: job.total };
+      line({ stopped: true, ended, job: job.id, id: job.explain, title: job.topic, ready: done, clips: total });
+    }
+  } else if (command === 'model') {
+    const name = words[0] ?? null;
+    const known = name === null || isModel(name);
+    if (name && known) writeSettings({ models: { video: name } });
+    line({ model: readSettings().models.video, models: MODELS, known });
   } else {
-    fail('start | run <job> | export <id> | voice | latest [id] | resume <id>');
+    fail('start | run <job> | export <id> | voice | latest [id] | resume [id] | stop [id] | model [name]');
   }
   process.exit(0);
 } catch (error) {

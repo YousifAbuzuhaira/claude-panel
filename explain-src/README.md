@@ -28,6 +28,8 @@ Then start Claude Code again, or run `/reload-plugins` in a session.
 - Claude plans the clips and asks how deep to go: the idea, the mechanism with its code, or everything with its failure modes and edges.
 - A notice in the chat says when each clip is ready. The last one gives the file's path.
 - `/clips` opens the clips in your browser.
+- `/clips stop` stops making them; the ones ready are kept. `/clips resume` makes the rest.
+- `/clips model` says which Claude model writes the clips (Opus, unless you change it). `/clips model sonnet` changes it, for an account without Opus or to use less of your limit.
 
 The first `/explain` also downloads the voice: about 350 MB, once, each piece checked by its hash. It goes in `~/.cache/claude-learn/voice`.
 

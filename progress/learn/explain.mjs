@@ -424,6 +424,7 @@ export async function makeExplainer({ lib, io, id, save, isStopping, poll = 3000
   const effort = videoEffort(model);
   const ask = async (prompt, schema) => {
     const call = () => io.askStructured({ prompt, schema, tools: [], model, effort, cwd: lib.root });
+    if (isStopping()) throw new Error('stopped');
     try {
       return await call();
     } catch (error) {

@@ -104,7 +104,9 @@ export const isLearnBusy = (status: LearnStatus | null) => status?.build?.state 
 export function stoppedNotice(build: LearnBuild | null | undefined, explainer: string | null): { key: string; text: string } | null {
   if (!build || !explainer || build.kind !== 'explain' || build.explain !== explainer) return null
   if ((build.state !== 'failed' && build.state !== 'paused') || (build.total > 0 && build.done >= build.total)) return null
-  return { key: `${build.id}:${build.state}:${build.message}`, text: `"${build.topic}": ${build.message || 'stopped'} · ${build.done} of ${build.total} clips ready · /clips carries on` }
+  // One stopped by hand goes on only when you say so; one that failed goes on when you open it.
+  const goOn = build.state === 'paused' ? '/clips resume makes the rest' : '/clips carries on'
+  return { key: `${build.id}:${build.state}:${build.message}`, text: `"${build.topic}": ${build.message || 'stopped'} · ${build.done} of ${build.total} clips ready · ${goOn}` }
 }
 
 /**
