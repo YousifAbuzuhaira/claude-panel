@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.20.2",
+      "date": "2026-11-24",
+      "by": "Yousif",
+      "notes": [
+        "Clips show code like token = mint(user), no longer as <hidden>",
+        "More real secrets are hidden: typed, quoted keys, Bearer, backticks",
+        "A key block is hidden even when a clip starts in the middle of it"
+      ]
+    },
+    {
       "version": "0.20.1",
       "date": "2026-11-24",
       "by": "Yousif",

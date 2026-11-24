@@ -21,7 +21,7 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 // From progress/, kept at the same paths, so their own relative references still hold.
 export const FILES = [
-  ...['chats', 'claude', 'deps', 'diagram', 'explain', 'explain-cli', 'explain-job', 'export', 'jobs', 'markdown', 'reader', 'settings', 'status', 'store', 'video-check', 'video-plan', 'video-script', 'voice'].map(name => `learn/${name}.mjs`),
+  ...['chats', 'claude', 'deps', 'diagram', 'explain', 'explain-cli', 'explain-job', 'export', 'jobs', 'markdown', 'reader', 'secrets', 'settings', 'status', 'store', 'video-check', 'video-plan', 'video-script', 'voice'].map(name => `learn/${name}.mjs`),
   'learn/learn.sh',
   'learn/voice/narrate.py', 'learn/voice/requirements.in', 'learn/voice/requirements.lock', 'learn/voice/requirements.win.lock',
   ...['index.html', 'video.css', 'player.js', 'explain.js', 'stage.js', 'model.mjs', 'data.js', 'data-file.js'].map(name => `web/public/learn/video/${name}`),

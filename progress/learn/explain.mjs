@@ -10,8 +10,9 @@ import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { findClaudeChat, maskSecrets } from './chats.mjs';
+import { findClaudeChat } from './chats.mjs';
 import { markdownToBlocks } from './markdown.mjs';
+import { maskCode } from './secrets.mjs';
 import { readSettings } from './settings.mjs';
 import { readJson, renameRetry, withLock, writeJson } from './store.mjs';
 import { norm } from './video-check.mjs';
@@ -128,7 +129,8 @@ const ANCHOR_ERRORS = {
 /**
  * Each anchor's lines read from disk, and what doesn't hold: a file it may not read, lines that
  * aren't there, `expect` not in them. What looks like a secret inside the lines is hidden before
- * they go anywhere (the check, the clip, the screen).
+ * they go anywhere (the check, the clip, the screen): told over the whole file, so a key that began
+ * above the lines shown is still one.
  */
 export function readAnchors(plan, cwd, { home = homedir() } = {}) {
   const problems = [];
@@ -142,8 +144,12 @@ export function readAnchors(plan, cwd, { home = homedir() } = {}) {
         problems.push(`${where}: ${ANCHOR_ERRORS[found.error]}`);
         return null;
       }
-      if (!read.has(found.real)) read.set(found.real, readFileSync(found.real, 'utf8').split(/\r?\n/));
-      const lines = read.get(found.real);
+      const ext = extname(found.real).toLowerCase();
+      if (!read.has(found.real)) {
+        const lines = readFileSync(found.real, 'utf8').split(/\r?\n/);
+        read.set(found.real, { lines, masked: maskCode(lines.join('\n'), ext).split('\n') });
+      }
+      const { lines, masked } = read.get(found.real);
       if (anchor.to > lines.length) {
         problems.push(`${where}: the file has ${lines.length} lines`);
         return null;
@@ -153,7 +159,7 @@ export function readAnchors(plan, cwd, { home = homedir() } = {}) {
         problems.push(`${where}: "${String(anchor.expect).slice(0, 60)}" is not in those lines (has the file changed?)`);
         return null;
       }
-      return { file: found.shown, from: anchor.from, to: anchor.to, lang: LANGS[extname(found.real).toLowerCase()] || '', code: maskSecrets(code) };
+      return { file: found.shown, from: anchor.from, to: anchor.to, lang: LANGS[ext] || '', code: masked.slice(anchor.from - 1, anchor.to).join('\n') };
     }).filter(Boolean),
   }));
   return { problems, clips };

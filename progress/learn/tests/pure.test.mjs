@@ -10,6 +10,7 @@ import { claudeArgs, readStreamLine } from '../claude.mjs';
 import { readMarkers } from '../chat.mjs';
 import { cleanLabel, diagramBlock, parseFlow, parseSequence, wrapLabel } from '../diagram.mjs';
 import { chatTitle, condenseChat, listClaudeChats, maskSecrets, projectSlug, projectsDir } from '../chats.mjs';
+import { maskCode } from '../secrets.mjs';
 import { cutLongSections, docxToSections, documentType, mergeSections, pageIsJunk, pagesForClaude, pdfSections, readZip, uniqueHeadings } from '../documents.mjs';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -779,6 +780,65 @@ describe('chats', () => {
     assert.match(masked, /postgres:\/\/app:<hidden>@db/);
     assert.match(masked, /DB_PASSWORD=<hidden>/);
     assert.equal(maskSecrets('a commit 3f2a9c1 and a path /home/me/app'), 'a commit 3f2a9c1 and a path /home/me/app', 'ordinary text is left alone');
+    const more = maskSecrets(['{ "DB_PASSWORD": "hunter2hunter2" }', "API_KEY='correct horse battery'", 'curl -H "Authorization: Bearer abcd1234efgh"', 'Authorization: Bearer abcdefghijklmnopqrstuvwx'].join('\n'));
+    for (const secret of ['hunter2hunter2', 'correct horse', 'abcd1234efgh', 'abcdefghijklmnop']) assert.ok(!more.includes(secret), secret);
+    assert.equal(maskSecrets('Bearer authentication is used'), 'Bearer authentication is used', 'a word is not a credential');
+  });
+
+  test('a source file: plain code after a secret name is shown', () => {
+    const code = [
+      'function mint(user) {}',
+      'const token = mint(request.user);',
+      'export function hashToken(token: string): Promise<string> {',
+      'type Login = { accessToken: string; password: string; author: Person };',
+      'const limits = { maxTokens: 128000, authTimeout: 600000 };',
+      '<OrgTab authFetch={authFetch} />',
+      'import { useAuth } from "@keops-ai/auth";',
+      "throw new AuthError('Invalid token for this user');",
+      "app.get('/me', { onRequest: [app.keopsAuthenticate, requirePermission('users:read')] });",
+      'headers.set("authorization", `Bearer ${token}`);',
+      "createHmac('sha256', secretKey).digest('base64url');",
+      'const TOKEN_RE = /^[A-Za-z0-9]{16,}$/;',
+      "export const AUTH_TOKEN_EXPIRED = 'AUTH_TOKEN_EXPIRED';",
+    ].join('\n');
+    assert.equal(maskCode(code, '.ts'), code);
+    const python = 'import os\ndef mint(user: User) -> str:\n    token = os.environ["X"] or mint(user)\n    self.token = token';
+    assert.equal(maskCode(python, '.py'), python);
+  });
+
+  test('a source file: a secret written into it is hidden, wherever it is, whether or not it has digits', () => {
+    const make = value => [
+      `const token: string = "${value}";`, `const o = { "DB_PASSWORD": '${value}' };`, `'x-api-key': "${value}",`, `env["API_TOKEN"] = "${value}";`, `headers.set("Authorization", "${value}");`,
+      `const s = process.env.SECRET || "${value}";`, `if (password === "${value}") return;`, 'const password = `' + value + '`;', 'const t = `password=' + value + '`;', 'const x = `\nDB_PASSWORD=' + value + '\n`;',
+      `// password: ${value}`, ` * token=${value}`, `const c = "Server=x;Password=${value};";`, `const u = "postgres://app:${value}@db/x";`, `var apiKey = @"${value}";`, `password := "${value}"`, `let token = String::from("${value}");`,
+    ];
+    for (const value of ['hunter2hunter2', 'letmeinplease', 'kZbQxWvTrPnMlKjHgFdSaQwE']) {
+      for (const line of make(value)) {
+        const masked = maskCode(line, '.ts');
+        assert.ok(!masked.includes(value), masked);
+        assert.equal(masked.split('\n').length, line.split('\n').length);
+      }
+      for (const line of [`API_KEY: str = "${value}"`, `os.environ.get("API_KEY", "${value}")`, `# token: ${value}`, `client(password="${value}")`]) assert.ok(!maskCode(line, '.py').includes(value), line);
+      for (const ext of ['.yml', '.sh', '.json', '']) assert.ok(!maskCode(`password: ${value}`, ext).includes(value), ext);
+    }
+    assert.match(maskCode('const PASSWORD = 12345678;', '.ts'), /<hidden>/);
+  });
+
+  test('a private key is hidden line for line, so an excerpt that starts inside it shows none of it', () => {
+    const text = 'a\nkey: |\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIB\nabcDEF\n-----END RSA PRIVATE KEY-----\nz';
+    for (const ext of ['.yml', '.ts']) {
+      const masked = maskCode(text, ext).split('\n');
+      assert.equal(masked.length, 7);
+      assert.equal(masked[6], 'z');
+      assert.doesNotMatch(masked.slice(3, 6).join(''), /MIIE|abcDEF/);
+    }
+  });
+
+  test('a long unbroken line is hidden quickly', () => {
+    const start = Date.now();
+    maskCode(`x="${'token_'.repeat(20_000)}"`, '.js');
+    maskCode(`${'a'.repeat(400_000)} token`, '.js');
+    assert.ok(Date.now() - start < 2_000);
   });
 
   test("the chats are listed newest first, Learn's own and empty ones left out", () => {

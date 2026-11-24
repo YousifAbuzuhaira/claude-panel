@@ -7,7 +7,9 @@ import { closeSync, createReadStream, existsSync, openSync, readSync, readdirSyn
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { maskSecrets } from './secrets.mjs';
 
+export { maskSecrets };
 export const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RESULT_CHARS = 1500;
 const EDIT_CHARS = 400;
@@ -122,34 +124,6 @@ export function findClaudeChat(id, { dir = projectsDir() } = {}) {
     }
   }
   throw new Error('that chat is not on this computer any more');
-}
-
-// --- Secrets --------------------------------------------------------------------------------
-
-const HIDDEN = '<hidden>';
-const SECRET_PATTERNS = [
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '<hidden private key>'],
-  [/\bsk-(?:ant-)?[A-Za-z0-9_-]{16,}/g, HIDDEN],
-  [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, HIDDEN],
-  [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, HIDDEN],
-  [/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, HIDDEN],
-  [/\bAKIA[0-9A-Z]{16}\b/g, HIDDEN],
-  [/\bAIza[0-9A-Za-z_-]{30,}/g, HIDDEN],
-  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, HIDDEN], // a JWT
-  [/\b(kop|sbp|pk|rk|whsec)_[A-Za-z0-9]{20,}/g, HIDDEN],
-  // A password in a URL: scheme://user:secret@host
-  [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:)[^\s@/]+@/gi, `$1${HIDDEN}@`],
-  // NAME=value and NAME: value where the name says it is secret (.env files, exports, YAML)
-  [/\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|PWD|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|CREDENTIALS?|AUTH)[A-Za-z0-9_]*)(\s*[=:]\s*)(["']?)(?!<hidden)[^\s"'`,;]{6,}\3/gi, `$1$2$3${HIDDEN}$3`],
-  // "password": "..." in JSON
-  [/("(?:password|passwd|secret|token|api_?key|access_?token|refresh_?token|client_?secret|private_?key)"\s*:\s*")[^"]{4,}(")/gi, `$1${HIDDEN}$2`],
-];
-
-/** Text with what looks like a secret (keys, tokens, passwords, .env values) replaced by <hidden>. */
-export function maskSecrets(text) {
-  let out = String(text);
-  for (const [pattern, replacement] of SECRET_PATTERNS) out = out.replace(pattern, replacement);
-  return out;
 }
 
 // --- Shrinking a chat to text -------------------------------------------------------------------
