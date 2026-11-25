@@ -25,7 +25,7 @@ import { MAX_DISPUTES, disputeBlock, holdBack, placeDisputes, sourceDisputes, ti
 import { voicePlatform } from '../voice.mjs';
 import { applyPlan, checkPlan, maskable, planRequest, planSchema } from '../video-plan.mjs';
 import { writeScript } from '../video-script.mjs';
-import { anchorFile, checkExplainer, clipCounts, clipPage, clipPlan, codeParts, explainInfo, explainPaths, explainProblems, listExplainers, looksSecret, nextClip, quotesInChat, readAnchors, saveExplainer, wantedClips } from '../explain.mjs';
+import { anchorFile, checkExplainer, clipCounts, clipPage, clipPlan, explainInfo, explainPaths, explainProblems, listExplainers, looksSecret, nextClip, quotesInChat, readAnchors, saveExplainer, wantedClips } from '../explain.mjs';
 import { codeNeeds, estimate, faultsBySection, firstTaught, flattenPage, hearing, isOldPage, keptOnScreen, layoutNotes, longClips, mendSection, mergeTiny, plainScenes, settleMasks, settleScenes, simulate, spokenBudget, spokenWords, stopsOf, testOpener, testSection, tidyPronounce, videoQuiz, videoStamp, withBlockRead } from '../video-check.mjs';
 import { buildCameras, buildStates, containers, crosses, dedent, edgePoint, fitCamera, frameFor, labelPoint, labelSpot, legendRect, roughRect, sceneAt, wireEnds } from '../../web/public/learn/video/model.mjs';
 import { wheelFits } from '../../tools/voice-lock.mjs';
@@ -1940,7 +1940,6 @@ describe('an explainer: your session plans clips about code, Learn checks and ma
     const read = readAnchors(plan(), cwd, { home });
     assert.deepEqual(read.problems, []);
     assert.match(read.clips[0].anchors[0].code, /const token = mint/);
-    assert.equal(read.clips[0].anchors[0].lang, 'js');
     const moved = plan();
     moved.clips[0].anchors.push({ file: 'gw.js', from: 1, to: 9, expect: 'x' }, { file: 'gw.js', from: 1, to: 2, expect: 'send(' }, { file: '../secret.txt', from: 1, to: 1, expect: 'outside' }, { file: 'nope.js', from: 1, to: 1, expect: 'x' });
     const problems = readAnchors(moved, cwd, { home }).problems.join('\n');
@@ -1992,11 +1991,33 @@ describe('an explainer: your session plans clips about code, Learn checks and ma
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('an anchor over 18 lines is shown in parts of at most 18, as even as can be; 18 or fewer stay whole', () => {
-    const lines = n => Array.from({ length: n }, (_, k) => `line ${k}`).join('\n');
-    assert.deepEqual(codeParts(lines(40)).map(part => part.split('\n').length), [14, 14, 12]);
-    assert.deepEqual(codeParts(lines(18)).map(part => part.split('\n').length), [18]);
-    assert.equal(codeParts(lines(40)).join('\n'), lines(40), 'nothing lost or repeated');
+  test('a fact with code in it goes back: ticks, a call or an arrow; a plain name or a value is fine', () => {
+    const saying = text => { const one = plan(); one.clips[0].facts[0].text = text; return explainProblems(one).join(); };
+    for (const text of ['The gateway calls `mint` first.', 'It runs mint() for each request.', 'It maps user => token.']) assert.match(saying(text), /has code in it: say in plain words/);
+    for (const text of ['The gateway mints a token (once) for each request.', 'Set WIKI_API_KEY before you start, or type /clips wiki.', 'It waits 2 seconds, then tries again.']) assert.doesNotMatch(saying(text), /has code/);
+  });
+
+  test("the code is read for the check alone: the check sees it, and neither the clip's page nor the saved plan has it", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'explain-'));
+    writeFileSync(join(root, 'gw.js'), 'function forward(request) {\n  const token = mint(request.user);\n  return send(request, token);\n}\n');
+    let prompt = '';
+    const io = { askStructured: async asked => { prompt = asked.prompt; return { wrong: [] }; } };
+    const { explainer: checked } = await checkExplainer({ plan: { ...plan(), shape: 'none', boxes: [], clips: [plan().clips[0]] }, sessionId: 's', cwd: root, io });
+    assert.match(prompt, /mint\(request\.user\)/);
+    assert.deepEqual(checked.clips[0].anchors, [{ file: 'gw.js', from: 1, to: 4 }]);
+    assert.doesNotMatch(JSON.stringify(checked), /mint\(request/);
+    assert.doesNotMatch(clipPage(checked, 1).markdown, /```|mint\(/);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a guess's answer is stated in the clip's facts: words only its code has are not enough", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'explain-'));
+    writeFileSync(join(root, 'gw.js'), 'function forward(request) {\n  const token = mint(request.user);\n  return send(request, token);\n}\n');
+    const one = { ...plan(), shape: 'none', boxes: [], clips: [plan().clips[0]] };
+    one.clips[0].guess.quote = 'const token = mint request user';
+    const io = { askStructured: async () => assert.fail('checked though its guess is not in its facts') };
+    assert.match((await checkExplainer({ plan: one, sessionId: 's', cwd: root, io })).problems.join(), /quote is not word for word from its facts/);
+    rmSync(root, { recursive: true, force: true });
   });
 
   test("a session fact's quote must be in what the chat said or a tool returned, never in a tool call", async () => {
@@ -2014,17 +2035,18 @@ describe('an explainer: your session plans clips about code, Learn checks and ma
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const explainer = () => ({ id: 'x202611181332459e', title: 'Tokens', map: { shape: 'none', boxes: [], clips: [] }, depth: null, at: 1, clips: plan().clips.map(clip => ({ ...clip, failure: clip.failure || [], anchors: clip.anchors.map(anchor => ({ ...anchor, lang: 'js', code: 'function forward(request) {\n  const token = mint(request.user);\n  return send(request, token);\n}' })) })) });
+  const explainer = () => ({ id: 'x202611181332459e', title: 'Tokens', map: { shape: 'none', boxes: [], clips: [] }, depth: null, at: 1, clips: plan().clips.map(clip => ({ ...clip, failure: clip.failure || [] })) });
 
-  test('a clip is a page of one section: its facts, then its code; its plan has its guess, its failures and room for a masked line', () => {
+  test('a clip is a page of one section: its facts and no code; its plan has its guess and its failures, and no masked line', () => {
     const page = clipPage(explainer(), 1);
     const material = flattenPage(page);
     assert.deepEqual(material.sections, ['Minting']);
-    assert.ok(material.blocks.some(block => block.t === 'code' && /mint\(request\.user\)/.test(block.text)));
+    assert.deepEqual(material.blocks.map(block => block.t), ['p']);
+    assert.deepEqual(material.assets.code, []);
     const made = clipPlan(explainer(), 3);
     assert.equal(made.shape, 'none');
     assert.deepEqual(made.clips[0].trap, [0]);
-    assert.equal(made.clips[0].mask, true);
+    assert.equal(made.clips[0].mask, false);
     const checked = checkPlan(clipPlan(explainer(), 1), material);
     assert.ok(checked.plan.clips[0].guess, "the guess's quote is on the clip's page");
   });
@@ -2081,8 +2103,10 @@ describe('an explainer: your session plans clips about code, Learn checks and ma
     rmSync(lib.root, { recursive: true, force: true });
   });
 
-  test("a clip's request tells the writer the room its code needs, without the file's indentation, and offers no camera", async () => {
-    const indented = { ...explainer(), clips: explainer().clips.map(clip => ({ ...clip, anchors: clip.anchors.map(anchor => ({ ...anchor, code: anchor.code.split('\n').map(line => `          ${line}`).join('\n') })) })) };
+  test("a section's request tells the writer the room its code needs, without the file's indentation, and offers no camera", async () => {
+    const code = ['function forward(request) {', '  const token = mint(request.user);', '  return send(request, token);', '}'];
+    const page = lines => { const markdown = `## Minting\n\nThe gateway mints a token for each request.\n\n\`\`\`js\n${lines.join('\n')}\n\`\`\``; return { ...clipPage(explainer(), 1), markdown, blocks: markdownToBlocks(markdown) }; };
+    const indented = code.map(line => `          ${line}`);
     const prompts = [];
     const ask = async (prompt, schema) => {
       prompts.push(prompt);
@@ -2090,11 +2114,11 @@ describe('an explainer: your session plans clips about code, Learn checks and ma
       if (schema.properties.answers) return { answers: [], closing: [], unknown: [], missing: [] };
       return { added: [], dropped: [] };
     };
-    await writeScript({ page: clipPage(indented, 1), ask, plan: clipPlan(indented, 1), questions: false });
+    await writeScript({ page: page(indented), ask, plan: clipPlan(explainer(), 1), questions: false });
     const request = prompts.find(prompt => /THE STAGE/.test(prompt));
-    const needs = codeNeeds(indented.clips[0].anchors[0].code);
+    const needs = codeNeeds(indented.join('\n'));
     assert.match(request, new RegExp(`needs at least ${needs.w} by ${needs.h} on stage`));
-    assert.equal(needs.w, codeNeeds(explainer().clips[0].anchors[0].code).w, 'indentation is not counted');
+    assert.equal(needs.w, codeNeeds(code.join('\n')).w, 'indentation is not counted');
     assert.doesNotMatch(request, /w 540|"camera"/);
   });
 });

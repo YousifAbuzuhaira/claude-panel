@@ -12,13 +12,13 @@ const make = (tag, cls, text) => {
 };
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 
-/** How deep to go: the mental model, the mechanism with its code, or everything. Asked once. */
+/** How deep to go: the mental model, the mechanism step by step, or everything. Asked once. */
 function askDepth(info, gate) {
   return new Promise(resolve => {
     gate.replaceChildren(make('div', 'gate-title', info.title), make('div', 'gate-ask', 'How deep should it go?'));
     const choices = [
       ['The idea', 'the mental model'],
-      ['The mechanism', 'and the code that does it'],
+      ['The mechanism', 'step by step'],
       ['Everything', 'with failure modes and edges'],
     ];
     choices.forEach(([label, sub], k) => {

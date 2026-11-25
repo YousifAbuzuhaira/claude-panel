@@ -158,7 +158,7 @@ export const register: Register = on => {
     await $.tool.register({ name: EXPLAIN_TOOL, description: EXPLAIN_TOOL_DESCRIPTION, inputSchema: EXPLAIN_TOOL_SCHEMA, isDeferred: true })
     if (!(await progressIsHere($))) {
       // Not immediate: typed during a turn, it waits for that turn to end, then starts its own.
-      await $.command.register({ name: 'explain', description: 'Have Claude explain code from this chat as short narrated video clips, e.g. /explain how the gateway mints tokens', argumentHint: '<what to explain>' })
+      await $.command.register({ name: 'explain', description: 'Have Claude explain what you are working on as short narrated video clips, e.g. /explain how the gateway mints tokens', argumentHint: '<what to explain>' })
       await $.command.register({ name: 'clips', description: 'Open the clips /explain made, as one file in your browser; or stop, resume, choose the model, or send them to the wiki again', argumentHint: '[stop | resume | model <name> | wiki]', immediate: true })
     }
     const started = await next(e)

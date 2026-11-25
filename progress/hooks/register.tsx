@@ -641,7 +641,7 @@ export const register: Register = on => {
     // Not immediate: typed during a turn, it waits for that turn to end, then starts its own.
     await $.command.register({
       name: 'explain',
-      description: 'Have Claude explain code from this chat as short video clips in Learn, e.g. /explain how the gateway mints tokens',
+      description: 'Have Claude explain what you are working on as short video clips in Learn, e.g. /explain how the gateway mints tokens',
       argumentHint: '<what to explain>',
     })
     await $.command.register({

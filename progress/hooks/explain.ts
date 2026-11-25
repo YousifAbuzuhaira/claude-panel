@@ -1,4 +1,4 @@
-// /explain: the code you're working on, explained as short video clips. The command hands the
+// /explain: what you're working on, explained as short video clips (no code in them). The command hands the
 // session the brief below as your message, once the command has returned (a turn of its own at
 // once); the session writes the plan (it has the code and what you're debugging in hand), asks
 // how deep to go, and hands it to Learn through the explain_plan tool; Learn checks it against the
@@ -20,7 +20,7 @@ const QUESTION = {
         required: ['text', 'why', 'right'],
       },
     },
-    quote: { type: 'string', description: "At least 4 words, word for word from this clip's facts or anchored code, stating the right answer." },
+    quote: { type: 'string', description: "At least 4 words, word for word from this clip's facts, stating the right answer." },
   },
   required: ['q', 'options', 'quote'],
 } as const
@@ -35,7 +35,7 @@ export const EXPLAIN_TOOL_SCHEMA = {
       description: 'The map: at most 4 top boxes (parent null), each with up to 4 children. Labels 1 to 3 words.',
       items: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' }, parent: { type: ['string', 'null'] } }, required: ['id', 'label', 'parent'] },
     },
-    depth: { type: 'integer', enum: [1, 2, 3], description: 'How deep to go, as the person picked when asked in the chat before this call: 1 the idea (level 1 clips), 2 the mechanism and its code (levels 1 and 2), 3 everything. Left out only when they could not be asked; the player asks instead.' },
+    depth: { type: 'integer', enum: [1, 2, 3], description: 'How deep to go, as the person picked when asked in the chat before this call: 1 the idea (level 1 clips), 2 the mechanism step by step (levels 1 and 2), 3 everything. Left out only when they could not be asked; the player asks instead.' },
     wikiFolder: { type: 'string', description: 'Only when the person named a folder for the clips on the wiki (with /explain or in this chat): as they named it, such as Auth. Left out otherwise. It never decides whether they go on the wiki.' },
     clips: {
       type: 'array',
@@ -45,10 +45,10 @@ export const EXPLAIN_TOOL_SCHEMA = {
         properties: {
           title: { type: 'string' },
           box: { type: ['string', 'null'], description: 'Its box on the map; null with shape none.' },
-          level: { type: 'integer', enum: [1, 2, 3], description: '1 the mental model (clip 1 always), 2 the mechanism and its code, 3 the rest: failure modes, edges.' },
+          level: { type: 'integer', enum: [1, 2, 3], description: '1 the mental model (clip 1 always), 2 the mechanism step by step, 3 the rest: failure modes, edges.' },
           facts: {
             type: 'array',
-            description: 'What the clip teaches, one fact each, in order, as plain sentences.',
+            description: 'What the clip teaches, one fact each, in order, as plain sentences with no code in them: 8 to 10, about 150 words in all (a minute).',
             items: {
               type: 'object',
               properties: {
@@ -61,7 +61,7 @@ export const EXPLAIN_TOOL_SCHEMA = {
           },
           anchors: {
             type: 'array',
-            description: 'The code the clip shows, by file and lines (from 1), read from disk by Learn. At most 60 lines each.',
+            description: 'The code the facts rest on, by file and lines (from 1), read from disk by Learn to check them and never shown. At most 60 lines each.',
             items: {
               type: 'object',
               properties: { file: { type: 'string', description: "Relative to this session's folder, or a full or ~/ path under your home folder. Files that look like secrets are refused." }, from: { type: 'integer' }, to: { type: 'integer' }, expect: { type: 'string', description: 'A few words found in those lines, so a moved line is caught.' } },
@@ -228,7 +228,7 @@ export function openFileArgv({ path, platform, distro = null }: { path: string; 
 }
 
 // Its options' labels are what wikiPicked reads: asked in any other words, the answer counts as No.
-const WIKI_STEP = ` In the same AskUserQuestion call ask a second question (header "${WIKI_HEADER}", question "Put the finished clips on the Keops wiki too?", multiSelect false), even when there is no depth to ask about, with exactly these labels in this order: "No, this machine only" (they stay in ~/explainers), "${WIKI_LABELS.personal}" (only you can open them there), "${WIKI_LABELS.shared}" (everyone in Keops can open them, and the code they show). Recommend none of them. My answer is read from my click: the tool call says nothing about it. If I named a folder for the clips on the wiki, pass it as "wikiFolder", as I named it; never ask for one.`
+const WIKI_STEP = ` In the same AskUserQuestion call ask a second question (header "${WIKI_HEADER}", question "Put the finished clips on the Keops wiki too?", multiSelect false), even when there is no depth to ask about, with exactly these labels in this order: "No, this machine only" (they stay in ~/explainers), "${WIKI_LABELS.personal}" (only you can open them there), "${WIKI_LABELS.shared}" (everyone in Keops can open them). Recommend none of them. My answer is read from my click: the tool call says nothing about it. If I named a folder for the clips on the wiki, pass it as "wikiFolder", as I named it; never ask for one.`
 
 /**
  * What /explain hands the session, as your own message: plan the clips from the code, ask how deep
@@ -247,13 +247,13 @@ export function explainBrief(what: string, { plugin = 'progress', wiki = false }
     '',
     '0. First reply with one short line, such as "Planning clips about X: reading the code", before any tool call, so I know it has started.',
     '1. Look at the code first (read the files that matter), then write the whole plan and hold it: don\'t call the tool yet.',
-    '2. One clip per mechanism, in the order they build on each other, 1 to 12 clips. Clip 1 (level 1) is the mental model; level 2 clips add the mechanism and its code; level 3 the failure modes and edges.',
-    "3. Each clip's facts are plain sentences: what it does, why, what happens next. Mark each fact's basis: code (the clip's anchored lines show it) or session (this chat says it, with a quote of 4 words or more copied word for word from one message). Nothing else: no outside facts, no made-up examples.",
-    '4. Anchor the code each clip shows by file and line range (from 1, at most 60 lines) with a few words from those lines in "expect". Prefer anchors of at most 18 lines, with lines under 110 characters: longer ones are split into parts or shown small. The file is relative to this session\'s folder, or a full or ~/ path anywhere under my home folder; files that look like secrets (.env, keys, credentials) are refused. Learn reads the lines from disk: never paste code into a fact.',
-    "5. Each clip opens with a guess question: 3 options, one right, each wrong one a believable mistake, each with a one-sentence why, and a quote from the clip's facts or code that states the right answer. Make it about the clip's central mechanism. (Learn uses it only when my Questions setting is on.)",
+    '2. One clip per mechanism, in the order they build on each other, 1 to 12 clips. Clip 1 (level 1) is the mental model; level 2 clips add the mechanism, step by step; level 3 the failure modes and edges.',
+    "3. A clip is about a minute of pictures and voice: 8 to 10 facts, about 150 words in all, fewer only when there is no more to say (or I asked for less). Facts are plain sentences about what happens: what moves, what waits, what changes, why, what comes next; each is drawn as boxes, arrows and steps. No code: no function, variable or file names, paths or symbols, unless it is a name I would type or see (a command, a setting, a button); say what each part does. Mark each fact's basis: code (the clip's anchored lines show it) or session (this chat says it, with a quote of 4 words or more copied word for word from one message). Nothing else: no outside facts, no made-up examples.",
+    '4. Anchor the code each clip\'s facts rest on, by file and line range (from 1, at most 60 lines) with a few words from those lines in "expect". It is read only to check the facts: no clip shows it. The file is relative to this session\'s folder, or a full or ~/ path anywhere under my home folder; files that look like secrets (.env, keys, credentials) are refused. Learn reads the lines from disk.',
+    "5. Each clip opens with a guess question: 3 options, one right, each wrong one a believable mistake, each with a one-sentence why, and a quote from the clip's facts that states the right answer. Make it about the clip's central mechanism. (Learn uses it only when my Questions setting is on.)",
     '6. If a fact describes something that really went wrong in this work (a bug we fixed, a failing test, an idea that turned out false), list its number in "failure": the clip opens on it.',
     '7. The map: "flow" when something moves from part to part (a request through services), "parts" for parts of one whole, "none" under 3 clips. At most 4 top boxes, labels of 1 to 3 words; each clip in one box.',
-    '8. Ask me once how deep to go, with AskUserQuestion (header "Depth", question "How deep should it go?"). One option per depth that adds clips, N counting your plan\'s clips up to that level: "The idea · N clips" (depth 1: level 1), "The mechanism, and the code that does it · N clips" (depth 2: levels 1 and 2), "Everything, with failure modes and edges · N clips" (depth 3: all). Leave out a depth that adds no clip; with one option left, ' + (wiki ? 'use it without asking. ' : 'don\'t ask and use it. ') + noDepth + (wiki ? WIKI_STEP : ''),
+    '8. Ask me once how deep to go, with AskUserQuestion (header "Depth", question "How deep should it go?"). One option per depth that adds clips, N counting your plan\'s clips up to that level: "The idea · N clips" (depth 1: level 1), "The mechanism, step by step · N clips" (depth 2: levels 1 and 2), "Everything, with failure modes and edges · N clips" (depth 3: all). Leave out a depth that adds no clip; with one option left, ' + (wiki ? 'use it without asking. ' : 'don\'t ask and use it. ') + noDepth + (wiki ? WIKI_STEP : ''),
     `9. Call the tool ${tool} with the plan and "depth" (1, 2 or 3). If its schema isn't loaded, load it with ToolSearch (select:${tool}). If Learn refuses the plan, fix what it lists and call it again with the same depth, without asking again.`,
     '10. When it accepts, reply with the one line the tool gives you, and nothing else. Nothing opens by itself.',
   ].join('\n')

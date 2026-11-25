@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.23.0",
+      "date": "2026-11-25",
+      "by": "Yousif",
+      "notes": [
+        "/explain clips show no code: pictures and a voice, in plain words",
+        "The code is still read, only to check every fact",
+        "Depth 2 is now the mechanism, step by step"
+      ]
+    },
+    {
       "version": "0.22.0",
       "date": "2026-11-25",
       "by": "Yousif",

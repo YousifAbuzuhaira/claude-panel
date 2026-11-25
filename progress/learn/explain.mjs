@@ -1,10 +1,10 @@
-// An explainer: the code you're working on, explained as a playlist of clips, from a plan your
-// own session writes (it has the code and what you're debugging in hand). Nothing is made until
-// the plan holds: each code anchor against the file on disk, each fact from the chat against the
-// chat's saved record, and every fact against both by one Claude call. What fails goes back to the
-// session, which fixes the plan. Each clip is then a one-section page in memory, made by
-// writeScript as any page's clip is: its guess, its openers, its masked line, the watcher and the
-// claim check. Code on screen is always the lines read from disk, never text the session typed.
+// An explainer: what you're working on, explained as a playlist of clips, from a plan your own
+// session writes (it has the code and what you're debugging in hand). Nothing is made until the
+// plan holds: each code anchor against the file on disk, each fact from the chat against the chat's
+// saved record, and every fact against both by one Claude call. What fails goes back to the session,
+// which fixes the plan. Each clip is then a one-section page in memory, made by writeScript as any
+// page's clip is: its guess, its openers, the watcher and the claim check. The code is read only to
+// check the facts: a clip says them in plain words and draws them, and never shows code.
 import { createReadStream, existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -26,7 +26,8 @@ const IDLE_MS = 20 * 60_000; // an explainer with no depth yet waits this long f
 const KBPS = 32; // an explainer's sound: it goes out as a file, so half a page video's 64
 
 const words = text => String(text ?? '').trim().split(/\s+/).filter(Boolean);
-const LANGS = { '.ts': 'ts', '.tsx': 'tsx', '.js': 'js', '.mjs': 'js', '.cjs': 'js', '.jsx': 'jsx', '.py': 'python', '.go': 'go', '.rs': 'rust', '.java': 'java', '.rb': 'ruby', '.sh': 'bash', '.sql': 'sql', '.css': 'css', '.html': 'html', '.json': 'json', '.yaml': 'yaml', '.yml': 'yaml', '.md': 'markdown', '.swift': 'swift', '.kt': 'kotlin', '.cs': 'csharp', '.php': 'php', '.ps1': 'powershell' };
+// Code in a fact, which the voice would read out and the clip show: `ticks`, a call(), an arrow.
+const CODE_IN_TEXT = /`|\w\(\)|=>/;
 
 /**
  * What's wrong with a plan's shape, before anything is read: Claude's session fixes these. The plan:
@@ -62,6 +63,7 @@ export function explainProblems(plan) {
     if (!facts.length) problems.push(`${name}: it needs the facts it teaches`);
     for (const fact of facts) {
       if (!String(fact?.text || '').trim()) problems.push(`${name}: a fact has no text`);
+      if (CODE_IN_TEXT.test(fact?.text)) problems.push(`${name}: "${String(fact.text).slice(0, 60)}" has code in it: say in plain words what it does`);
       if (!['code', 'session'].includes(fact?.basis)) problems.push(`${name}: a fact's basis is "code" or "session"`);
       if (fact?.basis === 'session' && words(fact.quote).length < MIN_QUOTE_WORDS) problems.push(`${name}: a fact from the session needs a quote of ${MIN_QUOTE_WORDS} words or more from this chat`);
     }
@@ -72,7 +74,7 @@ export function explainProblems(plan) {
     }
     const options = Array.isArray(clip?.guess?.options) ? clip.guess.options : [];
     if (!String(clip?.guess?.q || '').trim() || options.length !== 3 || options.filter(option => option?.right).length !== 1 || options.some(option => !String(option?.text || '').trim() || !String(option?.why || '').trim())) problems.push(`${name}: its guess question needs 3 options with a why each, one right`);
-    if (words(clip?.guess?.quote).length < MIN_QUOTE_WORDS) problems.push(`${name}: its guess needs "quote", words of its facts or code that state the answer`);
+    if (words(clip?.guess?.quote).length < MIN_QUOTE_WORDS) problems.push(`${name}: its guess needs "quote", words of its facts that state the answer`);
     for (const n of clip?.failure || []) if (!Number.isInteger(n) || !facts[n]) problems.push(`${name}: "failure" lists fact numbers, from 0`);
     if (clip?.patternOf && !titles.slice(0, k).includes(String(clip.patternOf).trim())) problems.push(`${name}: "patternOf" names an earlier clip`);
   });
@@ -129,8 +131,8 @@ const ANCHOR_ERRORS = {
 /**
  * Each anchor's lines read from disk, and what doesn't hold: a file it may not read, lines that
  * aren't there, `expect` not in them. What looks like a secret inside the lines is hidden before
- * they go anywhere (the check, the clip, the screen): told over the whole file, so a key that began
- * above the lines shown is still one.
+ * they go anywhere (the check): told over the whole file, so a key that began above the lines read is
+ * still one.
  */
 export function readAnchors(plan, cwd, { home = homedir() } = {}) {
   const problems = [];
@@ -159,7 +161,7 @@ export function readAnchors(plan, cwd, { home = homedir() } = {}) {
         problems.push(`${where}: "${String(anchor.expect).slice(0, 60)}" is not in those lines (has the file changed?)`);
         return null;
       }
-      return { file: found.shown, from: anchor.from, to: anchor.to, lang: LANGS[ext] || '', code: masked.slice(anchor.from - 1, anchor.to).join('\n') };
+      return { file: found.shown, from: anchor.from, to: anchor.to, code: masked.slice(anchor.from - 1, anchor.to).join('\n') };
     }).filter(Boolean),
   }));
   return { problems, clips };
@@ -210,7 +212,7 @@ export const EXPLAIN_CHECK_SCHEMA = {
 /** The one Claude check: every fact against the code it anchors and the chat lines it quotes. */
 export function explainCheckPrompt(clips) {
   return [
-    'A coding session wrote the facts below to explain some code, as short video clips. Under each clip are the exact lines of code it shows and the words of the chat its other facts quote. Check each fact against them, using no outside knowledge.',
+    'A coding session wrote the facts below to explain how something works, as short video clips. Under each clip are the exact lines of code its facts rest on and the words of the chat its other facts quote. Check each fact against them, using no outside knowledge.',
     'In "wrong", list each fact that the code or the quoted chat contradicts, or that states something specific (a value, a name, a behaviour, a cause) that neither supports. Facts may draw on any clip\'s code. Plain explanation of what a line visibly does is supported. Give the clip and fact numbers, from 0, and why in one sentence. Most plans have none.',
     '',
     ...clips.flatMap((clip, k) => [
@@ -235,10 +237,9 @@ export async function checkExplainer({ plan, sessionId, cwd, io, model = 'opus',
   clips.forEach((clip, k) => clip.facts.forEach(fact => {
     if (fact.basis === 'session' && !found.has(fact.quote)) problems.push(`Clip ${k + 1}: "${String(fact.quote).slice(0, 70)}" is not word for word in this chat`);
   }));
-  // The guess's answer must be stated where the clip shows it: its facts or its code.
+  // The guess's answer must be stated where the clip teaches it: its facts.
   clips.forEach((clip, k) => {
-    const said = norm([...clip.facts.map(fact => fact.text), ...clip.anchors.map(anchor => anchor.code)].join(' '));
-    if (!said.includes(norm(clip.guess.quote))) problems.push(`Clip ${k + 1}: the guess's quote is not word for word from its facts or code`);
+    if (!norm(clip.facts.map(fact => fact.text).join(' ')).includes(norm(clip.guess.quote))) problems.push(`Clip ${k + 1}: the guess's quote is not word for word from its facts`);
   });
   if (problems.length) return { problems };
   const checked = await io.askStructured({ prompt: explainCheckPrompt(clips), schema: EXPLAIN_CHECK_SCHEMA, tools: [], model, effort: videoEffort(model) });
@@ -260,7 +261,8 @@ export async function checkExplainer({ plan, sessionId, cwd, io, model = 'opus',
         title: tidy(clip.title),
         level: clip.level,
         facts: clip.facts.map(fact => ({ text: tidy(fact.text), basis: fact.basis, ...(fact.quote ? { quote: fact.quote } : {}) })),
-        anchors: clip.anchors,
+        // Where its facts were checked, not the code itself: no clip shows it.
+        anchors: clip.anchors.map(({ file, from, to }) => ({ file, from, to })),
         guess: { q: tidy(clip.guess.q), options: clip.guess.options.map(option => ({ text: tidy(option.text), why: tidy(option.why), right: Boolean(option.right) })), quote: clip.guess.quote },
         failure: (clip.failure || []).filter(Number.isInteger),
         patternOf: clip.patternOf ? tidy(clip.patternOf) : null,
@@ -273,40 +275,24 @@ export async function checkExplainer({ plan, sessionId, cwd, io, model = 'opus',
   };
 }
 
-/** Code past this many lines is shown in parts: more never fits the stage at a readable size. */
-export const PART_LINES = 18;
-
-/** An anchor's code in parts of at most PART_LINES lines, all the same size but the last (40 lines: 14, 14, 12). */
-export function codeParts(code) {
-  const lines = String(code).split('\n');
-  const count = Math.ceil(lines.length / PART_LINES);
-  const size = Math.ceil(lines.length / count);
-  return Array.from({ length: count }, (_, k) => lines.slice(k * size, (k + 1) * size).join('\n')).filter(Boolean);
-}
-
-/** A clip as a page of one section: its facts as paragraphs, then the code it anchors, from disk. */
+/** A clip as a page of one section: its facts as paragraphs, and no code. */
 export function clipPage(explainer, n) {
   const clip = explainer.clips[n - 1];
-  const fence = code => '`'.repeat(Math.max(3, ...(String(code).match(/`+/g) || []).map(run => run.length + 1)));
-  const markdown = [
-    `## ${clip.title}`,
-    ...clip.facts.map(fact => fact.text),
-    ...clip.anchors.flatMap(anchor => codeParts(anchor.code).map(code => `${fence(code)}${anchor.lang}\n${code}\n${fence(code)}`)),
-  ].join('\n\n');
+  const markdown = [`## ${clip.title}`, ...clip.facts.map(fact => fact.text)].join('\n\n');
   return { v: 1, n, title: clip.title, markdown, blocks: markdownToBlocks(markdown), terms: [], checks: [], outcomes: [], subtopics: clip.facts.map(fact => fact.text), stats: {} };
 }
 
 /**
  * The plan writeScript follows for a clip: no map of its own (the player draws the explainer's), its
- * guess, its failures, and a masked line where its code allows one. A clip repeating an earlier
- * clip's pattern is told so in its facts' order only: each clip is made on its own.
+ * guess and its failures (no masked line: it shows no code). A clip repeating an earlier clip's
+ * pattern is told so in its facts' order only: each clip is made on its own.
  */
 export function clipPlan(explainer, n) {
   const clip = explainer.clips[n - 1];
   return {
     shape: 'none',
     boxes: [],
-    clips: [{ clip: clip.title, box: null, handoff: null, handoffQuote: null, guess: clip.guess, trap: clip.failure, mask: true, patternOf: null, patternQuote: null }],
+    clips: [{ clip: clip.title, box: null, handoff: null, handoffQuote: null, guess: clip.guess, trap: clip.failure, mask: false, patternOf: null, patternQuote: null }],
     splits: [],
     groups: [],
   };
@@ -339,7 +325,7 @@ export function updateExplainer(lib, id, change) {
   });
 }
 
-/** The levels a depth takes in: 1 is the mental model, 2 adds the mechanism and its code, 3 is all. */
+/** The levels a depth takes in: 1 is the mental model, 2 adds the mechanism step by step, 3 is all. */
 export const inDepth = (clip, depth) => clip.level <= (depth || 1);
 
 /** Each clip's state: `ready`, `making`, `waiting`, or `left out` by the depth picked. */
