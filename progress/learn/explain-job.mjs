@@ -12,7 +12,7 @@ import { exportExplainer } from './export.mjs';
 import { isJobLive, listJobs, now, readJob, saveJob, spawnJob } from './jobs.mjs';
 import { writeJson } from './store.mjs';
 import { ensureVoice, record } from './voice.mjs';
-import { WORKSPACES, isOnWiki, sendToWiki } from './wiki.mjs';
+import { WORKSPACES, isOnWiki, sendToWiki, wikiFolder } from './wiki.mjs';
 
 const EXPLAIN_CLI = fileURLToPath(new URL('./explain-cli.mjs', import.meta.url));
 
@@ -25,16 +25,17 @@ export const explainDaemon = id => [EXPLAIN_CLI, 'run', id];
 /**
  * An explainer from your session's plan: checked first, all of it (`{ problems }` go back to the
  * session), then made by a job of its own (`job`, explainJob unless the caller wraps it). `wiki` is
- * the workspace the person picked for this one (personal or shared), or nothing: kept on it alone.
+ * the workspace the person picked for this one (personal or shared), or nothing, and `folder` the
+ * folder they named there: kept on it alone.
  */
-export async function startExplainer(lib, { plan, sessionId, cwd, wiki = null, io = explainIo, job = explainJob }) {
+export async function startExplainer(lib, { plan, sessionId, cwd, wiki = null, folder = null, io = explainIo, job = explainJob }) {
   if (!SESSION_ID.test(String(sessionId || ''))) throw new Error('that is not a chat id');
   if (!cwd || !existsSync(cwd)) throw new Error("the session's folder is not on this computer");
   const checked = await checkExplainer({ plan, sessionId, cwd, io, model: lib.settings.models.video });
   if (checked.problems) return { problems: checked.problems };
-  const explainer = saveExplainer(lib, { ...checked.explainer, wiki: WORKSPACES.includes(wiki) ? { to: wiki } : null });
+  const explainer = saveExplainer(lib, { ...checked.explainer, wiki: WORKSPACES.includes(wiki) ? { to: wiki, folder: wikiFolder(folder) } : null });
   const started = job(lib, explainer);
-  return { id: explainer.id, clips: explainer.clips.length, wanted: wantedClips(explainer), depth: explainer.depth, wiki: explainer.wiki?.to ?? null, job: started.id };
+  return { id: explainer.id, clips: explainer.clips.length, wanted: wantedClips(explainer), depth: explainer.depth, wiki: explainer.wiki?.to ?? null, folder: explainer.wiki?.folder ?? null, job: started.id };
 }
 
 /**
@@ -107,7 +108,7 @@ export async function runExplainJob(lib, id, io = explainIo) {
       }
       const onWiki = wiki?.urls?.length && !wiki.error ? ', and on the wiki' : wiki?.error ? '; not on the wiki' : '';
       const message = done < total ? `${done} of ${total} clips ready` : `${total === 1 ? 'Your clip is ready' : `${total} clips ready`}${onWiki}`;
-      save({ step: 'done', state: 'done', making: null, message, done, total, wiki: wiki ? { to: wiki.to, urls: wiki.urls || [], error: wiki.error || null } : null });
+      save({ step: 'done', state: 'done', making: null, message, done, total, wiki: wiki ? { to: wiki.to, place: wiki.place || null, urls: wiki.urls || [], error: wiki.error || null } : null });
     } finally {
       rmSync(lib.paths.explaining, { force: true });
     }

@@ -2,6 +2,16 @@
   "v": 1,
   "releases": [
     {
+      "version": "0.22.0",
+      "date": "2026-11-25",
+      "by": "Yousif",
+      "notes": [
+        "On the wiki, each explainer has its own folder, a doc per clip",
+        "Name a folder (/explain X, in the folder Auth) and it goes in there",
+        "Clips on the wiki still play one after another"
+      ]
+    },
+    {
       "version": "0.21.0",
       "date": "2026-11-24",
       "by": "Yousif",

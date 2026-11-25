@@ -10,8 +10,8 @@ export type LearnBuild = {
   explain?: string | null
   /** That explainer as one file you can pass on (~/explainers/...html), once a clip is in it. */
   file?: string | null
-  /** How its upload to the wiki went, when the person asked for one: its address (one a part), or why not. */
-  wiki?: { to: 'personal' | 'shared'; urls: string[]; error: string } | null
+  /** How its upload to the wiki went, when the person asked for one: its folder and each clip's address, or why not. */
+  wiki?: { to: 'personal' | 'shared'; place: string; urls: string[]; error: string } | null
   topic: string
   step: string
   state: 'running' | 'waiting-picks' | 'paused' | 'failed' | 'done'
@@ -61,7 +61,7 @@ function readWiki(value: unknown): LearnBuild['wiki'] {
   if (wiki?.to !== 'personal' && wiki?.to !== 'shared') return null
   const urls = (Array.isArray(wiki.urls) ? wiki.urls : []).filter((url): url is string => typeof url === 'string' && url.length <= 300 && /^https?:\/\/\S+$/.test(url)).slice(0, 12)
   const error = text(wiki.error, 200)
-  return urls.length || error ? { to: wiki.to, urls, error } : null
+  return urls.length || error ? { to: wiki.to, place: text(wiki.place, 400), urls, error } : null
 }
 
 /** The status file's text, or null when it says nothing worth a tab line. */
@@ -142,7 +142,7 @@ export function readyNotice(build: LearnBuild | null | undefined, explainer: str
 function wikiText(wiki: LearnBuild['wiki']): string {
   if (!wiki) return ''
   if (wiki.error) return `not on the wiki: ${wiki.error}; /clips wiki tries again`
-  return `on the wiki (${wiki.to}${wiki.urls.length > 1 ? `, in ${wiki.urls.length} parts` : ''}): ${wiki.urls.join(' ')}`
+  return `on the wiki (${wiki.to}${wiki.place ? `, ${wiki.place}` : ''}): ${wiki.urls[0] ?? ''}`
 }
 
 /** A path under home as the person would write it. */

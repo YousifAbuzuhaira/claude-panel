@@ -1,6 +1,6 @@
 {
   "name": "explain",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "/explain: Claude explains the code you're working on as short narrated video clips, made on your own computer (a local voice, set up once). Each explainer is one HTML file you can open anywhere or pass on.",
   "author": {
     "name": "Yousif Abuzuhaira"

@@ -810,12 +810,13 @@ export const register: Register = on => {
     void tool
     void tool_use_id
     void consent
+    const folder = plan.wikiFolder
     for (const key of Object.keys(plan)) if (!['title', 'shape', 'boxes', 'clips', 'depth'].includes(key)) delete plan[key]
     const [sessionId, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
     const asked = wikiAsked
     const wiki = asked ? wikiTo : null
     // Learn checks the plan against the files and this chat, with one Claude call: up to a few minutes.
-    const argv = explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($), wiki })
+    const argv = explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($), wiki, folder })
     const ran = await $.process.run(argv, { stdin: JSON.stringify(plan), timeoutMs: 6 * 60_000, env: await wikiEnv($) })
     const answer = readExplainAnswer(ran.stdout)
     if (!answer) return { deny: `Learn couldn't take the plan: ${(ran.stderr.trim() || ran.stdout.trim()).split('\n').at(-1) || 'no answer'}` }

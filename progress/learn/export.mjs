@@ -87,27 +87,18 @@ export function clipForFile(video, title) {
   return { title: video.title, courseTitle: title, stale: false, sections: video.sections, scenes, assets: video.assets, quiz, openers: video.openers || {}, words: video.words || [], audio: video.audio };
 }
 
-/** A clip's part of the page: its script and its sound, each in a tag of its own. */
-export const clipTags = (clip, title) => [
-  `<script type="application/json" id="clip-${clip.n}">${json(clipForFile(clip.video, title))}</script>`,
-  `<script type="text/plain" id="sound-${clip.n}">${Buffer.from(clip.sound).toString('base64')}</script>`,
-].join('\n');
-
-/** How deep the page goes: the depth picked, else the deepest level made. */
-export const pageDepth = (explainer, clips) => explainer.depth || Math.max(1, ...clips.map(clip => explainer.clips[clip.n - 1]?.level || 1));
-
 /**
  * The page for an explainer. `clips` are the ones in it, `{ n, video, sound }` (sound the mp3's
  * bytes); a clip of the depth not among them is `later`, named in the list but not playable. With
- * no depth saved, the depth is the deepest level made, so the player never asks. An explainer too
- * big for one page (the wiki's, wiki.mjs) goes out as several: `parts` is the clips each holds, and
- * a `later` clip says which part it's in.
+ * no depth saved, the depth is the deepest level made, so the player never asks. On the wiki each
+ * clip is a page of its own (wiki.mjs): `elsewhere` is the workspace and each clip's path there, and
+ * the page reads a clip it doesn't hold from that clip's page.
  */
-export function explainerHtml({ explainer, clips, questions = false, parts = null }) {
+export function explainerHtml({ explainer, clips, questions = false, elsewhere = null }) {
   const inFile = new Set(clips.map(clip => clip.n));
-  const depth = pageDepth(explainer, clips);
-  const partOf = n => (parts ? parts.findIndex(part => part.includes(n)) + 1 : 0);
-  const name = parts ? `${explainer.title} (part ${partOf(clips[0]?.n)} of ${parts.length})` : explainer.title;
+  const depth = explainer.depth || Math.max(1, ...[...inFile, ...(elsewhere?.paths.keys() || [])].map(n => explainer.clips[n - 1]?.level || 1));
+  const away = n => (inFile.has(n) ? null : elsewhere?.paths.get(n) || null);
+  const name = elsewhere ? `${explainer.clips[clips[0].n - 1].title} · ${explainer.title}` : explainer.title;
   const info = {
     id: explainer.id,
     title: explainer.title,
@@ -119,13 +110,17 @@ export function explainerHtml({ explainer, clips, questions = false, parts = nul
       n: k + 1,
       title: clip.title,
       level: clip.level,
-      state: inFile.has(k + 1) ? 'ready' : inDepth(clip, depth) ? 'later' : 'left out',
-      ...(!inFile.has(k + 1) && partOf(k + 1) ? { part: partOf(k + 1) } : {}),
+      state: inFile.has(k + 1) || away(k + 1) ? 'ready' : inDepth(clip, depth) ? 'later' : 'left out',
+      ...(away(k + 1) ? { path: away(k + 1) } : {}),
     })),
+    ...(elsewhere ? { workspace: elsewhere.workspace } : {}),
   };
   const data = [
     `<script type="application/json" id="explainer-data">${json({ info, questions })}</script>`,
-    ...clips.map(clip => clipTags(clip, explainer.title)),
+    ...clips.flatMap(clip => [
+      `<script type="application/json" id="clip-${clip.n}">${json(clipForFile(clip.video, explainer.title))}</script>`,
+      `<script type="text/plain" id="sound-${clip.n}">${Buffer.from(clip.sound).toString('base64')}</script>`,
+    ]),
   ];
   const style = `<style>\n${read(SHARED, 'theme.css')}\n${read(VIDEO, 'video.css')}\n</style>`;
   // Functions, not strings, as replacements: the script is full of `$`, which a string would expand.
@@ -137,11 +132,11 @@ export function explainerHtml({ explainer, clips, questions = false, parts = nul
     .replace('</body>', () => `${data.join('\n')}\n<script type="module">\n${playerBundle()}</script>\n</body>`);
 }
 
+/** A title as a file's name. */
+export const slugOf = title => String(title || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '');
+
 /** The file's name: its title, then the id's last 4 characters, so two of one title never collide. */
-export function exportName(explainer) {
-  const slug = String(explainer.title || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '');
-  return `${slug || 'explainer'}-${String(explainer.id).slice(-4)}.html`;
-}
+export const exportName = explainer => `${slugOf(explainer.title) || 'explainer'}-${String(explainer.id).slice(-4)}.html`;
 
 /** Every clip made so far, as a page takes it: `{ n, video, sound }`. */
 export function readyClips(lib, explainer) {

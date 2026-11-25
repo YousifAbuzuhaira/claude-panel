@@ -224,13 +224,14 @@ export const register: Register = on => {
     void tool
     void tool_use_id
     void consent
+    const folder = plan.wikiFolder
     for (const key of Object.keys(plan)) if (!['title', 'shape', 'boxes', 'clips', 'depth'].includes(key)) delete plan[key]
     // No player here asks the depth later: a plan without one would stop after its first clip.
     plan.depth ??= 2
     const [sessionId, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
     // The plan is checked against the files and this chat, with one Claude call: up to a few minutes.
     const asked = wikiAsked
-    const argv = explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($), entry: 'explain-cli.mjs', wiki: asked ? wikiTo : null })
+    const argv = explainArgv({ pluginRoot: $.plugin.root, sessionId, cwd, isWindows: await isWindowsHost($), entry: 'explain-cli.mjs', wiki: asked ? wikiTo : null, folder })
     const ran = await $.process.run(argv, { stdin: JSON.stringify(plan), timeoutMs: 6 * 60_000, env: await wikiEnv($) })
     const answer = readExplainAnswer(ran.stdout)
     if (!answer) {

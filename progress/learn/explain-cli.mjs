@@ -2,7 +2,7 @@
 // learn.sh (which finds Node 22), which runs this when there's no learn.mjs beside it. A leading
 // `explain` is taken off, so the explain plugin calls it as the progress plugin calls learn.mjs.
 //
-//   learn.sh explain start --session <id> --cwd <dir> [--wiki personal|shared]   a plan on stdin: one line of JSON, the explainer started or what to fix
+//   learn.sh explain start --session <id> --cwd <dir> [--wiki personal|shared [--wiki-folder <name>]]   a plan on stdin: one line of JSON, the explainer started or what to fix
 //   learn.sh explain run <job>                          an explainer's job, run here (start runs it on its own)
 //   learn.sh explain export <id> | --all                an explainer as one file in ~/explainers (LEARN_EXPORT_DIR)
 //   learn.sh explain voice                              one line of JSON: the voice ready, to set up (its size), or why it can't run here
@@ -45,8 +45,8 @@ try {
     } catch {
       fail('the plan on stdin is not JSON');
     }
-    const started = await startExplainer(openLibrary(), { plan, sessionId: flags.session, cwd: flags.cwd, wiki: flags.wiki });
-    line(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips, wanted: started.wanted, depth: started.depth, wiki: started.wiki });
+    const started = await startExplainer(openLibrary(), { plan, sessionId: flags.session, cwd: flags.cwd, wiki: flags.wiki, folder: flags['wiki-folder'] });
+    line(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips, wanted: started.wanted, depth: started.depth, wiki: started.wiki, folder: started.folder });
   } else if (command === 'run') {
     if (!words[0]) fail('run <job>');
     await runExplainJob(openLibrary(), words[0]);

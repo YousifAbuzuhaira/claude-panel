@@ -133,9 +133,9 @@ describe('/explain', () => {
 
   test("the helper's last line says the explainer started, or what to fix; anything else is no answer", () => {
     // A 0.17 helper's line: no depth, every clip wanted.
-    expect(readExplainAnswer('checking\n{"ok":true,"id":"x202611181332459e","clips":3}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 3, wanted: 3, depth: null, wiki: null })
-    expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":6,"wanted":4,"depth":2,"wiki":"shared"}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 6, wanted: 4, depth: 2, wiki: 'shared' })
-    expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":3,"wiki":"everyone"}')).toMatchObject({ wiki: null })
+    expect(readExplainAnswer('checking\n{"ok":true,"id":"x202611181332459e","clips":3}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 3, wanted: 3, depth: null, wiki: null, folder: null })
+    expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":6,"wanted":4,"depth":2,"wiki":"shared","folder":"Auth"}')).toEqual({ ok: true, id: 'x202611181332459e', clips: 6, wanted: 4, depth: 2, wiki: 'shared', folder: 'Auth' })
+    expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":3,"wiki":"everyone","folder":"Auth"}')).toMatchObject({ wiki: null, folder: null })
     expect(readExplainAnswer('{"ok":true,"id":"x202611181332459e","clips":6,"depth":7}')).toMatchObject({ depth: null })
     expect(readExplainAnswer('{"ok":false,"problems":["Clip 2: moved",3]}')).toEqual({ ok: false, problems: ['Clip 2: moved'] })
     expect(readExplainAnswer('{"ok":true,"id":"../x"}')).toBeNull()
@@ -228,7 +228,8 @@ describe('the wiki, for /explain', () => {
     expect(step.indexOf('"No, this machine only"')).toBeLessThan(step.indexOf('"My personal workspace"'))
     expect(step.indexOf('"My personal workspace"')).toBeLessThan(step.indexOf('"Shared workspace"'))
     expect(step).toContain('Recommend none of them')
-    expect(step).toContain('say nothing about the wiki in the tool call')
+    expect(step).toContain('the tool call says nothing about it')
+    expect(step).toContain('pass it as "wikiFolder", as I named it; never ask for one')
     expect(Object.keys(EXPLAIN_TOOL_SCHEMA.properties)).not.toContain('wiki')
   })
 
@@ -256,37 +257,40 @@ describe('the wiki, for /explain', () => {
 
   test('the workspace goes to the helper, and the reply says either way when it was asked', () => {
     expect(explainArgv({ pluginRoot: '/p', sessionId: 's', cwd: '/work', wiki: 'personal' }).slice(-2)).toEqual(['--wiki', 'personal'])
-    expect(explainArgv({ pluginRoot: '/p', sessionId: 's', cwd: '/work', wiki: null })).not.toContain('--wiki')
+    expect(explainArgv({ pluginRoot: '/p', sessionId: 's', cwd: '/work', wiki: null, folder: 'Auth' }).slice(-2)).toEqual(['--cwd', '/work'])
+    expect(explainArgv({ pluginRoot: '/p', sessionId: 's', cwd: '/work', wiki: 'shared', folder: '  --Auth \n Sessions ' }).slice(-4)).toEqual(['--wiki', 'shared', '--wiki-folder', 'Auth Sessions'])
+    for (const folder of [undefined, 5, '', ' -- ']) expect(explainArgv({ pluginRoot: '/p', sessionId: 's', cwd: '/work', wiki: 'shared', folder })).not.toContain('--wiki-folder')
     expect(helperArgv({ pluginRoot: 'C:\\p', isWindows: true, entry: 'explain-cli.mjs' }, ['wiki'])).toEqual(['node', 'C:\\p/learn/explain-cli.mjs', 'explain', 'wiki'])
     const answer = { clips: 6, wanted: 4, depth: 2 as const }
     expect(acceptedText({ ...answer, wiki: 'shared' }, { wikiAsked: true })).toContain('Once all are ready they go on the wiki (the shared workspace).')
     expect(acceptedText({ ...answer, wanted: 1, wiki: 'personal' }, { wikiAsked: true })).toContain('Once ready it goes on the wiki (your personal workspace).')
+    expect(acceptedText({ ...answer, wiki: 'personal', folder: 'Auth' }, { wikiAsked: true })).toContain('on the wiki (your personal workspace, in Explainers/Auth).')
     expect(acceptedText(answer, { wikiAsked: true })).toContain('Nothing goes on the wiki.')
     expect(acceptedText(answer)).not.toMatch(/wiki/i)
   })
 
-  test('the last notice says where it is on the wiki, in how many parts, or why it is not; earlier ones say nothing', () => {
+  test('the last notice says where it is on the wiki, its folder and its first clip, or why it is not; earlier ones say nothing', () => {
     const build = (done: number, wiki: LearnBuild['wiki']) => ({ id: 'j2', kind: 'explain', explain: 'x202611181332459e', file: '/home/me/explainers/tokens-459e.html', wiki, topic: 'Tokens', step: 'done', state: 'done' as const, message: '', done, total: 4 })
-    const up = { to: 'personal' as const, urls: ['https://wiki.keops.ai/d/tokens-Ab3'], error: '' }
-    expect(readyNotice(build(4, up), 'x202611181332459e', 3, '/home/me')?.text).toBe('4 of 4 clips of "Tokens" are ready · /clips opens them · as one file: ~/explainers/tokens-459e.html · on the wiki (personal): https://wiki.keops.ai/d/tokens-Ab3')
+    const up = { to: 'personal' as const, place: 'Explainers/Tokens', urls: ['https://wiki.keops.ai/d/01-a', 'https://wiki.keops.ai/d/02-b'], error: '' }
+    expect(readyNotice(build(4, up), 'x202611181332459e', 3, '/home/me')?.text).toBe('4 of 4 clips of "Tokens" are ready · /clips opens them · as one file: ~/explainers/tokens-459e.html · on the wiki (personal, Explainers/Tokens): https://wiki.keops.ai/d/01-a')
     expect(readyNotice(build(3, up), 'x202611181332459e', 2, '/home/me')?.text).not.toContain('wiki')
-    expect(readyNotice(build(4, { to: 'shared', urls: ['https://w/d/1', 'https://w/d/2'], error: '' }), 'x202611181332459e', 3)?.text).toContain('on the wiki (shared, in 2 parts): https://w/d/1 https://w/d/2')
-    expect(readyNotice(build(4, { to: 'shared', urls: [], error: "couldn't reach the wiki (ENOTFOUND)" }), 'x202611181332459e', 3)?.text).toContain("not on the wiki: couldn't reach the wiki (ENOTFOUND); /clips wiki tries again")
-    expect(readyNote(build(4, up), '/home/me')).toContain('; on the wiki (personal): https://wiki.keops.ai/d/tokens-Ab3. They were told')
+    expect(readyNotice(build(4, { to: 'shared', place: '', urls: ['https://w/d/1'], error: '' }), 'x202611181332459e', 3)?.text).toContain('on the wiki (shared): https://w/d/1')
+    expect(readyNotice(build(4, { to: 'shared', place: 'Explainers/Tokens', urls: [], error: "couldn't reach the wiki (ENOTFOUND)" }), 'x202611181332459e', 3)?.text).toContain("not on the wiki: couldn't reach the wiki (ENOTFOUND); /clips wiki tries again")
+    expect(readyNote(build(4, up), '/home/me')).toContain('; on the wiki (personal, Explainers/Tokens): https://wiki.keops.ai/d/01-a. They were told')
     expect(readyNote(build(4, null), '/home/me')).not.toContain('wiki')
   })
 
   test('the status file’s wiki is read safely: a workspace, web addresses, a short reason; an explainer’s only', () => {
     const wiki = (value: unknown, kind = 'explain') => readLearnStatus(JSON.stringify({ at: AT, build: { id: 'j2', kind, explain: 'x202611181332459e', topic: 'Tokens', step: 'done', state: 'done', done: 1, total: 1, wiki: value } }), NOW)?.build?.wiki
-    expect(wiki({ to: 'personal', urls: ['https://wiki.keops.ai/d/a', 'javascript:alert(1)', 5, 'https://a b'], error: null })).toEqual({ to: 'personal', urls: ['https://wiki.keops.ai/d/a'], error: '' })
-    expect(wiki({ to: 'shared', urls: [], error: 'no' })).toEqual({ to: 'shared', urls: [], error: 'no' })
+    expect(wiki({ to: 'personal', place: 'Explainers/Tokens', urls: ['https://wiki.keops.ai/d/a', 'javascript:alert(1)', 5, 'https://a b'], error: null })).toEqual({ to: 'personal', place: 'Explainers/Tokens', urls: ['https://wiki.keops.ai/d/a'], error: '' })
+    expect(wiki({ to: 'shared', place: 7, urls: [], error: 'no' })).toEqual({ to: 'shared', place: '', urls: [], error: 'no' })
     for (const value of [null, undefined, 'x', { to: 'everyone', urls: ['https://a'] }, { to: 'personal', urls: [] }]) expect(wiki(value)).toBeNull()
     expect(wiki({ to: 'personal', urls: ['https://a'] }, 'video')).toBeNull()
   })
 
   test('/clips wiki says what happened, and how to try again', () => {
-    const answer = { found: true, id: 'x1', title: 'Tokens', to: 'shared', ready: 4, clips: 4, urls: ['https://w/d/1'], error: null }
-    expect(wikiReply(answer)).toBe('"Tokens" is on the wiki (the shared workspace): https://w/d/1')
+    const answer = { found: true, id: 'x1', title: 'Tokens', to: 'shared', place: 'Explainers/Tokens', ready: 4, clips: 4, urls: ['https://w/d/1', 'https://w/d/2'], error: null }
+    expect(wikiReply(answer)).toBe('"Tokens" is on the wiki (the shared workspace, Explainers/Tokens): https://w/d/1')
     expect(wikiReply({ ...answer, urls: [], error: 'the wiki refused it (400)' })).toBe('"Tokens" is not on the wiki: the wiki refused it (400). /clips wiki tries again.')
     expect(wikiReply({ ...answer, ready: 2, waiting: true })).toBe('"Tokens" goes on the wiki (the shared workspace) once all its clips are ready: 2 of 4 are.')
     expect(wikiReply({ ...answer, to: null })).toContain('was not asked onto the wiki')

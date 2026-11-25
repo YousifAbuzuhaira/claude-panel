@@ -3,7 +3,7 @@
 //   learn.sh serve                                   the window's JSON-lines channel
 //   learn.sh build start --topic "DevOps" --category DevOps [--mode pick|auto] | --link <url> | --file <path>
 //                        | --chat <session id> --focus "what the course covers" [--audience self|team]   (a course from a Claude chat)
-//   learn.sh explain start --session <id> --cwd <dir> [--wiki personal|shared]  clips explaining code, from a plan on stdin (/explain)
+//   learn.sh explain start --session <id> --cwd <dir> [--wiki personal|shared [--wiki-folder <name>]]  clips explaining code, from a plan on stdin (/explain)
 //   learn.sh explain export <id> | --all             an explainer as one file in ~/explainers (LEARN_EXPORT_DIR)
 //   learn.sh explain wiki [id | on | off]            one that asked for the wiki, sent again if it isn't there; or whether /explain asks
 //   learn.sh chats                                   your recent Claude chats
@@ -82,8 +82,8 @@ try {
       fail('the plan on stdin is not JSON');
     }
     // One line of JSON, read by the /explain tool: the explainer started, or what the session must fix.
-    const started = await startExplainer(openLibrary(), { plan, sessionId: flags.session, cwd: flags.cwd, wiki: flags.wiki });
-    console.log(JSON.stringify(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips, wanted: started.wanted, depth: started.depth, wiki: started.wiki }));
+    const started = await startExplainer(openLibrary(), { plan, sessionId: flags.session, cwd: flags.cwd, wiki: flags.wiki, folder: flags['wiki-folder'] });
+    console.log(JSON.stringify(started.problems ? { ok: false, problems: started.problems } : { ok: true, id: started.id, clips: started.clips, wanted: started.wanted, depth: started.depth, wiki: started.wiki, folder: started.folder }));
     process.exit(0);
   } else if (command === 'chats') {
     const lib = openLibrary();

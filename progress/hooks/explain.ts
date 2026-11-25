@@ -36,6 +36,7 @@ export const EXPLAIN_TOOL_SCHEMA = {
       items: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' }, parent: { type: ['string', 'null'] } }, required: ['id', 'label', 'parent'] },
     },
     depth: { type: 'integer', enum: [1, 2, 3], description: 'How deep to go, as the person picked when asked in the chat before this call: 1 the idea (level 1 clips), 2 the mechanism and its code (levels 1 and 2), 3 everything. Left out only when they could not be asked; the player asks instead.' },
+    wikiFolder: { type: 'string', description: 'Only when the person named a folder for the clips on the wiki (with /explain or in this chat): as they named it, such as Auth. Left out otherwise. It never decides whether they go on the wiki.' },
     clips: {
       type: 'array',
       description: 'One per mechanism, in teaching order, 1 to 12.',
@@ -101,9 +102,13 @@ export function lastJson(stdout: string): Record<string, unknown> | null {
   }
 }
 
-/** The helper that checks a plan and starts making it: the plan goes on its standard input. `wiki` is the workspace picked for it. */
-export function explainArgv({ sessionId, cwd, wiki = null, ...where }: { pluginRoot: string; sessionId: string; cwd: string; isWindows?: boolean; entry?: string; wiki?: WikiTo | null }): string[] {
-  return helperArgv(where, ['start', '--session', sessionId, '--cwd', cwd, ...(wiki ? ['--wiki', wiki] : [])])
+/**
+ * The helper that checks a plan and starts making it: the plan goes on its standard input. `wiki` is
+ * the workspace picked for it, `folder` the folder named there (never read as a flag).
+ */
+export function explainArgv({ sessionId, cwd, wiki = null, folder = null, ...where }: { pluginRoot: string; sessionId: string; cwd: string; isWindows?: boolean; entry?: string; wiki?: WikiTo | null; folder?: unknown }): string[] {
+  const named = typeof folder === 'string' ? folder.replace(/\s+/g, ' ').trim().replace(/^[-\s]+/, '').slice(0, 200) : ''
+  return helperArgv(where, ['start', '--session', sessionId, '--cwd', cwd, ...(wiki ? ['--wiki', wiki, ...(named ? ['--wiki-folder', named] : [])] : [])])
 }
 
 /** The tool's full name in a session: `mcp__<plugin>__explain_plan` (progress, or the explain plugin). */
@@ -159,10 +164,10 @@ export function wikiReply(answer: Record<string, unknown> | null): string {
   if (answer.waiting === true) return `"${title}" goes on the wiki (${place}) once all its clips are ready: ${String(answer.ready)} of ${String(answer.clips)} are.`
   const urls = Array.isArray(answer.urls) ? answer.urls.map(String) : []
   if (answer.error) return `"${title}" is not on the wiki: ${String(answer.error)}. /clips wiki tries again.`
-  return `"${title}" is on the wiki (${place}): ${urls.join(' ')}`
+  return `"${title}" is on the wiki (${place}${answer.place ? `, ${String(answer.place)}` : ''}): ${urls[0] ?? ''}`
 }
 
-export type ExplainAnswer = { ok: true; id: string; clips: number; wanted: number; depth: 1 | 2 | 3 | null; wiki: WikiTo | null } | { ok: false; problems: string[] }
+export type ExplainAnswer = { ok: true; id: string; clips: number; wanted: number; depth: 1 | 2 | 3 | null; wiki: WikiTo | null; folder: string | null } | { ok: false; problems: string[] }
 
 /** The helper's last line: the explainer made, or what to fix. Anything else is a failure to report. */
 export function readExplainAnswer(stdout: string): ExplainAnswer | null {
@@ -173,7 +178,8 @@ export function readExplainAnswer(stdout: string): ExplainAnswer | null {
       const clips = typeof value.clips === 'number' ? value.clips : 0
       const depth = value.depth === 1 || value.depth === 2 || value.depth === 3 ? value.depth : null
       const wiki = value.wiki === 'personal' || value.wiki === 'shared' ? value.wiki : null
-      return { ok: true, id: value.id, clips, wanted: typeof value.wanted === 'number' ? value.wanted : clips, depth, wiki }
+      const folder = wiki && typeof value.folder === 'string' && value.folder ? value.folder.slice(0, 300) : null
+      return { ok: true, id: value.id, clips, wanted: typeof value.wanted === 'number' ? value.wanted : clips, depth, wiki, folder }
     }
     if (value.ok === false && Array.isArray(value.problems)) return { ok: false, problems: value.problems.filter((item): item is string => typeof item === 'string').slice(0, 30) }
   } catch {}
@@ -195,14 +201,14 @@ export const FIRST_RUN = 'First run: getting the voice (about 350 MB, once), so 
  * (`wikiAsked`), the line says either way, so an answer taken wrong shows at once.
  */
 export function acceptedText(
-  answer: { clips: number; wanted: number; depth: 1 | 2 | 3 | null; wiki?: WikiTo | null },
+  answer: { clips: number; wanted: number; depth: 1 | 2 | 3 | null; wiki?: WikiTo | null; folder?: string | null },
   { library = true, firstRun = false, wikiAsked = false }: { library?: boolean; firstRun?: boolean; wikiAsked?: boolean } = {},
 ): string {
   const plural = (n: number) => `${n} clip${n === 1 ? '' : 's'}`
   const made = answer.depth ? `${plural(answer.wanted)} (of ${answer.clips}; depth: ${DEPTHS[answer.depth]})` : `${plural(answer.clips)}; the player will ask how deep to go after the first`
   const count = plural(answer.depth ? answer.wanted : answer.clips)
   const one = (answer.depth ? answer.wanted : answer.clips) === 1
-  const wiki = answer.wiki ? ` ${one ? 'Once ready it goes' : 'Once all are ready they go'} on the wiki (${WIKI_PLACES[answer.wiki]}).` : wikiAsked ? ' Nothing goes on the wiki.' : ''
+  const wiki = answer.wiki ? ` ${one ? 'Once ready it goes' : 'Once all are ready they go'} on the wiki (${WIKI_PLACES[answer.wiki]}${answer.folder ? `, in Explainers/${answer.folder}` : ''}).` : wikiAsked ? ' Nothing goes on the wiki.' : ''
   const line = library
     ? `Making ${count}, the first in about 3 minutes; a notice here says when each is ready. /clips opens them; /learn library lists every explainer.${wiki}`
     : `${firstRun ? `${FIRST_RUN} ` : ''}Making ${count}, the first in about 3 minutes; a notice here says when each is ready, and /clips opens them as one file.${wiki}`
@@ -222,7 +228,7 @@ export function openFileArgv({ path, platform, distro = null }: { path: string; 
 }
 
 // Its options' labels are what wikiPicked reads: asked in any other words, the answer counts as No.
-const WIKI_STEP = ` In the same AskUserQuestion call ask a second question (header "${WIKI_HEADER}", question "Put the finished clips on the Keops wiki too?", multiSelect false), even when there is no depth to ask about, with exactly these labels in this order: "No, this machine only" (they stay in ~/explainers), "${WIKI_LABELS.personal}" (only you can open them there), "${WIKI_LABELS.shared}" (everyone in Keops can open them, and the code they show). Recommend none of them. My answer is read from my click: say nothing about the wiki in the tool call.`
+const WIKI_STEP = ` In the same AskUserQuestion call ask a second question (header "${WIKI_HEADER}", question "Put the finished clips on the Keops wiki too?", multiSelect false), even when there is no depth to ask about, with exactly these labels in this order: "No, this machine only" (they stay in ~/explainers), "${WIKI_LABELS.personal}" (only you can open them there), "${WIKI_LABELS.shared}" (everyone in Keops can open them, and the code they show). Recommend none of them. My answer is read from my click: the tool call says nothing about it. If I named a folder for the clips on the wiki, pass it as "wikiFolder", as I named it; never ask for one.`
 
 /**
  * What /explain hands the session, as your own message: plan the clips from the code, ask how deep

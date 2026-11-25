@@ -4,9 +4,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const info = { id: 'x2026112200001a2b', title: 'Tokens', depth: 2, clips: [{ n: 1, state: 'ready' }, { n: 2, state: 'later' }, { n: 3, state: 'ready' }] };
+const info = { id: 'x2026112200001a2b', title: 'Tokens', depth: 2, workspace: 'shared', clips: [{ n: 1, state: 'ready' }, { n: 2, state: 'later' }, { n: 3, state: 'ready' }, { n: 4, state: 'ready', path: 'Explainers/Tokens/04-the-refresh.html' }] };
 const elements = {
   'explainer-data': { textContent: JSON.stringify({ info, questions: true }) },
+  'clip-1': { textContent: JSON.stringify({ title: 'Clip 1' }) },
+  'sound-1': { textContent: '' },
   'clip-3': { textContent: JSON.stringify({ title: 'Clip 3' }) },
   'sound-3': { textContent: Buffer.from([1, 2, 3, 250]).toString('base64') },
   frame: { innerHTML: '<div id="stage"></div>', hidden: false },
@@ -52,13 +54,68 @@ test('another clip plays in the same page: the last run told to end, the frame p
   const first = data.life();
   elements.frame.innerHTML = '<div>drawn over</div>';
   elements.note.hidden = false;
-  data.go(info.id, 3);
+  await data.go(info.id, 3);
   assert.equal(first.signal.aborted, true);
   assert.equal(data.life().signal.aborted, false);
   assert.equal(data.where().clipN, 3);
   assert.equal(elements.frame.innerHTML, '<div id="stage"></div>');
   assert.equal(elements.note.hidden, true);
   assert.equal(runs, 2, 'the address could not change (it throws), and it played anyway');
+});
+
+// The wiki's reading for a page's script: the docs it has, by path, and what it was asked.
+const reads = [];
+const pageOf = (id, n, title) => `<html><script type="application/json" id="explainer-data">${JSON.stringify({ info: { id } })}</script>\n<script type="application/json" id="clip-${n}">${JSON.stringify({ title })}</script>\n<script type="text/plain" id="sound-${n}">${Buffer.from([9, 8, 7]).toString('base64')}</script></html>`;
+let docs = {};
+const giveReading = () => { globalThis.keopsWiki = { readDoc: async asked => { reads.push(asked); if (!docs[asked.path]) throw new Error('No doc'); return { content: docs[asked.path] }; } }; };
+const FOURTH = info.clips[3].path;
+
+test("on the wiki a clip with a page of its own is read from it, once, in this explainer's workspace, and plays here", async () => {
+  giveReading();
+  docs = { [FOURTH]: pageOf(info.id, 4, 'Clip 4') };
+  reads.length = 0;
+  await data.go(info.id, 4);
+  assert.equal(data.where().clipN, 4);
+  assert.deepEqual(await data.explainVideo(info.id, 4), { title: 'Clip 4' });
+  assert.deepEqual([...new Uint8Array(await (await data.explainSound(info.id, 4)).arrayBuffer())], [9, 8, 7]);
+  assert.deepEqual(reads, [{ workspace: 'shared', path: FOURTH }]);
+});
+
+test("a clip that can't be read leaves the one playing as it is, says which doc to open, and is read again when asked again", async () => {
+  // A fresh module: nothing read yet.
+  const fresh = await import('../public/learn/video/data-file.js?again');
+  let runs = 0;
+  fresh.boot(async () => { runs += 1; });
+  const life = fresh.life();
+  for (const broken of [{}, { [FOURTH]: pageOf('x2026112200009999', 4, 'Another explainer') }, { [FOURTH]: pageOf(info.id, 5, 'Another clip') }, { [FOURTH]: '<html>rewritten by someone</html>' }]) {
+    docs = broken;
+    await assert.rejects(fresh.go(info.id, 4), /^Error: Open 04-the-refresh in the folder Tokens instead$/);
+  }
+  delete globalThis.keopsWiki; // opened outside the wiki
+  await assert.rejects(fresh.go(info.id, 4), /Open 04-the-refresh/);
+  assert.equal(life.signal.aborted, false, 'the clip playing goes on');
+  assert.deepEqual([runs, fresh.where().clipN], [1, 1]);
+  giveReading();
+  docs = { [FOURTH]: pageOf(info.id, 4, 'Clip 4') };
+  await fresh.go(info.id, 4);
+  assert.deepEqual([runs, fresh.where().clipN], [2, 4]);
+});
+
+test('the clip after the one playing is read ahead; one asked for while another is read wins', async () => {
+  const fresh = await import('../public/learn/video/data-file.js?ahead');
+  fresh.boot(async () => {});
+  reads.length = 0;
+  await fresh.explainVideo(info.id, 3);
+  assert.deepEqual(reads.map(asked => asked.path), [FOURTH]);
+  let answer;
+  globalThis.keopsWiki = { readDoc: () => new Promise(done => { answer = done; }) };
+  const slow = await import('../public/learn/video/data-file.js?slow');
+  slow.boot(async () => {});
+  const fourth = slow.go(info.id, 4);
+  await slow.go(info.id, 3);
+  answer({ content: pageOf(info.id, 4, 'Clip 4') });
+  await fourth;
+  assert.equal(slow.where().clipN, 3);
 });
 
 test('inside a frame, nothing offers to look again for new clips: only a file on disk is written again', () => {

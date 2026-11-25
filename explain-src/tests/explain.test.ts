@@ -352,6 +352,22 @@ describe('the wiki', () => {
     expect(seen.stdin.join('')).not.toContain('kwk_x')
   })
 
+  test('a folder you named goes with a workspace you clicked, and the reply says it; with a No it goes nowhere', async ($, on) => {
+    const answers: Record<string, unknown> = { [QUESTION]: 'Shared workspace' }
+    const { seen } = world(on, { key: 'kwk_x', answers, start: { ok: true, id: ID, clips: 6, wanted: 4, depth: 2, wiki: 'shared', folder: 'Auth' } })
+    const named = { ...(plan as object), wikiFolder: 'Auth' } as never
+    await $.command.run(explain)
+    await $.tool.call(ask)
+    expect(await $.tool.call(named)).toMatchObject({ result: expect.stringContaining('(the shared workspace, in Explainers/Auth)') })
+    expect(seen.runs.at(-1)?.slice(-4)).toEqual(['--wiki', 'shared', '--wiki-folder', 'Auth'])
+    expect(seen.stdin[0]).not.toContain('Auth')
+    answers[QUESTION] = 'No, this machine only'
+    await $.command.run(explain)
+    await $.tool.call(ask)
+    await $.tool.call(named)
+    expect(seen.runs.at(-1)).not.toContain('--wiki-folder')
+  })
+
   test('with no key, or with the setting off, nothing asks, and a wiki answer from anywhere is not taken', async ($, on) => {
     const { clock, seen } = world(on, { answers: { [QUESTION]: 'Shared workspace' } })
     await $.command.run(explain)
@@ -422,8 +438,8 @@ describe('the wiki', () => {
   })
 
   test('/clips wiki sends this chat’s again, with the key; off and on are handed to the helper as they are', async ($, on) => {
-    const { seen } = world(on, { key: 'kwk_x', wiki: { found: true, id: ID, title: 'Tokens', to: 'personal', ready: 4, clips: 4, urls: ['https://wiki.keops.ai/d/a'], error: null } })
-    expect((await $.command.run({ command: 'clips', args: 'wiki', ...RUN })).text).toBe('"Tokens" is on the wiki (your personal workspace): https://wiki.keops.ai/d/a')
+    const { seen } = world(on, { key: 'kwk_x', wiki: { found: true, id: ID, title: 'Tokens', to: 'personal', place: 'Explainers/Tokens', ready: 4, clips: 4, urls: ['https://wiki.keops.ai/d/a'], error: null } })
+    expect((await $.command.run({ command: 'clips', args: 'wiki', ...RUN })).text).toBe('"Tokens" is on the wiki (your personal workspace, Explainers/Tokens): https://wiki.keops.ai/d/a')
     expect(seen.runs.at(-1)?.slice(-2)).toEqual(['explain', 'wiki'])
     expect(seen.envs.at(-1)).toEqual({ WIKI_API_KEY: 'kwk_x' })
     await $.tool.call(plan)
@@ -439,9 +455,9 @@ describe('the wiki', () => {
     await begin($)
     await $.tool.call(plan)
     await clock.advance(3_500)
-    status = build({ state: 'done', message: '4 clips ready, and on the wiki', done: 4, file: '/home/me/explainers/tokens-abcd.html', wiki: { to: 'personal', urls: ['https://wiki.keops.ai/d/a'], error: null } })
+    status = build({ state: 'done', message: '4 clips ready, and on the wiki', done: 4, file: '/home/me/explainers/tokens-abcd.html', wiki: { to: 'personal', place: 'Explainers/Tokens', urls: ['https://wiki.keops.ai/d/a'], error: null } })
     await clock.advance(6_500)
-    expect(seen.rows.filter(row => row.includes('on the wiki (personal): https://wiki.keops.ai/d/a'))).toHaveLength(1)
+    expect(seen.rows.filter(row => row.includes('on the wiki (personal, Explainers/Tokens): https://wiki.keops.ai/d/a'))).toHaveLength(1)
     expect(seen.hidden[0]).toContain('https://wiki.keops.ai/d/a')
   })
 })

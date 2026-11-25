@@ -45,7 +45,9 @@ The file holds the clips: their narration, pictures, and the code they show. It 
 Only when `WIKI_API_KEY` is set where you start Claude Code. It is your own key, made in the wiki under Settings → API keys.
 
 - Each `/explain` then asks: "No, this machine only", "My personal workspace" (only you can open it) or "Shared workspace" (everyone in Keops can, with the code the clips show). The answer holds for that explainer alone.
-- It goes up once, when every clip is ready, as `Explainers/<title>.html`. One too big for the wiki (5 MB, about 12 clips) goes up in parts. The last notice gives the link. No share link is made.
+- They go up once, when every clip is ready, each clip its own doc in a folder named after the explainer: `Explainers/<title>/01-….html`. The last notice gives the folder and the first clip's link. No share link is made.
+- Name a folder to put it in: `/explain how tokens move, in the folder Auth` goes to `Explainers/Auth/<title>/`.
+- From a clip's doc, the others play one after another, read from their own docs. Move or rename those docs and the player says which one to open instead.
 - If the upload fails, the notice says why, and `/clips wiki` tries again. The clips and their file are made either way.
 - `/clips wiki off` stops the question; `/clips wiki on` brings it back.
 

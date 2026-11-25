@@ -63,7 +63,23 @@ const { video: V, blob, outer = null } = await load();
 // An explainer's playlist: its clips in the depth picked, the map they share, what you did in it.
 const inDepth = outer ? outer.clips.filter(c => c.level <= (outer.depth || 1)) : [];
 const nextOuter = outer ? inDepth.find(c => c.n > clipN) || null : null;
-const goToClip = n => go(explainId, n);
+/** Another clip. One that can't be read (its page on the wiki moved) says so over this one, which plays on when asked. */
+async function goToClip(n) {
+  try {
+    await go(explainId, n);
+  } catch (error) {
+    if (signal.aborted) return;
+    setPlaying(false, true);
+    toggleDrawer(false);
+    $('coverTitle').textContent = `Couldn't load "${outer.clips[n - 1].title}" here`;
+    $('coverMeta').textContent = error.message;
+    coverAction = () => goToClip(n);
+    $('coverPlay').title = 'Try again';
+    againClip = 0;
+    $('coverAgain').hidden = false;
+    $('cover').hidden = false;
+  }
+}
 if (outer) V.plan = outer.map;
 const { scenes, assets, quiz, sections, audio: track } = V;
 const quizById = new Map(quiz.map(q => [q.id, q]));
@@ -366,18 +382,14 @@ function endExplainerClip() {
   if (!nextOuter) {
     $('coverTitle').textContent = 'That is the whole explainer.';
     $('coverMeta').textContent = `${inDepth.length} clip${inDepth.length === 1 ? '' : 's'}`;
-    // In a later part of an explainer sent as several pages, the first clip is another part's.
-    const first = inDepth.find(c => c.state !== 'later') || inDepth[0];
-    coverAction = () => goToClip(first.n);
-    $('coverPlay').title = first === inDepth[0] ? 'From the first clip' : "From this part's first clip";
+    coverAction = () => goToClip(inDepth[0].n);
+    $('coverPlay').title = 'From the first clip';
   } else if (nextOuter.state === 'later') {
-    // An exported file made before the rest (a file on disk is written again as each clip is made),
-    // or one part of several: then it says which part the next clip is in.
-    const part = nextOuter.part;
+    // An exported file made before the rest: a file on disk is written again as each clip is made.
     $('coverTitle').textContent = `Next: ${nextOuter.title}`;
-    $('coverMeta').textContent = `${inDepth.findIndex(c => c.n === nextOuter.n) + 1} of ${inDepth.length} · ${part ? `in part ${part}` : 'not in this file yet'}`;
-    coverAction = part ? () => jump(clips[0].from) : refresh;
-    $('coverPlay').title = part ? 'Watch this clip again' : refresh ? 'Look again for it' : 'Not in this file yet';
+    $('coverMeta').textContent = `${inDepth.findIndex(c => c.n === nextOuter.n) + 1} of ${inDepth.length} · not in this file yet`;
+    coverAction = refresh;
+    $('coverPlay').title = refresh ? 'Look again for it' : 'Not in this file yet';
   } else {
     $('coverTitle').textContent = `Next: ${nextOuter.title}`;
     $('coverMeta').textContent = `${inDepth.findIndex(c => c.n === nextOuter.n) + 1} of ${inDepth.length}${nextOuter.state === 'ready' ? '' : ' · still being made'}`;
@@ -629,7 +641,7 @@ function buildClips() {
       button.classList.toggle('now', c.n === clipN);
       button.classList.toggle('done', Boolean(kept.done?.[c.n]));
       const state = document.createElement('small'); state.textContent = c.state === 'ready' ? String(c.n) : `${c.n} ·`;
-      const text = document.createElement('span'); text.textContent = c.title + (c.state === 'ready' ? '' : ` (${{ making: 'being made', later: c.part ? `in part ${c.part}` : 'not in this file yet' }[c.state] || 'waiting'})`);
+      const text = document.createElement('span'); text.textContent = c.title + (c.state === 'ready' ? '' : ` (${{ making: 'being made', later: 'not in this file yet' }[c.state] || 'waiting'})`);
       button.append(state, text);
       button.disabled = c.state === 'later';
       button.addEventListener('click', () => goToClip(c.n));

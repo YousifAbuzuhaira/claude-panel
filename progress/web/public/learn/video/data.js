@@ -66,7 +66,7 @@ export function remember(id, change) {
   return next;
 }
 
-/** Another clip of the explainer: here a page of its own. */
+/** Another clip of the explainer: here a page of its own (in a file it can fail, and then rejects). */
 export const go = (id, n) => { location.href = `${location.pathname}?explain=${encodeURIComponent(id)}&clip=${n}`; };
 /** A page that can look again for clips made since it opened: here, never needed (it waits for them). */
 export const refresh = null;
